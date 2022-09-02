@@ -1,0 +1,38 @@
+right_format = "$time"
+
+[directory]
+format = "[$path]($style) "
+style = "green"
+truncate_to_repo = false
+truncation_length = 3 # parent directories to show; default is 3
+truncation_symbol = "…/"
+read_only = " "
+
+[time]
+disabled = false
+format = ' at [$time]($style)'
+style = 'cyan'
+use_12hr = true
+utc_time_offset = 'local'
+
+# contextual configs
+
+[aws]
+symbol = "  "
+
+[docker_context]
+symbol = " "
+
+[git_branch]
+symbol = " "
+
+[java]
+symbol = " "
+
+[nodejs]
+symbol = " "
+
+[python]
+symbol = " "
+
+
