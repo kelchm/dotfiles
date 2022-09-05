@@ -1,12 +1,30 @@
-right_format = "$time"
+# right_format = "$time"
+# format = "$directory($fill)$time\n$character"
+format = """
+$all\
+$fill\
+$time\
+$line_break\
+$jobs\
+$battery\
+$status\
+$container\
+$shell\
+$character"""
+command_timeout = 1000
 
 [directory]
-format = "[$path]($style) "
-style = "green"
-truncate_to_repo = false
-truncation_length = 3 # parent directories to show; default is 3
+format = "[$path]($style)[$read_only]($read_only_style) "
+style = "cyan bold"
+# truncate_to_repo = false
+# truncation_length = 3 # parent directories to show; default is 3
 truncation_symbol = "…/"
 read_only = " "
+home_symbol = " ~"
+fish_style_pwd_dir_length = 5
+
+[fill]
+symbol = ' '
 
 [time]
 disabled = false
@@ -14,6 +32,15 @@ format = ' at [$time]($style)'
 style = 'cyan'
 use_12hr = true
 utc_time_offset = 'local'
+
+[shell]
+format = '[$indicator]($style)'
+bash_indicator = 'bsh '
+fish_indicator = ''
+zsh_indicator = 'zsh '
+unknown_indicator = '??? '
+style = 'cyan bold'
+disabled = false
 
 # contextual configs
 
@@ -34,5 +61,3 @@ symbol = " "
 
 [python]
 symbol = " "
-
-
