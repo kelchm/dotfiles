@@ -1,0 +1,14 @@
+# Ignore everything by default.
+/**
+!.gitignore
+
+# fish
+!.config
+!.config/fish
+!.config/fish/**
+
+# starship
+!.config/starship.toml
+
+# asdf
+!.asdfrc

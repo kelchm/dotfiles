@@ -7,18 +7,18 @@ $time\
 $line_break\
 $jobs\
 $battery\
-$status\
 $container\
 $shell\
 $character"""
+
 command_timeout = 1000
 
 [directory]
 format = "[$path]($style)[$read_only]($read_only_style) "
 style = "cyan bold"
-# truncate_to_repo = false
+# truncate_to_repo = true
 # truncation_length = 3 # parent directories to show; default is 3
-truncation_symbol = "…/"
+# truncation_symbol = "…/"
 read_only = " "
 home_symbol = " ~"
 fish_style_pwd_dir_length = 5
@@ -42,22 +42,90 @@ unknown_indicator = '??? '
 style = 'cyan bold'
 disabled = false
 
+# disabled
+
+[git_status]
+disabled = true
+
+[package]
+disabled = true
+
 # contextual configs
 
 [aws]
 symbol = "  "
 
+[buf]
+symbol = " "
+
+[c]
+symbol = " "
+
+[conda]
+symbol = " "
+
+[dart]
+symbol = " "
+
 [docker_context]
 symbol = " "
+
+[elixir]
+symbol = " "
+
+[elm]
+symbol = " "
 
 [git_branch]
 symbol = " "
 
+[golang]
+symbol = " "
+
+[haskell]
+symbol = " "
+
+[hg_branch]
+symbol = " "
+
 [java]
 symbol = " "
+
+[julia]
+symbol = " "
+
+[lua]
+symbol = " "
+
+[memory_usage]
+symbol = " "
+
+[meson]
+symbol = "喝 "
+
+[nim]
+symbol = " "
+
+[nix_shell]
+symbol = " "
 
 [nodejs]
 symbol = " "
 
 [python]
 symbol = " "
+
+[rlang]
+symbol = "ﳒ "
+
+[ruby]
+symbol = " "
+
+[rust]
+symbol = " "
+
+[scala]
+symbol = " "
+
+[spack]
+symbol = "🅢 "
