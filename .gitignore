@@ -1,14 +1,22 @@
-# Ignore everything by default.
+# ignore everything by default...
 /**
+
+# common
 !.gitignore
+!.config
 
 # fish
-!.config
 !.config/fish
 !.config/fish/**
 
 # starship
 !.config/starship.toml
+
+# other shell configs
+!.profile
+!.zprofile
+!.zshenv
+!.zshrc
 
 # asdf
 !.asdfrc
