@@ -1,3 +1,3 @@
 function dotfiles
-  GIT_WORK_TREE=~ GIT_DIR=~/.dotfiles $argv; 
+  command /opt/homebrew/bin/git --git-dir=$HOME/.dotfiles --work-tree=$HOME $argv;
 end
