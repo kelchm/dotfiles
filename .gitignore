@@ -1,13 +1,20 @@
 # ignore everything by default...
-/**
+*
 
-# common
+# this .gitignore file (!)
 !.gitignore
+
+# vscode workspace settings
+!.vscode
+!.vscode/settings.json
+
+# shared directories
 !.config
 
 # fish
 !.config/fish
-!.config/fish/**
+!.config/fish/*
+!.config/fish/*/*
 
 # starship
 !.config/starship.toml
