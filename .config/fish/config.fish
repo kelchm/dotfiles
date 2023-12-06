@@ -12,6 +12,6 @@ function starship_transient_prompt_func
 end
 
 eval "$(/opt/homebrew/bin/brew shellenv)"
-source /opt/homebrew/opt/asdf/libexec/asdf.fish
+rtx activate fish | source
 starship init fish | source
 enable_transience
