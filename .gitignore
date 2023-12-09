@@ -25,5 +25,8 @@
 !.zshenv
 !.zshrc
 
-# asdf
+# editorconfig
+!.editorconfig
+
+# version managers
 !.asdfrc
