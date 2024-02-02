@@ -1,0 +1,32 @@
+# ignore everything by default...
+*
+
+# this .gitignore file (!)
+!.gitignore
+
+# vscode workspace settings
+!.vscode
+!.vscode/settings.json
+
+# shared directories
+!.config
+
+# fish
+!.config/fish
+!.config/fish/*
+!.config/fish/*/*
+
+# starship
+!.config/starship.toml
+
+# other shell configs
+!.profile
+!.zprofile
+!.zshenv
+!.zshrc
+
+# editorconfig
+!.editorconfig
+
+# version managers
+!.asdfrc
