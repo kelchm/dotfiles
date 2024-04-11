@@ -29,4 +29,6 @@
 !.editorconfig
 
 # version managers
-!.asdfrc
+!.default-python-packages
+!.config/mise
+!.config/mise/*
