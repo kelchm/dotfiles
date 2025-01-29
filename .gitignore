@@ -25,6 +25,7 @@
 
 # ghostty
 !.config/ghostty/*
+!.config/ghostty/*/*
 
 # other shell configs
 !.profile
