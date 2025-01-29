@@ -11,7 +11,7 @@ $container\
 $shell\
 $character"""
 
-command_timeout = 1000
+command_timeout = 1500
 
 [directory]
 format = "[$path]($style)[$read_only]($read_only_style) "
