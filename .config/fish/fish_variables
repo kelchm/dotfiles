@@ -1,5 +1,7 @@
 # This file contains fish universal variable definitions.
 # VERSION: 3.0
+SETUVAR MISE_FISH_AUTO_ACTIVATE:0
+SETUVAR SSH_AUTH_SOCK:/Users/kelchm/Library/Group\x20Containers/2BUA8C4S2C\x2ecom\x2e1password/t/agent\x2esock
 SETUVAR __fish_initialized:3400
 SETUVAR fish_color_autosuggestion:brblack
 SETUVAR fish_color_cancel:\x2dr
