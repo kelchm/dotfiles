@@ -1,2 +1,2 @@
 # .zshenv is always sourced by zsh
-. "$HOME/.cargo/env"
+[ -d "$HOME/.cargo/bin" ] && . "$HOME/.cargo/env"
