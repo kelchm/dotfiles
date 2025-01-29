@@ -1,5 +1,9 @@
 window-padding-x = 10
 macos-titlebar-style = tabs
 
-font-family = "JetBrains Mono NL"
+theme = One Dark Pro Darker
+
+font-family = "JetBrainsMono"
 font-size = 12
+
+copy-on-select = false
