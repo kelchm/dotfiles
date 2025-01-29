@@ -23,6 +23,9 @@
 # iterm2
 !.config/iterm2/*.plist
 
+# ghostty
+!.config/ghostty/*
+
 # other shell configs
 !.profile
 !.zprofile
