@@ -10,6 +10,7 @@
 
 # shared directories
 !.config
+!.config/*
 
 # fish
 !.config/fish
@@ -18,6 +19,12 @@
 
 # starship
 !.config/starship.toml
+
+# iterm2
+!.config/iterm2/*.plist
+
+# ghostty
+!.config/ghostty/*
 
 # other shell configs
 !.profile
@@ -32,3 +39,6 @@
 !.default-python-packages
 !.config/mise
 !.config/mise/*
+
+# always ignore
+.DS_Store
