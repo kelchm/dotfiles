@@ -28,7 +28,7 @@ symbol = ' '
 
 [time]
 disabled = false
-format = ' at [$time]($style)'
+format = ' at [$time]($style) '
 style = 'cyan'
 use_12hr = true
 utc_time_offset = 'local'
