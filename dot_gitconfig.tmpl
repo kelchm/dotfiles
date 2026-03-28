@@ -4,7 +4,8 @@
 [push]
     autoSetupRemote = true
 
-{{ if eq .chezmoi.os "darwin" -}}
+{{- if eq .chezmoi.os "darwin" }}
+
 [gpg]
     format = ssh
 
@@ -13,9 +14,10 @@
 
 [commit]
     gpgsign = true
-{{ end -}}
+{{- end }}
 
-{{ if eq .chezmoi.os "windows" -}}
+{{- if eq .chezmoi.os "windows" }}
+
 [credential]
     helper = manager
 
@@ -28,7 +30,8 @@
 
 [gpg "ssh"]
     program = C:/Users/{{ .chezmoi.username }}/AppData/Local/1Password/app/8/op-ssh-sign.exe
-{{ else -}}
+{{- else }}
+
 [core]
     autocrlf = input
-{{ end -}}
+{{- end }}
