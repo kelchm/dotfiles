@@ -38,6 +38,7 @@ format = '[$indicator]($style)'
 bash_indicator = 'bsh '
 fish_indicator = ''
 zsh_indicator = 'zsh '
+powershell_indicator = 'ps '
 unknown_indicator = '??? '
 style = 'cyan bold'
 disabled = false

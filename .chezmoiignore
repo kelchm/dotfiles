@@ -1,0 +1,19 @@
+{{ if ne .chezmoi.os "darwin" }}
+# macOS-only files
+.config/fish
+.config/fish/**
+.config/ghostty
+.config/ghostty/**
+.config/iterm2
+.config/iterm2/**
+.profile
+.zprofile
+.zshenv
+.zshrc
+{{ end }}
+
+{{ if ne .chezmoi.os "windows" }}
+# Windows-only files
+Documents/PowerShell
+Documents/PowerShell/**
+{{ end }}

@@ -1,6 +1,8 @@
 # .zshrc is sourced for interactive zsh shells
 eval "$(starship init zsh)"
-eval "$(/opt/homebrew/bin/mise activate zsh)"
+eval "$(mise activate zsh)"
 
-# workaround for vscode devcontainers
+{{ if eq .chezmoi.os "darwin" -}}
+# 1Password SSH agent (macOS)
 export SSH_AUTH_SOCK=~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
+{{ end -}}

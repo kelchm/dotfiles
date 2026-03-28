@@ -1,0 +1,34 @@
+[init]
+    defaultBranch = main
+
+[push]
+    autoSetupRemote = true
+
+{{ if eq .chezmoi.os "darwin" -}}
+[gpg]
+    format = ssh
+
+[gpg "ssh"]
+    program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
+
+[commit]
+    gpgsign = true
+{{ end -}}
+
+{{ if eq .chezmoi.os "windows" -}}
+[credential]
+    helper = manager
+
+[core]
+    autocrlf = true
+    sshCommand = C:/Windows/System32/OpenSSH/ssh.exe
+
+[gpg]
+    format = ssh
+
+[gpg "ssh"]
+    program = C:/Users/{{ .chezmoi.username }}/AppData/Local/1Password/app/8/op-ssh-sign.exe
+{{ else -}}
+[core]
+    autocrlf = input
+{{ end -}}
