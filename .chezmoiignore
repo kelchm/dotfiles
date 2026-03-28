@@ -1,5 +1,6 @@
 {{ if ne .chezmoi.os "darwin" }}
 # macOS-only files
+.config/packages/Brewfile
 .config/fish
 .config/fish/**
 .config/ghostty
@@ -14,6 +15,7 @@
 
 {{ if ne .chezmoi.os "windows" }}
 # Windows-only files
+.config/packages/winget.json
 Documents/PowerShell
 Documents/PowerShell/**
 Documents/WindowsPowerShell

@@ -1,0 +1,4 @@
+brew "starship"
+brew "mise"
+brew "imagemagick"
+cask "font-jetbrains-mono-nerd-font"

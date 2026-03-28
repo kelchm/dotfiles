@@ -1,0 +1,4 @@
+{{- if eq .chezmoi.os "windows" -}}
+# hash: {{ include "dot_config/packages/winget.json" | sha256sum }}
+winget import --import-file "$HOME\.config\packages\winget.json" --accept-package-agreements --accept-source-agreements --ignore-unavailable
+{{- end }}
