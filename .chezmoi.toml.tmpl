@@ -1,3 +1,8 @@
+[data]
+    email = {{ promptStringOnce . "email" "Git email" | quote }}
+    signingMethod = {{ promptStringOnce . "signingMethod" "Git signing method (ssh/gpg/none)" | quote }}
+    signingKey = {{ promptStringOnce . "signingKey" "Git signing key" | quote }}
+
 [edit]
     command = "code"
     args = ["--wait"]

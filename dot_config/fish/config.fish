@@ -11,18 +11,14 @@ function starship_transient_prompt_func
     starship module character
 end
 
-{{ if eq .chezmoi.os "darwin" -}}
 # 1Password SSH agent (macOS)
 # note: this needs to be set universally to override default macOS ssh-agent socket
 set -U SSH_AUTH_SOCK ~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
-{{ end -}}
 
 # disable automatic activation of mise
 set -Ux MISE_FISH_AUTO_ACTIVATE 0
 
-{{ if eq .chezmoi.os "darwin" -}}
 eval "$(/opt/homebrew/bin/brew shellenv)"
-{{ end -}}
 mise activate fish | source
 starship init fish | source
 enable_transience

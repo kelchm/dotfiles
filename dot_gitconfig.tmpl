@@ -1,19 +1,35 @@
+[user]
+    name = Matthew Kelch
+    email = {{ .email }}
+
 [init]
     defaultBranch = main
 
 [push]
     autoSetupRemote = true
 
-{{- if eq .chezmoi.os "darwin" }}
+{{- if ne .signingMethod "none" }}
+
+[user]
+    signingKey = {{ .signingKey }}
 
 [gpg]
-    format = ssh
-
-[gpg "ssh"]
-    program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
+    format = {{ .signingMethod }}
 
 [commit]
     gpgsign = true
+{{- end }}
+
+{{- if and (eq .signingMethod "ssh") (eq .chezmoi.os "darwin") }}
+
+[gpg "ssh"]
+    program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
+{{- end }}
+
+{{- if and (eq .signingMethod "ssh") (eq .chezmoi.os "windows") }}
+
+[gpg "ssh"]
+    program = C:/Program Files/1Password/app/8/op-ssh-sign.exe
 {{- end }}
 
 {{- if eq .chezmoi.os "windows" }}
@@ -22,16 +38,6 @@
     helper = manager
 
 [core]
-    autocrlf = true
-    sshCommand = C:/Windows/System32/OpenSSH/ssh.exe
-
-[gpg]
-    format = ssh
-
-[gpg "ssh"]
-    program = C:/Users/{{ .chezmoi.username }}/AppData/Local/1Password/app/8/op-ssh-sign.exe
-{{- else }}
-
-[core]
     autocrlf = input
+    sshCommand = C:/Windows/System32/OpenSSH/ssh.exe
 {{- end }}

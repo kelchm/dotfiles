@@ -1,5 +1,3 @@
 # .zprofile is sourced for login zsh shells
-{{ if eq .chezmoi.os "darwin" -}}
 eval "$(/opt/homebrew/bin/brew shellenv)"
-{{ end -}}
 export PATH="$HOME/.local/share/mise/shims:$PATH"
