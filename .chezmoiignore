@@ -15,6 +15,7 @@
 
 {{ if ne .chezmoi.os "windows" }}
 # Windows-only files
+.local/bin/python3.cmd
 .config/packages/winget.json
 AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState/settings.json
 Documents/PowerShell
