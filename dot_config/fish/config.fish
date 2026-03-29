@@ -12,11 +12,10 @@ function starship_transient_prompt_func
 end
 
 # 1Password SSH agent (macOS)
-# note: this needs to be set universally to override default macOS ssh-agent socket
-set -U SSH_AUTH_SOCK ~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
+set -gx SSH_AUTH_SOCK ~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
 
 # disable automatic activation of mise
-set -Ux MISE_FISH_AUTO_ACTIVATE 0
+set -gx MISE_FISH_AUTO_ACTIVATE 0
 
 eval "$(/opt/homebrew/bin/brew shellenv)"
 mise activate fish | source
