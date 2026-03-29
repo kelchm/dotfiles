@@ -8,7 +8,7 @@ Cross-platform dotfiles managed with [chezmoi](https://www.chezmoi.io/).
 |----------|-------|---------|------|
 | **Shell** | Fish, Zsh | PowerShell | — |
 | **Prompt** | — | — | Starship |
-| **Terminal** | Ghostty, iTerm2 | — | — |
+| **Terminal** | Ghostty, iTerm2 | Windows Terminal (pwsh default) | — |
 | **Version mgmt** | — | — | mise (Python, Node) |
 | **Editor** | — | — | VSCode, EditorConfig |
 | **Git** | 1Password SSH signing | Credential Manager | Common config |
@@ -50,14 +50,6 @@ chezmoi diff                            # preview pending changes
 chezmoi apply                           # apply changes to home directory
 chezmoi cd                              # cd into source directory
 chezmoi add ~/.some/new/file            # start managing a new file
-```
-
-## Adding Windows Terminal settings
-
-Windows Terminal settings are large and auto-generated, so they aren't included by default. To start managing yours:
-
-```powershell
-chezmoi add "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
 ```
 
 ## How it works

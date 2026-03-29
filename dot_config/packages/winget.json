@@ -10,6 +10,7 @@
       },
       "Packages": [
         { "PackageIdentifier": "AgileBits.1Password" },
+        { "PackageIdentifier": "Microsoft.WindowsTerminal" },
         { "PackageIdentifier": "Microsoft.PowerShell" },
         { "PackageIdentifier": "Starship.Starship" },
         { "PackageIdentifier": "jdx.mise" },
