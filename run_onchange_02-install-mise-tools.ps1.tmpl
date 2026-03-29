@@ -1,4 +1,8 @@
 {{- if eq .chezmoi.os "windows" -}}
 # hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
 mise install
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "mise install failed with exit code $LASTEXITCODE"
+    exit $LASTEXITCODE
+}
 {{- end }}
