@@ -20,26 +20,26 @@ Cross-platform dotfiles managed with [chezmoi](https://www.chezmoi.io/).
 
 ```bash
 brew install chezmoi
-chezmoi init --apply kelchm
+chezmoi init --apply --ssh kelchm
 ```
 
 Or as a one-liner on a fresh machine:
 
 ```bash
-sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply kelchm
+sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply --ssh kelchm
 ```
 
 ### Windows
 
 ```powershell
 winget install twpayne.chezmoi
-chezmoi init --apply kelchm
+chezmoi init --apply --ssh kelchm
 ```
 
 Or as a one-liner:
 
 ```powershell
-irm get.chezmoi.io/ps1 | powershell -c - -- init --apply kelchm
+irm get.chezmoi.io/ps1 | powershell -c - -- init --apply --ssh kelchm
 ```
 
 ## Usage

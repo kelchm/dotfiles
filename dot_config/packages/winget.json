@@ -9,6 +9,8 @@
         "Type": "Microsoft.PreIndexed.Package"
       },
       "Packages": [
+        { "PackageIdentifier": "AgileBits.1Password" },
+        { "PackageIdentifier": "Microsoft.PowerShell" },
         { "PackageIdentifier": "Starship.Starship" },
         { "PackageIdentifier": "jdx.mise" },
         { "PackageIdentifier": "DEVCOM.JetBrainsMonoNerdFont" },

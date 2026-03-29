@@ -27,9 +27,17 @@
 {{- end }}
 
 {{- if and (eq .signingMethod "ssh") (eq .chezmoi.os "windows") }}
+{{- $opSSHSign := "" -}}
+{{- range list
+    "C:/Program Files/1Password/app/8/op-ssh-sign.exe"
+    (joinPath .chezmoi.homeDir "AppData/Local/Microsoft/WindowsApps/op-ssh-sign.exe") -}}
+  {{- if and (not $opSSHSign) (stat .) -}}
+    {{- $opSSHSign = . -}}
+  {{- end -}}
+{{- end }}
 
 [gpg "ssh"]
-    program = C:/Program Files/1Password/app/8/op-ssh-sign.exe
+    program = {{ $opSSHSign | replace "\\" "/" }}
 {{- end }}
 
 {{- if eq .chezmoi.os "windows" }}
