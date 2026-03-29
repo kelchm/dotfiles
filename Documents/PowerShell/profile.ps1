@@ -1,5 +1,9 @@
 # Starship prompt
-Invoke-Expression (&starship init powershell)
+if (Get-Command starship -ErrorAction SilentlyContinue) {
+    Invoke-Expression (&starship init powershell)
+}
 
 # mise
-mise activate pwsh | Out-String | Invoke-Expression
+if (Get-Command mise -ErrorAction SilentlyContinue) {
+    mise activate pwsh | Out-String | Invoke-Expression
+}

@@ -1,3 +1,4 @@
+brew "gh"
 brew "starship"
 brew "mise"
 brew "imagemagick"

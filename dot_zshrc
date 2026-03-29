@@ -1,6 +1,8 @@
 # .zshrc is sourced for interactive zsh shells
 eval "$(starship init zsh)"
-eval "$(mise activate zsh)"
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate zsh)"
+fi
 
 # 1Password SSH agent (macOS)
 export SSH_AUTH_SOCK=~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
