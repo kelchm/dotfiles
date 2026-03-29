@@ -1,5 +1,14 @@
 {{- if eq .chezmoi.os "windows" -}}
 # hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
+
+# Refresh PATH so mise is available if it was just installed by winget
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
+    Write-Warning "mise not found on PATH. Skipping tool installation."
+    exit 0
+}
+
 mise install
 if ($LASTEXITCODE -ne 0) {
     Write-Error "mise install failed with exit code $LASTEXITCODE"
