@@ -1,0 +1,6 @@
+brew "gh"
+brew "starship"
+brew "mise"
+brew "imagemagick"
+cask "1password-cli"
+cask "font-jetbrains-mono-nerd-font"

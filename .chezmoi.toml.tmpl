@@ -1,0 +1,9 @@
+{{- $signingMethod := promptStringOnce . "signingMethod" "Git signing method (ssh/gpg/none)" -}}
+[data]
+    email = {{ promptStringOnce . "email" "Git email" | quote }}
+    signingMethod = {{ $signingMethod | quote }}
+    signingKey = {{ if ne $signingMethod "none" }}{{ promptStringOnce . "signingKey" "Git signing key" | quote }}{{ else }}""{{ end }}
+
+[edit]
+    command = "code"
+    args = ["--wait"]

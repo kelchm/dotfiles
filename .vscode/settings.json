@@ -1,3 +1,8 @@
 {
-    "explorer.excludeGitIgnore": true
+  "files.associations": {
+    "*.sh.tmpl": "shellscript",
+    "*.toml.tmpl": "toml",
+    "*.fish.tmpl": "fish",
+    "*.yaml.tmpl": "yaml"
+  }
 }

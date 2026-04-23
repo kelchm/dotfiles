@@ -1,0 +1,55 @@
+[user]
+    name = {{ index . "name" | default "Matthew Kelch" }}
+    email = {{ .email }}
+{{- if ne .signingMethod "none" }}
+    signingKey = {{ .signingKey }}
+{{- end }}
+
+[init]
+    defaultBranch = main
+
+[push]
+    autoSetupRemote = true
+
+{{- if ne .signingMethod "none" }}
+
+[gpg]
+    format = {{ .signingMethod }}
+
+[commit]
+    gpgsign = true
+{{- end }}
+
+{{- if and (eq .signingMethod "ssh") (eq .chezmoi.os "darwin") }}
+
+[gpg "ssh"]
+    program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
+{{- end }}
+
+{{- if and (eq .signingMethod "ssh") (eq .chezmoi.os "windows") }}
+{{- $opSSHSign := "" -}}
+{{- range list
+    "C:/Program Files/1Password/app/8/op-ssh-sign.exe"
+    (joinPath .chezmoi.homeDir "AppData/Local/Microsoft/WindowsApps/op-ssh-sign.exe") -}}
+  {{- if and (not $opSSHSign) (stat .) -}}
+    {{- $opSSHSign = . -}}
+  {{- end -}}
+{{- end }}
+{{- if $opSSHSign }}
+
+[gpg "ssh"]
+    program = {{ $opSSHSign | replace "\\" "/" }}
+{{- else }}
+# WARNING: op-ssh-sign not found. Install 1Password and re-run chezmoi apply.
+{{- end }}
+{{- end }}
+
+{{- if eq .chezmoi.os "windows" }}
+
+[credential]
+    helper = manager
+
+[core]
+    autocrlf = input
+    sshCommand = C:/Windows/System32/OpenSSH/ssh.exe
+{{- end }}

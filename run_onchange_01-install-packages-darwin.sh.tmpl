@@ -1,0 +1,11 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+set -euo pipefail
+
+# hash: {{ include "dot_config/packages/Brewfile" | sha256sum }}
+if ! command -v brew >/dev/null 2>&1; then
+  echo "Homebrew is required but not found on PATH. Install it from https://brew.sh" >&2
+  exit 1
+fi
+brew bundle --file="$HOME/.config/packages/Brewfile"
+{{- end }}

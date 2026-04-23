@@ -1,0 +1,13 @@
+{{- if eq .chezmoi.os "windows" -}}
+# hash: {{ include "dot_config/packages/winget.json" | sha256sum }}
+$manifest = Join-Path $HOME ".config\packages\winget.json"
+if (-not (Test-Path $manifest)) {
+    Write-Error "winget manifest not found: $manifest"
+    exit 1
+}
+winget import --import-file $manifest --accept-package-agreements --accept-source-agreements --ignore-unavailable --disable-interactivity
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "winget import failed with exit code $LASTEXITCODE"
+    exit $LASTEXITCODE
+}
+{{- end }}
