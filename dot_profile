@@ -1,1 +1,2 @@
+# .profile is sourced for login bash/sh shells (zsh and fish ignore it).
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
