@@ -1,0 +1,23 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+set -euo pipefail
+
+FISH_PATH="$(command -v fish || true)"
+if [ -z "$FISH_PATH" ]; then
+  echo "set-default-shell: fish not found on PATH; skipping." >&2
+  exit 0
+fi
+
+CURRENT_SHELL="$(dscl . -read "/Users/$USER" UserShell 2>/dev/null | awk '{print $2}')"
+if [ "$CURRENT_SHELL" = "$FISH_PATH" ]; then
+  exit 0
+fi
+
+if ! grep -qxF "$FISH_PATH" /etc/shells; then
+  echo "set-default-shell: adding $FISH_PATH to /etc/shells (sudo required)..."
+  echo "$FISH_PATH" | sudo tee -a /etc/shells >/dev/null
+fi
+
+echo "set-default-shell: changing login shell to $FISH_PATH..."
+sudo chsh -s "$FISH_PATH" "$USER"
+{{- end }}
