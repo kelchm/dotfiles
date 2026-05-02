@@ -7,3 +7,5 @@ font-family = "JetBrainsMono"
 font-size = 12
 
 copy-on-select = false
+
+shell-integration-features = ssh-env,ssh-terminfo
