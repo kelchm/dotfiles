@@ -1,0 +1,8 @@
+[env]
+# AQUA_GITHUB_TOKEN for aqua (via mise) to dodge unauthenticated GitHub API
+# rate limits. Read from macOS login keychain; seeded from 1Password by
+# run_onchange_03-seed-keychain-secrets.sh. macOS-only — the `security`
+# CLI does not exist on other platforms, so the entry is omitted there.
+{{- if eq .chezmoi.os "darwin" }}
+AQUA_GITHUB_TOKEN = "{{ `{{ exec(command='security find-generic-password -s github-public-ro -w 2>/dev/null || true') }}` }}"
+{{- end }}
