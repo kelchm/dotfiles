@@ -1,3 +1,7 @@
 [tools]
-python = "3"
 node = "lts"
+python = "3.12"
+uv = "latest"
+
+[settings]
+python.uv_venv_auto = true  # auto-creates/activates .venv via uv
