@@ -1,2 +1,3 @@
 # .profile is sourced for login bash/sh shells (zsh and fish ignore it).
+[ -d "$HOME/.local/bin" ] && PATH="$HOME/.local/bin:$PATH"
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"

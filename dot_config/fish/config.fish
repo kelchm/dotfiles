@@ -11,6 +11,8 @@ function starship_transient_prompt_func
     starship module character
 end
 
+fish_add_path -gP $HOME/.local/bin
+
 # 1Password SSH agent (macOS)
 set -gx SSH_AUTH_SOCK ~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
 
