@@ -43,19 +43,26 @@ Rankings, higher = better. Cost is what I actually pay (grok-4.5 is very cheap f
 ### Model Selection Guidance
 - These are defaults, not limits. You have standing permission to escalate: if a cheaper model's output misses the bar, rerun or redo the work using a smarter model *without* asking. Always judge the output, not the price tag.
 - Cost is a tie-breaker only; when axes conflict for anything that ships, intelligence > taste › cost.
-- Bulk/mechanical work (clear-spec implementation, migrations, data analysis): grok-4.5 — offload freely.
+- Implementation & bulk/mechanical work (clear-spec builds, migrations, refactors, data analysis): grok-4.5 is the default implementer — offload freely, including workflow implement stages. Fall back to gpt-5.6-sol (or a Claude model) when grok isn't a fit.
 - Anything user-facing (UI, API design, copy) needs taste ≥ 7.
-- Reviews of plans/implementations: fable-5, or grok-4.5 / gpt-5.6-sol for an independent perspective — a second opinion from a _different_ vendor is often informative.
+- Reviews of plans/implementations: fable-5, grok-4.5, or gpt-5.6-sol.
+- Independence: prefer a different model than the implementer for adversarial review/verification — a model reviewing its own output is a weaker check. Default to cross-model (ideally cross-vendor); same-model review is fine for quick sanity passes, but escalate to a different model when the change is risky or the review really matters.
 - Never use Haiku
 
 ### Mechanics
 - Claude models (sonnet-5, opus-4.8, fable-5) run via the Agent/Workflow model parameter.
 - Non-Claude models are only reachable via their own CLIs, headless, through Bash.
-  - **grok-4.5** — `grok -p`. Returns a JSON object; the reply is in `.text`:
+  - **grok-4.5** — default delegate for BOTH implementation and review. `grok -p`; JSON reply in `.text`. Edit-vs-read-only is set by `--permission-mode`, NOT `--sandbox` (that's a system FS/network boundary and does NOT stop grok editing the working dir — verified).
 
+    Implement (autonomous edits):
     ```bash
-    grok --no-auto-update -p "SELF-CONTAINED PROMPT" -m grok-4.5 --output-format json --sandbox read-only --always-approve
+    grok --no-auto-update -p "PROMPT" -m grok-4.5 --output-format json --always-approve
     ```
+    Review (real read-only — `plan` blocks edits and overrides `--always-approve`):
+    ```bash
+    grok --no-auto-update -p "PROMPT" -m grok-4.5 --output-format json --permission-mode plan
+    ```
+    - `--prompt-file PATH` for long prompts (dodges shell quoting); `--json-schema '{...}'` for structured output; `-w`/`--worktree[=name]` for parallel-implementer isolation.
 
   - **codex (gpt-5.6 family)** — `codex exec`, model via `-m`: `gpt-5.6-sol` (frontier), `-terra` (balanced), `-luna` (fast/cheap); pin one explicitly. Default to `sol` unsupervised — `terra`/`luna` should be considered as always needing review from a more intelligent model. **Close stdin (`< /dev/null`, or `< prompt.txt` to pass the prompt)** or codex hangs on EOF (`Reading additional input from stdin...`) even with the prompt as an arg. Prefer the `codex-review` / `codex-implementation` / `codex-computer-use` skills; raw:
 
@@ -66,6 +73,9 @@ Rankings, higher = better. Cost is what I actually pay (grok-4.5 is very cheap f
     `--json` → JSONL events (reply is the `item.completed` agent_message); `-o FILE` → last message to a file; `--output-schema FILE` → JSON-Schema-shaped reply; `-s workspace-write` to let it edit.
 - Using grok/codex in subagents / workflows:
   - Spawn a thin Sonnet (low-effort) wrapper that only writes the prompt, runs the CLI, and relays the output verbatim — it must not do the task itself, or you're using the wrapper, not the target model.
+  - Backgrounding a CLI run works only from the main session, never a subagent — a subagent's turn-end *is* its return, so backgrounding then yielding returns the wait and orphans the still-running CLI. Key it on runtime:
+    - **≤10 min** → wrapper subagent runs the CLI in one **foreground** blocking Bash call, output to a file.
+    - **might exceed 10 min** → not a subagent; background it from the **main session**, which persists across turns and gets the completion notification.
   - Label the subagent with the model slug (e.g. `grok-4.5:review-migration`) — it shows as Claude, so the label is the only signal of the real worker.
   - Describe any structured-output shape in prose (field names, not a literal `{"...":...}`) so it survives shell quoting.
   - Parallel implementers need worktree isolation so edits don't collide.
