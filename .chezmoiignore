@@ -1,6 +1,10 @@
 # Repo-only files (never applied to $HOME)
 README.md
 
+# macOS cruft (never track)
+.DS_Store
+**/.DS_Store
+
 {{ if ne .chezmoi.os "darwin" }}
 # macOS-only files
 .config/packages/Brewfile
