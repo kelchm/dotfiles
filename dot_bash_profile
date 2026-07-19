@@ -1,0 +1,5 @@
+# .bash_profile — login bash. Its mere existence stops bash from auto-reading
+# ~/.profile, so source the environment and the interactive rc explicitly.
+# (env.sh is idempotent, so sourcing it via both .profile and .bashrc is safe.)
+[ -f "$HOME/.profile" ] && . "$HOME/.profile"
+[ -f "$HOME/.bashrc" ]  && . "$HOME/.bashrc"

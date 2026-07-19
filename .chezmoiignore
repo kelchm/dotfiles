@@ -5,19 +5,27 @@ README.md
 .DS_Store
 **/.DS_Store
 
-{{ if ne .chezmoi.os "darwin" }}
-# macOS-only files
-.config/packages/Brewfile
+{{ if eq .chezmoi.os "windows" }}
+# macOS + Linux only (POSIX shells + cross-platform apps); Windows uses PowerShell
 .config/fish
 .config/fish/**
+.config/shell
+.config/shell/**
 .config/ghostty
 .config/ghostty/**
-.config/iterm2
-.config/iterm2/**
+.bash_profile
+.bashrc
 .profile
 .zprofile
 .zshenv
 .zshrc
+{{ end }}
+
+{{ if ne .chezmoi.os "darwin" }}
+# macOS-only files (native app + Homebrew bundle)
+.config/packages/Brewfile
+.config/iterm2
+.config/iterm2/**
 {{ end }}
 
 {{ if ne .chezmoi.os "windows" }}

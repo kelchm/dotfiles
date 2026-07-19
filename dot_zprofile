@@ -1,3 +1,3 @@
-# .zprofile is sourced for login zsh shells
-eval "$(/opt/homebrew/bin/brew shellenv)"
-export PATH="$HOME/.local/share/mise/shims:$PATH"
+# .zprofile is sourced only for login zsh shells.
+# fish is the login shell, so zsh is always a non-login child and this never runs.
+# PATH/env setup lives in .zshenv (always sourced) instead.

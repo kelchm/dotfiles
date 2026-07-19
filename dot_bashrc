@@ -1,0 +1,13 @@
+# .bashrc — bash has no always-sourced file, so establish the environment here first
+# (covers non-login interactive bash), then do interactive-only setup below the guard.
+[ -f "$HOME/.config/shell/env.sh" ] && . "$HOME/.config/shell/env.sh"
+
+# Everything past here is interactive-only. Bail out if not interactive.
+case $- in
+    *i*) ;;
+    *) return ;;
+esac
+
+command -v mise     >/dev/null 2>&1 && eval "$(mise activate bash)"
+command -v starship >/dev/null 2>&1 && eval "$(starship init bash)"
+# Environment (PATH, brew, SSH_AUTH_SOCK) is set in ~/.config/shell/env.sh, sourced above.

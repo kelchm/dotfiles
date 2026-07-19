@@ -1,3 +1,4 @@
-# .profile is sourced for login bash/sh shells (zsh and fish ignore it).
-[ -d "$HOME/.local/bin" ] && PATH="$HOME/.local/bin:$PATH"
-[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+# .profile is sourced for login sh/bash shells (zsh and fish ignore it).
+# NOTE: when ~/.bash_profile exists, bash reads it INSTEAD of ~/.profile, so our
+# .bash_profile sources this explicitly. Keep this to environment only.
+[ -f "$HOME/.config/shell/env.sh" ] && . "$HOME/.config/shell/env.sh"

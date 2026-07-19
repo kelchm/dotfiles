@@ -5,3 +5,5 @@ uv = "latest"
 
 [settings]
 python.uv_venv_auto = true  # auto-creates/activates .venv via uv
+# Let per-repo rust-toolchain.toml drive the Rust version.
+idiomatic_version_file_enable_tools = ["rust"]

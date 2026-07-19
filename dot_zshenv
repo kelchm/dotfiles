@@ -1,3 +1,5 @@
-# .zshenv is always sourced by zsh
-[ -d "$HOME/.local/bin" ] && path=("$HOME/.local/bin" $path)
-[ -d "$HOME/.cargo/bin" ] && . "$HOME/.cargo/env"
+# .zshenv is always sourced by zsh (login or not) — the right place to establish the
+# environment, since fish is the login shell so zsh is always a non-login child and
+# .zprofile never runs. Interactive-only setup (prompt, mise activate) lives in .zshrc.
+[ -f "$HOME/.config/shell/env.sh" ] && . "$HOME/.config/shell/env.sh"
+typeset -U path   # dedupe PATH (zsh keeps $path and $PATH in sync)
