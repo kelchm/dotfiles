@@ -19,7 +19,7 @@
 ## Language-specific Guidance
 
 ### Markdown
-- When writing markdown, avoid the use of line breaks at a fixed column width
+- Don't hard-wrap prose. Write each paragraph and list item as one unbroken line and let the renderer soft-wrap — *NO* manual line breaks at 80/100 columns.
 
 ### TypeScript
 - Never use `any` unless 100% necessary or specifically instructed
