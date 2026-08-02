@@ -1,49 +1,49 @@
 {{- if eq .chezmoi.os "windows" -}}
-# Windows has no dotfile convention, so chezmoi-managed dotfiles show up as
-# ordinary visible files in the home root. Set the hidden attribute to get the
+# Windows has no dotfile convention, so dot-prefixed entries show up as
+# ordinary visible items in the home root. Set the hidden attribute to get the
 # same filtering a POSIX shell gives dot-prefixed names.
 #
-# chezmoi writes files in place on Windows, so the attribute survives an apply
-# that only changes content; this exists to catch newly created files.
+# Directories: ALL dot-prefixed directories are hidden, whoever owns them.
+# Writes go *into* a directory, never over it, so the hidden bit on the
+# directory itself can never break a tool's write path.
 #
-# The file list is derived from `chezmoi managed` rather than hardcoded, so it
-# stays correct as the repo changes and it already respects .chezmoiignore.
-# Only regular files in the home root are touched; directories are left alone.
+# Files: only the chezmoi-managed ones. chezmoi is their sole writer and
+# overwrites hidden files in place safely (Go >= 1.24 opens with OPEN_ALWAYS).
+# Third-party dot-files are left visible on purpose: their owners may rewrite
+# via create-truncate, which fails with access denied on a hidden file.
+# This list must match the home-root files in `chezmoi managed`.
 #
 # LIMITATION: chezmoi only runs after_ scripts during a full-tree apply. A
-# targeted apply (`chezmoi apply ~/.gitconfig`) or `chezmoi edit --apply` builds
-# its target list from the arguments alone and skips scripts, so a file recreated
-# that way stays visible until the next full `chezmoi apply`.
+# targeted apply (`chezmoi apply ~/.gitconfig`) or `chezmoi edit --apply`
+# skips scripts, so a file recreated that way stays visible until the next
+# full `chezmoi apply`.
 
 $ErrorActionPreference = 'Stop'
 
-$chezmoi = if ($env:CHEZMOI_EXECUTABLE) { $env:CHEZMOI_EXECUTABLE } else { 'chezmoi' }
-$dest    = $env:CHEZMOI_DEST_DIR
-$source  = $env:CHEZMOI_SOURCE_DIR
+$dest = $env:CHEZMOI_DEST_DIR
 
-$managed = & $chezmoi managed --source $source --destination $dest --path-style absolute --include files
-if ($LASTEXITCODE -ne 0) {
-    throw "chezmoi managed failed with exit code $LASTEXITCODE"
+$managedFiles = @(
+    ".default-python-packages"
+    ".editorconfig"
+    ".gitconfig"
+)
+
+$items = @()
+foreach ($name in $managedFiles) {
+    # Only a genuinely absent target is skipped; ACL and I/O failures must surface.
+    try { $item = Get-Item -LiteralPath (Join-Path $dest $name) -Force }
+    catch [System.Management.Automation.ItemNotFoundException] { continue }
+    if ($item.PSIsContainer) {
+        throw "expected a file but found a directory: $($item.FullName)"
+    }
+    $items += $item
 }
 
-$prefix = "$dest/"
-foreach ($target in $managed) {
-    if (-not $target.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
-    $rel = $target.Substring($prefix.Length)
-    if ($rel.Contains('/')) { continue }         # not directly in the home root
-    if (-not $rel.StartsWith('.')) { continue }  # not dot-prefixed
+$items += Get-ChildItem -LiteralPath $dest -Force -Directory |
+    Where-Object { $_.Name.StartsWith('.') }
 
-    # Only a genuinely absent target is skipped; ACL and I/O failures must surface.
-    $item = $null
-    try { $item = Get-Item -LiteralPath $target -Force }
-    catch [System.Management.Automation.ItemNotFoundException] { }
-    if (-not $item) { continue }
-
-    if ($item.PSIsContainer) {
-        throw "expected a file but found a directory: $target"
-    }
+foreach ($item in $items) {
     if ($item.Attributes -band [IO.FileAttributes]::Hidden) { continue }
-
     $item.Attributes = $item.Attributes -bor [IO.FileAttributes]::Hidden
     Write-Host "Hid $($item.FullName)"
 }
