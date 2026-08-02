@@ -1,0 +1,21 @@
+{{- if eq .chezmoi.os "windows" -}}
+# Fold Claude Code's loose ~/.claude.json into the ~/.claude directory.
+#
+# CLAUDE_CONFIG_DIR relocates the CLI's entire config tree (including
+# .claude.json and its lock/backup litter). Pointing it at ~/.claude — the
+# default fallback — is deliberate: components that ignore the variable
+# (VS Code extension host, hardcoded plugin paths) fall back to ~/.claude
+# anyway, so every known gap lands in the same place we point.
+# https://github.com/anthropics/claude-code/issues/24479
+#
+# User-level (registry) rather than shell-profile so GUI-launched apps see it.
+# One-time migration on an existing machine: with no Claude sessions running,
+#   Get-ChildItem -Force "$env:USERPROFILE\.claude.json*" | Move-Item -Destination "$env:USERPROFILE\.claude\"
+
+$target = Join-Path $env:USERPROFILE ".claude"
+$current = [Environment]::GetEnvironmentVariable("CLAUDE_CONFIG_DIR", "User")
+if ($current -ne $target) {
+    [Environment]::SetEnvironmentVariable("CLAUDE_CONFIG_DIR", $target, "User")
+    Write-Host "Set user env CLAUDE_CONFIG_DIR=$target"
+}
+{{- end }}

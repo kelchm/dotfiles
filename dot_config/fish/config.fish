@@ -1,6 +1,9 @@
 # Environment — runs for every fish shell (interactive or not) so scripts get PATH too.
 set -gx MISE_FISH_AUTO_ACTIVATE 0
 
+# Claude Code — fold the loose ~/.claude.json into ~/.claude (see shell/env.sh for why).
+set -gx CLAUDE_CONFIG_DIR "$HOME/.claude"
+
 # Homebrew — Apple Silicon mac or Linuxbrew. Use the fish dialect explicitly; a bare
 # `brew shellenv` can misdetect the shell in a non-interactive spawn and emit POSIX
 # syntax that fish can't parse (`${ is not a valid variable in fish`).

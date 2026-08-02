@@ -58,3 +58,10 @@ export PATH
 _op_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
 [ -S "$_op_sock" ] && export SSH_AUTH_SOCK="$_op_sock"
 unset _op_sock
+
+# Claude Code — fold the loose ~/.claude.json (and its lock/tmp litter) into ~/.claude.
+# Pointing at the default fallback dir is deliberate: components that ignore the variable
+# fall back to ~/.claude anyway, so everything converges on one place. Shell-scoped only;
+# Dock-launched GUI apps won't see it, and their worst case is recreating the loose file
+# (the pre-variable status quo). Windows sets this at the user-registry level instead.
+export CLAUDE_CONFIG_DIR="$HOME/.claude"
