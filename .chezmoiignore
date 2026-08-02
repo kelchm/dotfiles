@@ -1,5 +1,6 @@
 # Repo-only files (never applied to $HOME)
 README.md
+favicon.svg
 
 # macOS cruft (never track)
 .DS_Store
