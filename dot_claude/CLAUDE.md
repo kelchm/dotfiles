@@ -52,17 +52,28 @@ Rankings, higher = better. Cost is what I actually pay (grok-4.5 is very cheap f
 ### Mechanics
 - Claude models (sonnet-5, opus-4.8, fable-5) run via the Agent/Workflow model parameter.
 - Non-Claude models are only reachable via their own CLIs, headless, through Bash.
-  - **grok-4.5** — default delegate for BOTH implementation and review. `grok -p`; JSON reply in `.text`. Edit-vs-read-only is set by `--permission-mode`, NOT `--sandbox` (that's a system FS/network boundary and does NOT stop grok editing the working dir — verified).
+  - **grok-4.5** — default delegate for BOTH implementation and review. `grok -p`; JSON reply in `.text`.
 
     Implement (autonomous edits):
     ```bash
     grok --no-auto-update -p "PROMPT" -m grok-4.5 --output-format json --always-approve
     ```
-    Review (real read-only — `plan` blocks edits and overrides `--always-approve`):
+    Agentic review (tools needed for diffs/repo browsing):
     ```bash
-    grok --no-auto-update -p "PROMPT" -m grok-4.5 --output-format json --permission-mode plan
+    grok --no-auto-update --prompt-file PROMPT.md -m grok-4.5 --output-format json \
+      -w --always-approve
     ```
-    - `--prompt-file PATH` for long prompts (dodges shell quoting); `--json-schema '{...}'` for structured output; `-w`/`--worktree[=name]` for parallel-implementer isolation.
+    - Run agentic reviews in a throwaway worktree and discard it afterward. This gives effective read-only protection for the real checkout; `--sandbox` does not prevent edits to the working directory, and plan mode cannot support tool use without cancelling. Verified with grok 0.2.103: `-w` / `--worktree[=NAME]` starts the session in a new Git worktree, optionally named; `--worktree-ref REF` chooses its base, otherwise it uses the source checkout's current `HEAD`.
+
+    Pure-generation review (no tools):
+    ```bash
+    grok --no-auto-update --prompt-file PROMPT.md -m grok-4.5 --output-format json \
+      --permission-mode plan
+    ```
+    - Embed every needed diff/file in `PROMPT.md`, keep the total prompt under ~100 KB to leave margin below the observed input ceiling, and explicitly tell grok that it has no tool access and must answer in one response. In field tests, 119 KB worked while 140 KB was silently truncated.
+    - **Failure signatures (FanaBridge reviews, 2026-08-02):** `stopReason: "Cancelled"` at turn 1–2 with `.text` containing only a one-line preamble means plan mode cancelled an attempted tool call (including read-only calls such as `git diff`). Grok saying the message was truncated means the prompt exceeded the input ceiling. Plan mode is usable only for pure single-generation prompts requiring zero tool calls.
+    - **Output cap (both review recipes):** long responses can cancel mid-generation. Request no more than 8 findings and keep every field short.
+    - `--prompt-file PATH` for long prompts (dodges shell quoting, but not the input ceiling); `--json-schema '{...}'` for structured output; `-w` / `--worktree[=NAME]` for worktree isolation.
 
   - **codex (gpt-5.6 family)** — `codex exec`, model via `-m`: `gpt-5.6-sol` (frontier), `-terra` (balanced), `-luna` (fast/cheap); pin one explicitly. Default to `sol` unsupervised — `terra`/`luna` should be considered as always needing review from a more intelligent model. **Close stdin (`< /dev/null`, or `< prompt.txt` to pass the prompt)** or codex hangs on EOF (`Reading additional input from stdin...`) even with the prompt as an arg. Prefer the `codex-review` / `codex-implementation` / `codex-computer-use` skills; raw:
 
