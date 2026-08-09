@@ -52,17 +52,35 @@ Rankings, higher = better. Cost is what I actually pay (grok-4.5 is very cheap f
 ### Mechanics
 - Claude models (sonnet-5, opus-4.8, fable-5) run via the Agent/Workflow model parameter.
 - Non-Claude models are only reachable via their own CLIs, headless, through Bash.
-  - **grok-4.5** — default delegate for BOTH implementation and review. `grok -p`; JSON reply in `.text`. Edit-vs-read-only is set by `--permission-mode`, NOT `--sandbox` (that's a system FS/network boundary and does NOT stop grok editing the working dir — verified).
+  - **grok-4.5** — default delegate for BOTH implementation and review. `grok -p`; JSON reply in `.text`. Prefer the `grok-review` / `grok-implementation` skills; raw:
 
-    Implement (autonomous edits):
+    Review — grok ships a bundled `/review` skill that works headless. It takes mode flags and **no prompt**, collects the diff itself, and writes its notes to `$TMPDIR`:
     ```bash
-    grok --no-auto-update -p "PROMPT" -m grok-4.5 --output-format json --always-approve
+    grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json \
+      --always-approve --sandbox read-only -p '/review --local'
     ```
-    Review (real read-only — `plan` blocks edits and overrides `--always-approve`):
+    Modes: `--local` (uncommitted), `--branch <name>`, `--pr <number-or-url>` (posts a PENDING GitHub review for you to submit). This is the closest analogue to `codex review`.
+
+    Review with a custom stance (when you need a specific focus — `/review` accepts no prompt):
     ```bash
-    grok --no-auto-update -p "PROMPT" -m grok-4.5 --output-format json --permission-mode plan
+    grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
+      --sandbox read-only --deny "Edit($PWD/**)" --deny "Write($PWD/**)" --prompt-file PROMPT.md
     ```
-    - `--prompt-file PATH` for long prompts (dodges shell quoting); `--json-schema '{...}'` for structured output; `-w`/`--worktree[=name]` for parallel-implementer isolation.
+    Implement (autonomous edits, isolated with **plain git** — not grok's `-w`):
+    ```bash
+    git worktree add --detach ../grok-task
+    grok --no-auto-update --cwd ../grok-task -m grok-4.5 --output-format json \
+      --always-approve --prompt-file PROMPT.md
+    ```
+    - `--prompt-file PATH` for long prompts (dodges shell quoting); `--json-schema '{...}'` for structured output.
+
+    Verified traps (grok 0.2.118, macOS — re-verify on a new major version):
+    - **grok's `--sandbox read-only` is NOT codex's `-s read-only`.** Grok leaves `/tmp`, `/var/tmp`, `/var/folders` and `~/.grok` writable, so a repo under any of those is completely unprotected — while still logging `"enforced":true`. Codex's `-s read-only` blocks writes everywhere, including `/tmp`. Never conclude "the sandbox doesn't work" from a test in a temp dir; that mistake is what produced the previous version of this section.
+    - **`-w`/`--worktree` is silently ignored in headless mode** (`-p` / `--prompt-file`): no worktree is created, edits land in the real checkout, and nothing is printed to stderr. Isolate with `git worktree add` and point grok at it via `--cwd`, the same way `codex-implementation` does.
+    - **`--tools` / `--disallowed-tools` fail OPEN.** One unrecognized name anywhere in the list silently restores the *entire* toolset (exit 0, no warning). The README's own tool tables are wrong — it documents `bash` and `run_terminal_cmd`; the real tool is `run_terminal_command`, and subagents are `spawn_subagent`. Do not use either flag as a guard.
+    - **`--deny` / `--allow` fail CLOSED and loudly** — an unknown prefix is a hard error with exit 1 and grok never starts. Prefer them. Prefixes: `Bash` `Edit` `Write` `Read` `Grep` `WebFetch` `MCPTool`. Scope them to the repo path: a blanket `Write(**)` breaks `/review`'s own notes file.
+    - `--permission-mode plan` cancels repo/shell tool calls (`stopReason=cancelled` at turn 1–2 with a one-line preamble). It does *not* block grok's internal read of a large prompt file, and there is no ~100 KB input ceiling — 151 KB and 204 KB prompts were read in full.
+    - Child-process network is **not** blocked on macOS under `read-only` (seccomp is Linux-only), so `gh`/`curl` inside a review work on macOS and may fail on Linux. Don't depend on it in either direction.
 
   - **codex (gpt-5.6 family)** — `codex exec`, model via `-m`: `gpt-5.6-sol` (frontier), `-terra` (balanced), `-luna` (fast/cheap); pin one explicitly. Default to `sol` unsupervised — `terra`/`luna` should be considered as always needing review from a more intelligent model. **Close stdin (`< /dev/null`, or `< prompt.txt` to pass the prompt)** or codex hangs on EOF (`Reading additional input from stdin...`) even with the prompt as an arg. Prefer the `codex-review` / `codex-implementation` / `codex-computer-use` skills; raw:
 

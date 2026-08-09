@@ -2,50 +2,55 @@
 name: grok-review
 description: >-
   Ask the Grok CLI (grok-4.5) for an independent, read-only code review of
-  uncommitted changes, a branch diff, a single commit, or specific files. Use
-  when the user wants a second-pass review, or when a change is broad or risky
-  enough that a separate model's perspective is worth it. Grok reviews only —
-  it runs read-only and never edits.
+  uncommitted changes, a branch diff, or a GitHub PR. Use when the user wants a
+  second-pass review, or when a change is broad or risky enough that a separate
+  model's perspective is worth it. Grok reviews only — it never edits.
 ---
 
 # Grok Review
 
-Grok is an independent reviewer — reach for it when the user wants a second opinion, or when a diff is broad enough that another model's eyes help. It runs read-only: it can read and grep the repo but cannot write or reach the network.
+Grok is an independent reviewer — reach for it when the user wants a second opinion, or when a diff is broad enough that another model's eyes help.
+
+Grok ships a **bundled `/review` skill** that works headless and is the closest analogue to `codex review`. It collects the diff itself, so don't hand-roll diff materialization. It takes mode flags and **no prompt**; when you need a specific review focus, use the custom-stance shape instead.
 
 ## Workflow
 
-1. Identify the review target: uncommitted changes, current branch vs a base, a commit SHA, a PR checkout, or specific files.
-2. Create a temporary artifact directory for the prompt and Grok's report.
-3. Compose `$PROMPT` from the Review Prompt stance (below) plus the diff for the target, then run Grok read-only.
-4. Read Grok's report and verify important claims against the code before presenting them.
+1. Identify the review target: uncommitted changes, a branch, or a GitHub PR.
+2. Run `/review` in the matching mode, read-only.
+3. Read Grok's report and verify important claims against the code before presenting them.
 
-Use one of these command shapes:
+```bash
+# Uncommitted changes (staged + unstaged + untracked).
+grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json \
+  --always-approve --sandbox read-only -p '/review --local'
+
+# A branch against its merge-base with the default base branch.
+grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json \
+  --always-approve --sandbox read-only -p '/review --branch <name>'
+
+# A GitHub PR. Posts findings as a PENDING review for the user to submit.
+grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json \
+  --always-approve --sandbox read-only -p '/review --pr <number-or-url>'
+```
+
+The reply is JSON; the report is in `.text`, and `/review` also writes a notes file under `$TMPDIR` whose path it prints. PR mode only *stages* a pending review — the user submits it through GitHub.
+
+## Custom review stance
+
+`/review` accepts no prompt, so when the review needs a specific focus (a named risk, a requirement to check against, particular files), drive Grok directly and pre-materialize the diff into the prompt file:
 
 ```bash
 ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/grok-review.XXXXXX")"
-REPORT="$ARTIFACT_DIR/report.md"
 PROMPT="$ARTIFACT_DIR/prompt.md"
+REPORT="$ARTIFACT_DIR/report.json"
 
-# Write the ## Review Prompt stance into $PROMPT, then append the target diff.
-# (Claude writes the stance; uncomment the diff line matching the target.)
-{
-  echo; echo '--- CHANGES ---'
-  git --no-pager diff HEAD            # uncommitted (staged + unstaged)
-  # git --no-pager diff main...HEAD   # current branch vs a base
-  # git --no-pager show <sha>         # a single commit
-} >> "$PROMPT"
+# Write the stance below into $PROMPT, then append the target diff:
+{ echo; echo '--- CHANGES ---'; git --no-pager diff HEAD; } >> "$PROMPT"
 
-grok --no-auto-update --cwd "$PWD" \
-  -m grok-4.5 --output-format json \
-  --sandbox read-only --always-approve \
-  -p "$(cat "$PROMPT")" > "$REPORT"
+grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
+  --sandbox read-only --deny "Edit($PWD/**)" --deny "Write($PWD/**)" \
+  --prompt-file "$PROMPT" > "$REPORT"
 ```
-
-`--sandbox read-only` is what makes this a review: Grok can read and run read-only commands but physically can't write or hit the network. `--always-approve` only stops it hanging on a tool prompt. Grok has no dedicated `review` subcommand, so the read-only stance lives in the sandbox flag and the prompt, not a CLI verb.
-
-## Review Prompt
-
-Give Grok a plain code-review stance — don't prompt it the way you'd prompt yourself:
 
 ```text
 Review these changes for bugs, regressions, missing tests, security issues, and requirement mismatches.
@@ -56,10 +61,19 @@ Prioritize findings over summary. For each finding include:
 - concrete failure mode
 - suggested fix direction
 
-Do not edit anything. If there are no substantive findings, say so and name any residual test gaps.
+Do not edit anything. Report at most 8 findings and keep each field short. If there are no substantive findings, say so and name any residual test gaps.
 ```
 
-Add task-specific context when useful: requirements, risky areas, expected behavior, relevant tests, or files you're unsure about.
+Cap the findings — long responses can cancel mid-generation.
+
+## Keeping it read-only
+
+`--sandbox read-only` plus repo-scoped `--deny` rules is what keeps this a review. Two things to know:
+
+- Grok's `--sandbox read-only` leaves `/tmp`, `/var/tmp`, `/var/folders` and `~/.grok` **writable**, so it does not protect a repo checked out under any of those. It is not equivalent to codex's `-s read-only`. The `--deny` rules are what hold in that case.
+- Scope the deny rules to the repo (`Edit($PWD/**)`, not `Edit(**)`) — a blanket `Write(**)` blocks `/review` from writing its own notes file and breaks the run.
+
+Do **not** reach for `--tools` / `--disallowed-tools`: both silently restore the full toolset if any name in the list is unrecognized, and the documented tool names are wrong. `--deny` fails closed with a hard error instead.
 
 ## Reporting back
 
