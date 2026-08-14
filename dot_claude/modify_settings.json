@@ -1,0 +1,25 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- $input := .chezmoi.stdin -}}
+{{- $output := "" -}}
+{{- if not $input -}}
+{{- $output = `{
+  "env": {
+    "DISABLE_UPDATES": "1"
+  }
+}` -}}
+{{- else if regexMatch `(?m)^\s*"DISABLE_UPDATES"\s*:` $input -}}
+{{- $output = ($input | replaceAllRegex `(?m)^(\s*)"DISABLE_UPDATES"\s*:\s*"[^"]*"(\s*,?)` `${1}"DISABLE_UPDATES": "1"${2}`) -}}
+{{- else if regexMatch `(?m)^\s*"env"\s*:\s*\{\s*\}` $input -}}
+{{- $output = ($input | replaceAllRegex `(?m)^(\s*)"env"\s*:\s*\{\s*\}` `${1}"env": {
+${1}  "DISABLE_UPDATES": "1"
+${1}}`) -}}
+{{- else if regexMatch `(?m)^\s*"env"\s*:\s*\{\s*$` $input -}}
+{{- $output = ($input | replaceAllRegex `(?m)^(\s*)("env"\s*:\s*\{\s*)$` `${1}${2}
+${1}  "DISABLE_UPDATES": "1",`) -}}
+{{- else -}}
+{{- $output = ($input | replaceAllRegex `(?s)^(\s*\{)` `${1}
+  "env": {
+    "DISABLE_UPDATES": "1"
+  },`) -}}
+{{- end -}}
+{{- printf "%s\n" ($output | trimSuffix "\n") -}}

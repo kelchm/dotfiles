@@ -1,0 +1,15 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- $input := .chezmoi.stdin -}}
+{{- $output := "" -}}
+{{- if not $input -}}
+{{- $output = `{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false
+}` -}}
+{{- else if regexMatch `(?m)^\s*"autoupdate"\s*:` $input -}}
+{{- $output = ($input | replaceAllRegex `(?m)^(\s*)"autoupdate"\s*:\s*(?:true|false|"notify")(\s*,?)` `${1}"autoupdate": false${2}`) -}}
+{{- else -}}
+{{- $output = ($input | replaceAllRegex `(?s)^(\s*\{)` `${1}
+  "autoupdate": false,`) -}}
+{{- end -}}
+{{- printf "%s\n" ($output | trimSuffix "\n") -}}
