@@ -54,31 +54,40 @@ Rankings, higher = better. Cost is what I actually pay (grok-4.5 is very cheap f
 - Non-Claude models are only reachable via their own CLIs, headless, through Bash.
   - **grok-4.5** — default delegate for BOTH implementation and review. `grok -p`; JSON reply in `.text`. Prefer the `grok-review` / `grok-implementation` skills; raw:
 
-    Review — grok ships a bundled `/review` skill that works headless. It takes mode flags and **no prompt**, collects the diff itself, and writes its notes to `$TMPDIR`:
+    Review — grok ships a bundled `/review` skill that works headless. It takes mode flags and **no prompt**, collects the diff itself, and writes its notes to `$TMPDIR`. The repo-scoped denies are a seatbelt against grok helpfully editing something mid-review; leave the shell alone, `/review` needs it:
     ```bash
     grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json \
-      --always-approve --sandbox read-only -p '/review --local'
+      --always-approve --sandbox read-only \
+      --deny "Edit($PWD/**)" --deny "Write($PWD/**)" -p '/review --local'
     ```
     Modes: `--local` (uncommitted), `--branch <name>`, `--pr <number-or-url>` (posts a PENDING GitHub review for you to submit). This is the closest analogue to `codex review`.
 
-    Review with a custom stance (when you need a specific focus — `/review` accepts no prompt):
+    Review with a custom stance (`/review` accepts no prompt — name the target in `PROMPT.md` and let grok collect the diff itself):
     ```bash
     grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
       --sandbox read-only --deny "Edit($PWD/**)" --deny "Write($PWD/**)" --prompt-file PROMPT.md
     ```
     Implement (autonomous edits, isolated with **plain git** — not grok's `-w`):
     ```bash
-    git worktree add --detach ../grok-task
-    grok --no-auto-update --cwd ../grok-task -m grok-4.5 --output-format json \
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    WORKTREE_PARENT="$(mktemp -d "$(dirname "$REPO_ROOT")/grok-task.XXXXXX")"
+    WORKTREE="$WORKTREE_PARENT/worktree"
+    TASK_BRANCH="grok/$(basename "$WORKTREE_PARENT")"
+    git -C "$REPO_ROOT" worktree add --detach "$WORKTREE"
+    git -C "$WORKTREE" switch -c "$TASK_BRANCH"
+    grok --no-auto-update --cwd "$WORKTREE" -m grok-4.5 --output-format json \
       --always-approve --prompt-file PROMPT.md
+    # Require a commit SHA in the prompt; review and integrate it before cleanup:
+    git -C "$REPO_ROOT" worktree remove "$WORKTREE"
+    rmdir "$WORKTREE_PARENT"
     ```
     - `--prompt-file PATH` for long prompts (dodges shell quoting); `--json-schema '{...}'` for structured output.
 
-    Verified traps (grok 0.2.118, macOS — re-verify on a new major version):
+    Verified traps (macOS; established on grok 0.2.118, `-w` / `--tools` / `/review` re-verified on 1.0.3 — re-check on a new major version):
     - **grok's `--sandbox read-only` is NOT codex's `-s read-only`.** Grok leaves `/tmp`, `/var/tmp`, `/var/folders` and `~/.grok` writable, so a repo under any of those is completely unprotected — while still logging `"enforced":true`. Codex's `-s read-only` blocks writes everywhere, including `/tmp`. Never conclude "the sandbox doesn't work" from a test in a temp dir; that mistake is what produced the previous version of this section.
     - **`-w`/`--worktree` is silently ignored in headless mode** (`-p` / `--prompt-file`): no worktree is created, edits land in the real checkout, and nothing is printed to stderr. Isolate with `git worktree add` and point grok at it via `--cwd`, the same way `codex-implementation` does.
     - **`--tools` / `--disallowed-tools` fail OPEN.** One unrecognized name anywhere in the list silently restores the *entire* toolset (exit 0, no warning). The README's own tool tables are wrong — it documents `bash` and `run_terminal_cmd`; the real tool is `run_terminal_command`, and subagents are `spawn_subagent`. Do not use either flag as a guard.
-    - **`--deny` / `--allow` fail CLOSED and loudly** — an unknown prefix is a hard error with exit 1 and grok never starts. Prefer them. Prefixes: `Bash` `Edit` `Write` `Read` `Grep` `WebFetch` `MCPTool`. Scope them to the repo path: a blanket `Write(**)` breaks `/review`'s own notes file.
+    - **`--deny` / `--allow` fail CLOSED and loudly** — an unknown prefix is a hard error with exit 1 and grok never starts. Prefer them. Prefixes: `Bash` `Edit` `Write` `Read` `Grep` `WebFetch` `MCPTool`. Scope review denies to the repo: a blanket `Write(**)` breaks `/review`'s own notes file, and denying `Bash` means hand-rolling diff materialization for no real gain — grok is cooperative, and a stray edit is visible in `git status` and revertible.
     - `--permission-mode plan` cancels repo/shell tool calls (`stopReason=cancelled` at turn 1–2 with a one-line preamble). It does *not* block grok's internal read of a large prompt file, and there is no ~100 KB input ceiling — 151 KB and 204 KB prompts were read in full.
     - Child-process network is **not** blocked on macOS under `read-only` (seccomp is Linux-only), so `gh`/`curl` inside a review work on macOS and may fail on Linux. Don't depend on it in either direction.
 
