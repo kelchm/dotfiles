@@ -200,20 +200,26 @@ const hierarchy = [
   ["messageAction matches the accent (single interactive color)", colors.messageAction === colors.accent],
 ];
 
+// Diagnostics go to stderr so stdout stays a clean JSON stream for
+// `node build-onedark-theme.mjs > one-dark-pro-darker.json`.
 let failed = 0;
-console.log("hierarchy checks:");
+console.error("hierarchy checks:");
 for (const [label, ok] of hierarchy) {
   if (!ok) failed += 1;
-  console.log(`  ${ok ? "PASS" : "FAIL"}  ${label}`);
+  console.error(`  ${ok ? "PASS" : "FAIL"}  ${label}`);
 }
-console.log("\ncontrast checks:");
+console.error("\ncontrast checks:");
 for (const [label, fg, bg, min] of checks) {
   const ratio = contrast(fg, bg);
   const ok = ratio >= min;
   if (!ok) failed += 1;
-  console.log(`  ${ok ? "PASS" : "FAIL"}  ${ratio.toFixed(2)} (min ${min})  ${label}`);
+  console.error(`  ${ok ? "PASS" : "FAIL"}  ${ratio.toFixed(2)} (min ${min})  ${label}`);
 }
-console.log(failed === 0 ? "\nall checks passed" : `\n${failed} CHECK(S) FAILED`);
+if (failed > 0) {
+  console.error(`\n${failed} CHECK(S) FAILED — no theme emitted`);
+  process.exit(1);
+}
+console.error("\nall checks passed");
 
 // ---- emit ------------------------------------------------------------------
 const theme = {
@@ -223,5 +229,5 @@ const theme = {
   appearance: "dark",
   colors,
 };
-console.log(`\nroles: ${Object.keys(colors).length}`);
-process.stdout.write("\n" + JSON.stringify(theme, null, 2) + "\n");
+console.error(`\nroles: ${Object.keys(colors).length}`);
+process.stdout.write(JSON.stringify(theme, null, 2) + "\n");
