@@ -44,6 +44,17 @@
 {{- end }}
 {{- end }}
 
+{{- if ne .chezmoi.os "windows" }}
+
+[credential "https://github.com"]
+    helper =
+    helper = !gh auth git-credential
+
+[credential "https://gist.github.com"]
+    helper =
+    helper = !gh auth git-credential
+{{- end }}
+
 {{- if eq .chezmoi.os "windows" }}
 
 [credential]
