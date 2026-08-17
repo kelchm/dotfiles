@@ -1,4 +1,5 @@
 brew "fish"
+brew "fzf"
 brew "gh"
 brew "starship"
 brew "mise"
