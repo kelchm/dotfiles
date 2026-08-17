@@ -1,0 +1,15 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- $input := .chezmoi.stdin -}}
+{{- $output := "" -}}
+{{- if not $input -}}
+{{- $output = `[cli]
+auto_update = false` -}}
+{{- else if regexMatch `(?m)^\s*auto_update\s*=` $input -}}
+{{- $output = ($input | replaceAllRegex `(?m)^(\s*)auto_update\s*=\s*[^\r\n#]*(\s*(?:#.*)?)$` `${1}auto_update = false${2}`) -}}
+{{- else if regexMatch `(?m)^\s*\[cli\]\s*$` $input -}}
+{{- $output = ($input | replaceAllRegex `(?m)^(\s*\[cli\]\s*)$` `${1}
+auto_update = false`) -}}
+{{- else -}}
+{{- $output = printf "%s\n[cli]\nauto_update = false" ($input | trimSuffix "\n") -}}
+{{- end -}}
+{{- printf "%s\n" ($output | trimSuffix "\n") -}}
