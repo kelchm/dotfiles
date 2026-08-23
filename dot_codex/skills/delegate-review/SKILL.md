@@ -65,6 +65,8 @@ Claude has no target-directory flag — it inherits the process working director
 
 `--permission-mode manual` plus the allow-list is the guard: anything outside the list needs an approval that non-interactive mode can never grant, so it fails closed without hanging. Verified: `git` reads succeed while the edit tool, shell redirection, a python interpreter, a subagent, and writes outside the repo are all blocked. Do not substitute `--permission-mode plan` — it restricts writes only behaviorally, leaving the shell in place.
 
+This stops a reviewer from *helpfully* editing what it found, which is the realistic failure. It is not containment: `Bash(git diff:*)` is a prefix match, and `git diff --output=PATH` writes an arbitrary file — confirmed, including outside the repo. `git log` and `git show` take `--output=` too. Don't describe this guard as read-only, and don't rely on it against anything but ordinary helpfulness.
+
 For a machine-readable report add `--output-format json --json-schema '<schema>'`; the validated object comes back at `.structured_output`.
 
 ## Review prompt

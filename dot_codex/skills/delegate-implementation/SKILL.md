@@ -5,7 +5,9 @@ description: Hand a bounded, clearly-specified implementation task to another ag
 
 # Delegate Implementation
 
-Use a delegate for bounded, clearly-specified implementation work you want done outside your own context — migrations, mechanical refactors, spec-driven changes. The delegate works on an isolated git worktree so its edits never touch the main checkout until you review them.
+Use a delegate for bounded, clearly-specified implementation work you want done outside your own context — migrations, mechanical refactors, spec-driven changes. The delegate works on a separate git worktree, so in normal use its edits land there rather than in the main checkout.
+
+Treat that as a convention, not a jail. A target-directory flag sets where the delegate starts, not where it can write, and an implementation delegate runs autonomously with approvals off. Confirm with `git -C "$REPO_ROOT" status` before you trust that the main checkout is untouched.
 
 Grok is the default implementer for this kind of work. Keep taste-sensitive work — public APIs, UI, copy — off this path; that needs a higher-taste model, and often needs you.
 

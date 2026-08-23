@@ -5,6 +5,8 @@ description: Ask the Grok CLI (grok-4.5) for an independent, read-only code revi
 
 # Grok Review
 
+> **If you are Grok reading this, stop.** Grok discovers `~/.claude/skills/` natively, so this Claude-side skill is visible to you, and following it would mean invoking Grok from Grok. You are the callee: do the review yourself and do not shell out to another agent CLI. The same applies if `XDELEGATE_DEPTH` is set in your environment.
+
 Grok is an independent reviewer — reach for it when the user wants a second opinion, or when a diff is broad enough that another model's eyes help.
 
 Grok ships a bundled `/review` skill that works headless and is the closest analogue to `codex review`. It collects the diff itself, so don't hand-roll diff materialization.

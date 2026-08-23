@@ -6,7 +6,7 @@ Grok (`grok`, grok-4.5) and Claude (`claude`) are available locally and already 
 
 Grok is the default delegate for bulk and mechanical work. Keep taste-sensitive work (public APIs, UI, copy) off the delegation path entirely.
 
-A delegate CLI cannot run inside your sandbox — when `CODEX_SANDBOX` is set, request escalated permissions for that one command. The delegate needs its own home directory and network access, and it enforces its own read-only guard.
+A delegate CLI cannot run inside your sandbox — when `CODEX_SANDBOX` is set, request escalated permissions for that one command, showing the exact argv. The delegate needs its own home directory and network access. A review delegate runs under flags that stop it editing the repo; an implementation delegate is autonomous by design and is contained by its git worktree, not by a sandbox — review its commit before integrating.
 
 ## Recursion guard
 

@@ -4,7 +4,9 @@ Claude, Codex, and Grok can each hand bounded review or implementation work to t
 
 ## Verified capability matrix
 
-Verified 2026-08-23 on macOS 25.5.0 (darwin), against **claude 2.1.228**, **codex-cli 0.148.0**, **grok 1.0.3 (1a29d5bc12d4)**. Every cell below was established by running the canary in the next section, not by reading vendor docs. Re-run the canaries on a new major version of any CLI.
+Recorded 2026-08-23 on macOS 25.5.0 (darwin), against **claude 2.1.228**, **codex-cli 0.148.0**, **grok 1.0.3 (1a29d5bc12d4)**. Re-check on a new major version of any CLI, and on a new platform — one macOS run is not a cross-platform claim.
+
+**Not every cell here is canaried.** Cells with a filesystem or CLI transcript behind them, in the next section: Claude's prompt delivery, target directory, guard, and fail-closed behavior; Claude structured output; Grok's `--deny` fail-closed behavior; skill discovery for all three; Codex's `-C`, review subcommand, and env markers. Everything else — Codex `-s read-only` coverage, Codex stdin-close, Grok `--tools` fail-open, Grok `-w` being ignored headless, worktree isolation — is **inherited from prior verification or from the flag's own help output**, and is marked as such where it matters. Treat the two groups differently.
 
 | Primitive | Claude | Codex | Grok |
 |---|---|---|---|
@@ -13,7 +15,7 @@ Verified 2026-08-23 on macOS 25.5.0 (darwin), against **claude 2.1.228**, **code
 | Read-only guard | `--permission-mode manual` + explicit `--allowed-tools` allow-list + `--disallowed-tools Edit Write NotebookEdit Task` | `-s read-only` (holds everywhere, including `/tmp`) | `--sandbox read-only` **plus** repo-scoped `--deny "Edit($PWD/**)" --deny "Write($PWD/**)"` — the sandbox alone leaves `/tmp`, `/var/tmp`, `/var/folders` and `~/.grok` writable |
 | Write + isolation | plain `git worktree add --detach` + run with cwd set to the worktree | plain `git worktree add --detach` + `-C "$WORKTREE"` | plain `git worktree add --detach` + `--cwd "$WORKTREE"` |
 | Structured output | `--output-format json --json-schema '<schema>'` → validated object at `.structured_output` | `--output-schema FILE`; `--json` for JSONL events | `--json-schema '<schema>'` (implies `--output-format json`) → reply in `.text` |
-| Review entry point | none — no review subcommand; use a review-stance prompt under the read-only guard | `codex exec review` with `--uncommitted` / `--base <branch>` / `--commit <sha>`, custom instructions on stdin | bundled `/review` skill: `--local` / `--branch <name>` / `--pr <n>`; takes **no** prompt and collects the diff itself |
+| Review entry point | none — no review subcommand; use a review-stance prompt under the guard | `codex exec review` with `--uncommitted` / `--base <branch>` / `--commit <sha>`, **or** custom instructions on stdin — never both | bundled `/review` skill: `--local` / `--branch <name>` / `--pr <n>`; takes **no** prompt and collects the diff itself |
 | Guard failure mode | **fails closed** — an unrecognized allow-list rule leaves writes blocked | fails closed | `--deny` / `--allow` **fail closed loudly** (unknown prefix → exit 1, no model call); `--tools` / `--disallowed-tools` **fail open silently** — never use them as a guard |
 
 ### Config discovery
@@ -85,6 +87,20 @@ claude -p --no-session-persistence --model sonnet \
 
 Result: `git status` PASS, all five write vectors blocked, exit 0, no hang. Shell redirection is refused by the permission layer with an explicit message.
 
+**This is not containment, and must not be described as such.** `Bash(git diff:*)` is a *prefix* match, and git has write-capable flags behind read-looking subcommands. Confirmed on git 2.50.1 under the exact allow-list above:
+
+```bash
+git diff --output=<path-in-repo>      # WROTE the file
+git diff --output=<path-outside-repo> # WROTE the file
+echo CANARY > plain.txt               # blocked
+```
+
+Both `--output=` writes succeeded, including outside the repo. `git log` and `git show` accept `--output=` too. The original five-vector canary missed this entirely because every vector it tried (`echo >`, python, subagent, edit tool) routes around the one tool the allow-list permits — the vectors were chosen before the allow-list was, and never revisited.
+
+Note also that Claude's own self-report claimed the outside-repo write was blocked. It was not. This is the second time in this document's history that the model's account of its own containment disagreed with the filesystem; ground truth is the filesystem, always.
+
+What the guard actually buys, and the only thing it should be claimed to buy: it stops a cooperative agent from *helpfully* editing a file mid-review. The realistic failure mode is a reviewer that decides to fix what it found, and the guard does stop that — the edit tool, the shell, an interpreter, and subagents are all genuinely blocked. It is a seatbelt against helpfulness, not a boundary against intent. Anything that slipped through remains visible in `git status` and revertible.
+
 Two alternatives were tested and rejected:
 
 - `--permission-mode plan` blocks writes only *behaviorally* — the model still had the shell and reported that it chose not to route around the restriction. That is a cooperative guarantee, not containment, so it is not used.
@@ -109,6 +125,21 @@ grok --no-auto-update --cwd "$PWD" -m grok-4.5 --sandbox read-only --deny "NotAR
 
 Result: `Error: unknown tool prefix: NotARealPrefix`, non-zero exit, no model call.
 
+### Grok review guard: holds in the repo, not in `~/.grok`
+
+Run under the exact shipped review command (`--always-approve --sandbox read-only --deny "Edit($PWD/**)" --deny "Write($PWD/**)"`), against four write vectors:
+
+| vector | result |
+|---|---|
+| edit tool → repo | blocked |
+| `echo >` → repo | blocked |
+| python3 → repo | blocked |
+| `echo >` → `~/.grok/` | **WROTE** |
+
+The repo is protected. `~/.grok` is not, because the denies are scoped to `$PWD` and the sandbox leaves Grok's own home writable. That matters more than it looks: **`~/.grok/config.toml` is where recursion-guard layer 1 lives**, so a Grok review can in principle remove the guard that constrains Grok. Under the cooperative threat model this is not an attack — no reviewer is going to do it — but it does mean layer 1 cannot be the *only* guard, which is why the callee declaration is also written into the Claude-side skills themselves.
+
+Two related claims corrected rather than repeated: a normal Grok run does **not** rewrite `config.toml` (verified byte-identical across a session, so the file is not churned on every use), and the `--deny` rules are a nudge rather than containment — a callee asked to run `grok` reached the binary anyway via `/opt/homebrew/bin/grok`.
+
 ### Skill discovery
 
 Codex, using a scratch `CODEX_HOME` whose `auth.json` and `config.toml` are **symlinked** rather than copied (no credential duplication):
@@ -132,7 +163,7 @@ Grok discovers `~/.claude/skills/`, which contains `grok-review` and `grok-imple
 
 Three layers, in decreasing order of strength:
 
-1. **Mechanical, Grok side.** `[skills] ignore` in `~/.grok/config.toml` removes the looping skills from Grok's view entirely. Verified with `grok inspect`: skill count drops 28 → 26 and both `grok-*` entries disappear. Repo-scoped `.grok/config.toml` does **not** work — the key must be user-level.
+1. **Mechanical, Grok side.** `[skills] ignore` in `~/.grok/config.toml` removes the looping skills from Grok's view entirely. Verified with `grok inspect`: skill count drops 28 → 26 and both `grok-*` entries disappear. Repo-scoped `.grok/config.toml` does **not** work — the key must be user-level. Two known gaps: it lists paths, so a *newly added* `grok-*` skill is not covered until the list is updated, and Grok still loads `~/.claude/CLAUDE.md`, which documents the Grok invocation directly. Layer 3 is what covers both.
 2. **Mechanical, Claude side.** `--disallowed-tools "Bash(claude:*)" "Bash(grok:*)" "Bash(codex:*)"` holds even under `--permission-mode acceptEdits`; the callee reported both delegate commands as permission-denied and did not route around them.
 3. **Prompt-level, every side.** Callers state `You are the callee in a delegated task. Do not delegate any part of this work to another agent CLI.` in the prompt file, and export `XDELEGATE_DEPTH=1`. The marker propagates into the child process — a Codex callee reads it back as `1` — and `~/.codex/AGENTS.md` carries the standing rule to honour it.
 
@@ -161,7 +192,7 @@ Two platform caveats: Grok's read-only sandbox is macOS/Linux-specific and leave
 
 Adding `~/.grok` to `sandbox_workspace_write.writable_roots` and enabling `network_access` does **not** fix it; the nested seatbelt still denies the operation. There is no configuration that makes nesting work.
 
-So the delegate invocation must be escalated to run outside the caller's sandbox. In interactive Codex that is a per-command escalation the user approves; in `codex exec` it means `-s danger-full-access` for the delegating run. This is not as alarming as it reads: the *caller* is only orchestrating, and the *callee* is still guarded by its own app-level rules, which is where the guarantee lives in the first place.
+So the delegate invocation must be escalated to run outside the caller's sandbox. In interactive Codex that is a per-command escalation the user approves, showing the exact argv — prefer this. In `codex exec` there is no per-command escalation, so the whole delegating run needs `-s danger-full-access`, which removes the sandbox from *every* command that run issues, not just the delegate. Do not reach for it reflexively: use the interactive path when there is a human present, and treat `danger-full-access` as a deliberate choice for a run you are supervising.
 
 Codex exports `CODEX_SANDBOX=seatbelt` and `CODEX_SANDBOX_NETWORK_DISABLED=1` into every sandboxed command, so a skill can detect the situation and explain it rather than failing opaquely.
 

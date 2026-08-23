@@ -1,24 +1,65 @@
 #!/bin/sh
-# chezmoi modify_ script: current target file arrives on stdin, desired content goes to stdout.
-# ~/.grok/config.toml is owned and rewritten by Grok, so preserve it verbatim and append only
-# the recursion guard. Grok discovers ~/.claude/skills/, which holds the Claude -> Grok
+# chezmoi modify_ script: the current target file arrives on stdin, desired content goes to stdout.
+#
+# ~/.grok/config.toml is owned by Grok and may also be hand-edited, so preserve whatever is there
+# and add only the recursion guard. Grok discovers ~/.claude/skills/, which holds the Claude -> Grok
 # delegation skills; without this, a Grok callee can read a skill telling it to invoke Grok.
 # Verified with `grok inspect`: skill count drops 28 -> 26 and both grok-* entries disappear.
 # The key must be user-level -- a repo-scoped .grok/config.toml is not read.
+#
+# This is one of three guard layers and deliberately not the only one: it lists paths, so a newly
+# added grok-* skill is not covered until this list grows, and a Grok review can write ~/.grok
+# (its home stays writable under --sandbox read-only). The durable layer is the callee notice in
+# the skills themselves; see docs/cross-harness-delegation.md.
+#
+# Known limitation: a line reading exactly `[skills]` inside a multiline string is treated as a
+# table header, and the guard then silently does not land. Output stays valid TOML and nothing is
+# corrupted, so this fails closed. Detecting it properly needs a TOML parser, which is more than
+# this guard is worth; `grok inspect` is the check if you ever suspect it.
 set -eu
 
-current=$(cat)
-printf '%s\n' "$current"
+IGNORE_GROK_REVIEW='"~/.claude/skills/grok-review"'
+IGNORE_GROK_IMPL='"~/.claude/skills/grok-implementation"'
 
-if printf '%s' "$current" | grep -q '^\[skills\]'; then
+current=$(cat)
+
+# Merge rather than short-circuit: a pre-existing [skills] table (for `paths`, say) must still
+# receive the ignore entries, or the guard silently never lands. Match only a table header at
+# column zero so a `[skills]` line inside a string or comment is not a false positive.
+if printf '%s\n' "$current" | grep -q '^\[skills\][[:space:]]*$'; then
+  printf '%s\n' "$current" | awk -v a="$IGNORE_GROK_REVIEW" -v b="$IGNORE_GROK_IMPL" '
+    { lines[NR] = $0 }
+    $0 ~ /^\[skills\][[:space:]]*$/ { in_skills = 1 }
+    in_skills && /^[[:space:]]*ignore[[:space:]]*=/ { has_ignore = 1 }
+    index($0, a) { has_a = 1 }
+    index($0, b) { has_b = 1 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        print lines[i]
+        if (lines[i] ~ /^\[skills\][[:space:]]*$/ && !has_ignore) {
+          print "ignore = ["
+          print "  " a ","
+          print "  " b ","
+          print "]"
+        }
+      }
+      # An existing `ignore` array is left untouched; report instead of corrupting it.
+      if (has_ignore && (!has_a || !has_b)) {
+        print "" > "/dev/stderr"
+        print "chezmoi: ~/.grok/config.toml has [skills].ignore without the delegation guard entries." > "/dev/stderr"
+        print "chezmoi: add " a " and " b " by hand." > "/dev/stderr"
+      }
+    }
+  '
   exit 0
 fi
 
-cat <<'EOF'
+printf '%s\n' "$current"
+cat <<EOF
 
 [skills]
 ignore = [
-  "~/.claude/skills/grok-review",
-  "~/.claude/skills/grok-implementation",
+  $IGNORE_GROK_REVIEW,
+  $IGNORE_GROK_IMPL,
 ]
 EOF
