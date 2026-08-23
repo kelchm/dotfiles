@@ -1,0 +1,24 @@
+#!/bin/sh
+# chezmoi modify_ script: current target file arrives on stdin, desired content goes to stdout.
+# ~/.grok/config.toml is owned and rewritten by Grok, so preserve it verbatim and append only
+# the recursion guard. Grok discovers ~/.claude/skills/, which holds the Claude -> Grok
+# delegation skills; without this, a Grok callee can read a skill telling it to invoke Grok.
+# Verified with `grok inspect`: skill count drops 28 -> 26 and both grok-* entries disappear.
+# The key must be user-level -- a repo-scoped .grok/config.toml is not read.
+set -eu
+
+current=$(cat)
+printf '%s\n' "$current"
+
+if printf '%s' "$current" | grep -q '^\[skills\]'; then
+  exit 0
+fi
+
+cat <<'EOF'
+
+[skills]
+ignore = [
+  "~/.claude/skills/grok-review",
+  "~/.claude/skills/grok-implementation",
+]
+EOF
