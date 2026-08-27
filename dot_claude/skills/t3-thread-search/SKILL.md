@@ -20,14 +20,14 @@ Prefer the helper. It is read-only (`sqlite3` URI `mode=ro` plus `PRAGMA query_o
 python3 "$HOME/.claude/skills/t3-thread-search/scripts/t3-thread-search" [query] [flags]
 ```
 
-If `python3` is missing, retry with `python` or `mise exec -- python3`. Do not interpolate the query into SQL. Do not start a T3 server against an existing database. Do not `cp` a live `state.sqlite`. Do not `VACUUM`, migrate, index, or otherwise mutate the source.
+If `python3` is missing, retry with `python`, then `mise -C "$HOME/.claude/skills/t3-thread-search" exec -- python3 scripts/t3-thread-search ...` so the skill's `mise.toml` is used. Do not interpolate the query into SQL. Do not start a T3 server against an existing database. Do not `cp` a live `state.sqlite`. Do not `VACUUM`, migrate, index, or otherwise mutate the source. Checkpointed files are opened with `immutable=1` so `-wal`/`-shm` are not created; a live WAL file cannot be immutable (that would hide uncheckpointed writes), and SQLite may then update `-shm` in order to read the WAL.
 
 | Flag | Purpose |
 |---|---|
 | `--db PATH` | Exact `state.sqlite`, a `userdata` dir, or a T3 base dir |
 | `--base-dir PATH` / `--home-dir PATH` | `<path>/userdata/state.sqlite` (explicit-home rule) |
 | `--project TEXT` | Restrict by project title or workspace path |
-| `--since` / `--until` | ISO date/time or relative `7d` / `24h` / `30m` |
+| `--since` / `--until` | ISO date/time or relative `7d` / `24h` / `30m`. Date-only `--until` is end of that day. |
 | `--active-only` | Command-palette / UI semantics |
 | `--include-deleted` | Opt in to deleted threads (labeled) |
 | `--thread ID` | One thread's metadata and bounded snippets, or restrict a search |

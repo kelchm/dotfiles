@@ -153,6 +153,7 @@ class Match:
     provider_name: str | None
     provider_session_id: str | None
     provider_thread_id: str | None
+    provider_instance_id: str | None
     database: str
     database_kind: str
     rank: int
@@ -175,6 +176,7 @@ class ThreadDetail:
     provider_name: str | None
     provider_session_id: str | None
     provider_thread_id: str | None
+    provider_instance_id: str | None
     message_counts: dict[str, int]
     first_user_snippet: str | None
     last_assistant_snippet: str | None
@@ -236,7 +238,7 @@ def build_snippet(text: str | None, query: str | None) -> str | None:
     return f"{prefix}{normalized[start:end]}{suffix}"
 
 
-def parse_when(value: str, *, now: datetime | None = None) -> str:
+def parse_when(value: str, *, now: datetime | None = None, end_of_day: bool = False) -> str:
     raw = value.strip()
     relative = RELATIVE_WHEN_RE.fullmatch(raw)
     if relative:
@@ -248,7 +250,7 @@ def parse_when(value: str, *, now: datetime | None = None) -> str:
         origin = now or datetime.now(timezone.utc)
         return (origin - delta).strftime("%Y-%m-%dT%H:%M:%S")
     if ISO_DATE_RE.fullmatch(raw):
-        return f"{raw}T00:00:00"
+        return f"{raw}T23:59:59.999" if end_of_day else f"{raw}T00:00:00"
     if ISO_DT_RE.fullmatch(raw):
         return raw.replace(" ", "T").replace("Z", "+00:00")
     raise UsageError(
@@ -305,12 +307,12 @@ def resolve_sqlite_candidate(path: Path) -> Path | None:
         return path
     if not path.is_dir():
         return None
-    nested = path / "state.sqlite"
-    if nested.is_file():
-        return nested
     userdata = path / "userdata" / "state.sqlite"
     if userdata.is_file():
         return userdata
+    nested = path / "state.sqlite"
+    if nested.is_file():
+        return nested
     return None
 
 
@@ -390,7 +392,19 @@ def candidate_metadata(candidate: Candidate) -> dict[str, Any]:
 
 
 def sqlite_uri(path: Path) -> str:
-    return path.resolve().as_uri() + "?mode=ro"
+    """Read-only URI.
+
+    `mode=ro` blocks writes to the main file. If no WAL sibling exists the
+    database is treated as `immutable=1` so SQLite will not create `-wal`/`-shm`.
+    A live WAL database cannot use immutable mode (that would hide uncheckpointed
+    writes); SQLite may then update `-shm` to *read* the WAL. That is not a
+    projection mutation, but it is why idle/checkpointed files take the immutable path.
+    """
+
+    uri = path.resolve().as_uri() + "?mode=ro"
+    if not path.with_name(path.name + "-wal").is_file():
+        uri += "&immutable=1"
+    return uri
 
 
 def connect_readonly(path: Path) -> sqlite3.Connection:
@@ -558,7 +572,7 @@ def thread_select(schema: DatabaseSchema) -> str:
         sql_null_if_missing(schema, "projection_projects", "workspace_root", "workspace_root"),
         sql_null_if_missing(schema, "projection_projects", "deleted_at", "project_deleted_at"),
     ]
-    if schema.has_table("projection_thread_sessions"):
+    if can_join_sessions(schema):
         pieces.extend(
             [
                 sql_null_if_missing(schema, "projection_thread_sessions", "provider_name", "provider_name"),
@@ -568,6 +582,9 @@ def thread_select(schema: DatabaseSchema) -> str:
                 sql_null_if_missing(
                     schema, "projection_thread_sessions", "provider_thread_id", "provider_thread_id"
                 ),
+                sql_null_if_missing(
+                    schema, "projection_thread_sessions", "provider_instance_id", "provider_instance_id"
+                ),
             ]
         )
     else:
@@ -576,9 +593,14 @@ def thread_select(schema: DatabaseSchema) -> str:
                 "NULL AS provider_name",
                 "NULL AS provider_session_id",
                 "NULL AS provider_thread_id",
+                "NULL AS provider_instance_id",
             ]
         )
     return ",\n          ".join(pieces)
+
+
+def can_join_sessions(schema: DatabaseSchema) -> bool:
+    return schema.has_column("projection_thread_sessions", "thread_id")
 
 
 def thread_from(schema: DatabaseSchema) -> str:
@@ -588,7 +610,7 @@ def thread_from(schema: DatabaseSchema) -> str:
           ON {quote_ident("projection_projects")}.{quote_ident("project_id")}
            = {quote_ident("projection_threads")}.{quote_ident("project_id")}
     """
-    if schema.has_table("projection_thread_sessions"):
+    if can_join_sessions(schema):
         sql += f"""
         LEFT JOIN {quote_ident("projection_thread_sessions")}
           ON {quote_ident("projection_thread_sessions")}.{quote_ident("thread_id")}
@@ -626,6 +648,7 @@ def row_to_match(
         provider_name=row["provider_name"] if "provider_name" in row.keys() else None,
         provider_session_id=row["provider_session_id"] if "provider_session_id" in row.keys() else None,
         provider_thread_id=row["provider_thread_id"] if "provider_thread_id" in row.keys() else None,
+        provider_instance_id=row["provider_instance_id"] if "provider_instance_id" in row.keys() else None,
         database=str(database.path),
         database_kind=database.kind,
         rank=rank,
@@ -692,21 +715,24 @@ def search_metadata(
     where_common = f"{status_sql}{project_sql}{recency_sql}{thread_sql}"
     common_params = [*status_params, *project_params, *recency_params, *thread_params]
 
-    clauses = [
+    clauses: list[tuple[str, str, list[Any], str]] = [
         (
             "thread_id",
             f"{quote_ident('projection_threads')}.{quote_ident('thread_id')} = ?",
             [exact],
+            "thread_id",
         ),
         (
             "title",
             f"{quote_ident('projection_threads')}.{quote_ident('title')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
             [pattern],
+            "title",
         ),
         (
             "project",
             f"{quote_ident('projection_projects')}.{quote_ident('title')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
             [pattern],
+            "project_title",
         ),
     ]
     if schema.has_column("projection_projects", "workspace_root"):
@@ -715,6 +741,7 @@ def search_metadata(
                 "project",
                 f"{quote_ident('projection_projects')}.{quote_ident('workspace_root')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
                 [pattern],
+                "workspace_root",
             )
         )
     if schema.has_column("projection_threads", "branch"):
@@ -723,6 +750,7 @@ def search_metadata(
                 "branch",
                 f"{quote_ident('projection_threads')}.{quote_ident('branch')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
                 [pattern],
+                "branch",
             )
         )
     if schema.has_column("projection_threads", "worktree_path"):
@@ -731,6 +759,7 @@ def search_metadata(
                 "branch",
                 f"{quote_ident('projection_threads')}.{quote_ident('worktree_path')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
                 [pattern],
+                "worktree_path",
             )
         )
     if schema.has_column("projection_threads", "thread_id"):
@@ -739,13 +768,14 @@ def search_metadata(
                 "thread_id",
                 f"{quote_ident('projection_threads')}.{quote_ident('thread_id')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
                 [pattern],
+                "thread_id",
             )
         )
 
     matches: list[Match] = []
     rank_table = UI_RANK if active_only else RANK
     seen_sql: set[tuple[str, str]] = set()
-    for source, clause, params in clauses:
+    for source, clause, params, snippet_field in clauses:
         key = (source, clause)
         if key in seen_sql:
             continue
@@ -760,11 +790,7 @@ def search_metadata(
         """
         rows = conn.execute(sql, [*params, *common_params, limit]).fetchall()
         for row in rows:
-            snippet = row["title"] if source in {"title", "thread_id"} else row["project_title"]
-            if source == "branch":
-                snippet = row["branch"] or row["worktree_path"]
-            if source == "project":
-                snippet = row["project_title"] or row["workspace_root"]
+            snippet = row[snippet_field] if snippet_field in row.keys() else row["title"]
             matches.append(
                 row_to_match(
                     row,
@@ -792,7 +818,7 @@ def search_providers(
     thread_id: str | None,
     limit: int,
 ) -> list[Match]:
-    if active_only or not schema.has_table("projection_thread_sessions"):
+    if active_only or not can_join_sessions(schema):
         return []
     columns = [
         column
@@ -832,12 +858,19 @@ def search_providers(
         limit,
     ]
     matches: list[Match] = []
+    folded = fold_ascii_case(query)
     for row in conn.execute(sql, params):
-        snippet = (
-            row["provider_thread_id"]
-            or row["provider_session_id"]
-            or row["provider_name"]
-        )
+        snippet = None
+        for column in columns:
+            if column not in row.keys() or row[column] is None:
+                continue
+            value = str(row[column])
+            haystack = fold_ascii_case(value)
+            if haystack == folded or folded in haystack:
+                snippet = value
+                break
+        if snippet is None:
+            snippet = next((str(row[column]) for column in columns if column in row.keys() and row[column]), None)
         matches.append(
             row_to_match(
                 row,
@@ -885,8 +918,9 @@ def search_messages(
         streaming_sql = f" AND {quote_ident('projection_thread_messages')}.{quote_ident('is_streaming')} = 0"
 
     if active_only:
-        if not schema.has_table("projection_turns") or not schema.has_column(
-            "projection_turns", "assistant_message_id"
+        if not (
+            schema.has_column("projection_turns", "assistant_message_id")
+            and schema.has_column("projection_thread_messages", "message_id")
         ):
             assistant_sql = ""
         else:
@@ -947,7 +981,7 @@ def search_messages(
               INNER JOIN {quote_ident("projection_projects")}
                 ON {quote_ident("projection_projects")}.{quote_ident("project_id")}
                  = {quote_ident("projection_threads")}.{quote_ident("project_id")}
-              {"LEFT JOIN " + quote_ident("projection_thread_sessions") + " ON " + quote_ident("projection_thread_sessions") + "." + quote_ident("thread_id") + " = " + quote_ident("projection_threads") + "." + quote_ident("thread_id") if schema.has_table("projection_thread_sessions") else ""}
+              {"LEFT JOIN " + quote_ident("projection_thread_sessions") + " ON " + quote_ident("projection_thread_sessions") + "." + quote_ident("thread_id") + " = " + quote_ident("projection_threads") + "." + quote_ident("thread_id") if can_join_sessions(schema) else ""}
               WHERE {quote_ident("projection_thread_messages")}.{quote_ident("text")} LIKE ? ESCAPE '{LIKE_ESCAPE}'
               {streaming_sql}
               {role_sql}
@@ -975,32 +1009,54 @@ def search_messages(
             )
         return matches
 
+    message_created_expr = (
+        f"{quote_ident('projection_thread_messages')}.{quote_ident('created_at')}"
+        if schema.has_column("projection_thread_messages", "created_at")
+        else "NULL"
+    )
+    message_id_expr = (
+        f"{quote_ident('projection_thread_messages')}.{quote_ident('message_id')}"
+        if schema.has_column("projection_thread_messages", "message_id")
+        else f"{quote_ident('projection_threads')}.{quote_ident('thread_id')}"
+    )
     sql = f"""
-        SELECT
-          {thread_select(schema)},
-          CASE {quote_ident("projection_thread_messages")}.{quote_ident("role")}
-            WHEN 'user' THEN 'user'
-            ELSE 'assistant'
-          END AS match_source,
-          {quote_ident("projection_thread_messages")}.{quote_ident("text")} AS match_text,
-          {sql_null_if_missing(schema, "projection_thread_messages", "created_at", "message_created_at")}
-        FROM {quote_ident("projection_thread_messages")}
-        INNER JOIN {quote_ident("projection_threads")}
-          ON {quote_ident("projection_threads")}.{quote_ident("thread_id")}
-           = {quote_ident("projection_thread_messages")}.{quote_ident("thread_id")}
-        LEFT JOIN {quote_ident("projection_projects")}
-          ON {quote_ident("projection_projects")}.{quote_ident("project_id")}
-           = {quote_ident("projection_threads")}.{quote_ident("project_id")}
-        {"LEFT JOIN " + quote_ident("projection_thread_sessions") + " ON " + quote_ident("projection_thread_sessions") + "." + quote_ident("thread_id") + " = " + quote_ident("projection_threads") + "." + quote_ident("thread_id") if schema.has_table("projection_thread_sessions") else ""}
-        WHERE {quote_ident("projection_thread_messages")}.{quote_ident("text")} LIKE ? ESCAPE '{LIKE_ESCAPE}'
-          AND {quote_ident("projection_thread_messages")}.{quote_ident("role")} IN ('user', 'assistant')
-          {streaming_sql}
-          {status_sql}{project_sql}{recency_sql}{thread_sql}
-        ORDER BY
-          CASE {quote_ident("projection_thread_messages")}.{quote_ident("role")}
-            WHEN 'user' THEN 0 ELSE 1
-          END ASC,
-          {quote_ident("projection_thread_messages")}.{quote_ident("created_at") if schema.has_column("projection_thread_messages", "created_at") else "thread_id"} DESC
+        WITH ranked AS (
+          SELECT
+            {thread_select(schema)},
+            CASE {quote_ident("projection_thread_messages")}.{quote_ident("role")}
+              WHEN 'user' THEN 'user'
+              ELSE 'assistant'
+            END AS match_source,
+            {quote_ident("projection_thread_messages")}.{quote_ident("text")} AS match_text,
+            {message_created_expr} AS message_created_at,
+            CASE {quote_ident("projection_thread_messages")}.{quote_ident("role")}
+              WHEN 'user' THEN 0 ELSE 1
+            END AS match_rank,
+            ROW_NUMBER() OVER (
+              PARTITION BY {quote_ident("projection_threads")}.{quote_ident("thread_id")}
+              ORDER BY
+                CASE {quote_ident("projection_thread_messages")}.{quote_ident("role")}
+                  WHEN 'user' THEN 0 ELSE 1
+                END ASC,
+                {message_created_expr} DESC,
+                {message_id_expr} ASC
+            ) AS thread_match_rank
+          FROM {quote_ident("projection_thread_messages")}
+          INNER JOIN {quote_ident("projection_threads")}
+            ON {quote_ident("projection_threads")}.{quote_ident("thread_id")}
+             = {quote_ident("projection_thread_messages")}.{quote_ident("thread_id")}
+          LEFT JOIN {quote_ident("projection_projects")}
+            ON {quote_ident("projection_projects")}.{quote_ident("project_id")}
+             = {quote_ident("projection_threads")}.{quote_ident("project_id")}
+          {"LEFT JOIN " + quote_ident("projection_thread_sessions") + " ON " + quote_ident("projection_thread_sessions") + "." + quote_ident("thread_id") + " = " + quote_ident("projection_threads") + "." + quote_ident("thread_id") if can_join_sessions(schema) else ""}
+          WHERE {quote_ident("projection_thread_messages")}.{quote_ident("text")} LIKE ? ESCAPE '{LIKE_ESCAPE}'
+            AND {quote_ident("projection_thread_messages")}.{quote_ident("role")} IN ('user', 'assistant')
+            {streaming_sql}
+            {status_sql}{project_sql}{recency_sql}{thread_sql}
+        )
+        SELECT * FROM ranked
+        WHERE thread_match_rank = 1
+        ORDER BY match_rank ASC, updated_at DESC, thread_id ASC
         LIMIT ?
     """
     params = [pattern, *status_params, *project_params, *recency_params, *thread_params, limit]
@@ -1046,6 +1102,19 @@ def search_database(
                 f"{table}: {', '.join(columns)}" for table, columns in schema.missing_columns.items()
             )
             warnings.append(f"{candidate.path}: optional column(s) missing: {details}.")
+        if active_only:
+            if not schema.has_column("projection_threads", "deleted_at"):
+                warnings.append(
+                    f"{candidate.path}: missing projection_threads.deleted_at; --active-only cannot exclude deleted threads."
+                )
+            if not schema.has_column("projection_threads", "archived_at"):
+                warnings.append(
+                    f"{candidate.path}: missing projection_threads.archived_at; --active-only cannot exclude archived threads."
+                )
+            if not schema.has_column("projection_thread_messages", "is_streaming"):
+                warnings.append(
+                    f"{candidate.path}: missing is_streaming; --active-only cannot exclude streaming messages."
+                )
         matches = [
             *search_metadata(
                 conn,
@@ -1088,11 +1157,16 @@ def search_database(
             ),
         ]
         return matches, warnings
+    except sqlite3.Error as error:
+        raise SearchError(f"{candidate.path}: SQLite error: {error}") from error
     finally:
         conn.close()
 
 
-def show_thread(candidate: Candidate, thread_id: str, *, include_deleted: bool) -> ThreadDetail | None:
+def show_thread(
+    candidate: Candidate, thread_id: str, *, include_deleted: bool
+) -> tuple[ThreadDetail | None, list[str]]:
+    warnings: list[str] = []
     conn = connect_readonly(candidate.path)
     try:
         schema = inspect_schema(conn, candidate.path)
@@ -1109,12 +1183,16 @@ def show_thread(candidate: Candidate, thread_id: str, *, include_deleted: bool) 
         """
         row = conn.execute(sql, [thread_id, *status_params]).fetchone()
         if row is None:
-            return None
+            return None, warnings
 
         counts: dict[str, int] = {}
         first_user = None
         last_assistant = None
-        if schema.has_table("projection_thread_messages"):
+        messages_ok = all(
+            schema.has_column("projection_thread_messages", column)
+            for column in ("thread_id", "role", "text")
+        )
+        if schema.has_table("projection_thread_messages") and messages_ok:
             count_rows = conn.execute(
                 f"""
                 SELECT {quote_ident("role")} AS role, COUNT(*) AS n
@@ -1125,13 +1203,19 @@ def show_thread(candidate: Candidate, thread_id: str, *, include_deleted: bool) 
                 [thread_id],
             ).fetchall()
             counts = {item["role"]: item["n"] for item in count_rows}
+            order_column = (
+                "created_at"
+                if schema.has_column("projection_thread_messages", "created_at")
+                else ("message_id" if schema.has_column("projection_thread_messages", "message_id") else None)
+            )
+            order_sql = f"ORDER BY {quote_ident(order_column)} ASC" if order_column else ""
             user_row = conn.execute(
                 f"""
                 SELECT {quote_ident("text")} AS text
                 FROM {quote_ident("projection_thread_messages")}
                 WHERE {quote_ident("thread_id")} = ?
                   AND {quote_ident("role")} = 'user'
-                ORDER BY {quote_ident("created_at") if schema.has_column("projection_thread_messages", "created_at") else "message_id"} ASC
+                {order_sql}
                 LIMIT 1
                 """,
                 [thread_id],
@@ -1145,27 +1229,45 @@ def show_thread(candidate: Candidate, thread_id: str, *, include_deleted: bool) 
                   AND {quote_ident("projection_thread_messages")}.{quote_ident("role")} = 'assistant'
             """
             params: list[Any] = [thread_id]
-            if schema.has_table("projection_turns") and schema.has_column(
-                "projection_turns", "assistant_message_id"
-            ):
+            can_canonical = (
+                schema.has_column("projection_turns", "assistant_message_id")
+                and schema.has_column("projection_thread_messages", "message_id")
+            )
+            if can_canonical:
                 assistant_sql += f"""
                   AND {quote_ident("projection_thread_messages")}.{quote_ident("message_id")} IN (
                     SELECT {quote_ident("projection_turns")}.{quote_ident("assistant_message_id")}
                     FROM {quote_ident("projection_turns")}
                     WHERE {quote_ident("projection_turns")}.{quote_ident("assistant_message_id")} IS NOT NULL
-                      AND {quote_ident("projection_turns")}.{quote_ident("thread_id")} = ?
+                      {"AND " + quote_ident("projection_turns") + "." + quote_ident("thread_id") + " = ?" if schema.has_column("projection_turns", "thread_id") else ""}
                   )
                 """
-                params.append(thread_id)
-            assistant_sql += f"""
-                ORDER BY {quote_ident("projection_thread_messages")}.{quote_ident("created_at") if schema.has_column("projection_thread_messages", "created_at") else "message_id"} DESC
-                LIMIT 1
-            """
-            assistant_row = conn.execute(assistant_sql, params).fetchone()
-            if assistant_row:
-                last_assistant = build_snippet(assistant_row["text"], None)
+                if schema.has_column("projection_turns", "thread_id"):
+                    params.append(thread_id)
+            else:
+                warnings.append(
+                    f"{candidate.path}: canonical assistant linkage unavailable; omitting last assistant snippet."
+                )
+            if can_canonical:
+                desc_order = (
+                    f"{quote_ident('projection_thread_messages')}.{quote_ident('created_at')}"
+                    if schema.has_column("projection_thread_messages", "created_at")
+                    else (
+                        f"{quote_ident('projection_thread_messages')}.{quote_ident('message_id')}"
+                        if schema.has_column("projection_thread_messages", "message_id")
+                        else None
+                    )
+                )
+                assistant_sql += f" ORDER BY {desc_order} DESC LIMIT 1" if desc_order else " LIMIT 1"
+                assistant_row = conn.execute(assistant_sql, params).fetchone()
+                if assistant_row:
+                    last_assistant = build_snippet(assistant_row["text"], None)
+        elif schema.has_table("projection_thread_messages"):
+            warnings.append(
+                f"{candidate.path}: projection_thread_messages is missing thread_id/role/text; skipping snippets."
+            )
 
-        return ThreadDetail(
+        detail = ThreadDetail(
             thread_id=row["thread_id"],
             title=row["title"],
             project_id=row["project_id"],
@@ -1181,12 +1283,16 @@ def show_thread(candidate: Candidate, thread_id: str, *, include_deleted: bool) 
             provider_name=row["provider_name"],
             provider_session_id=row["provider_session_id"],
             provider_thread_id=row["provider_thread_id"],
+            provider_instance_id=row["provider_instance_id"] if "provider_instance_id" in row.keys() else None,
             message_counts=counts,
             first_user_snippet=first_user,
             last_assistant_snippet=last_assistant,
             database=str(candidate.path),
             database_kind=candidate.kind,
         )
+        return detail, warnings
+    except sqlite3.Error as error:
+        raise SearchError(f"{candidate.path}: SQLite error: {error}") from error
     finally:
         conn.close()
 
@@ -1266,13 +1372,14 @@ def format_text_report(report: SearchReport) -> str:
         lines.append(match_line)
         if item.get("snippet"):
             lines.append(f"   snippet: {item['snippet']}")
-        if item.get("provider_thread_id") or item.get("provider_session_id"):
+        if item.get("provider_thread_id") or item.get("provider_session_id") or item.get("provider_instance_id"):
             lines.append(
                 "   provider: "
                 + " ".join(
                     part
                     for part in (
                         item.get("provider_name"),
+                        item.get("provider_instance_id"),
                         item.get("provider_thread_id"),
                         item.get("provider_session_id"),
                     )
@@ -1296,7 +1403,7 @@ def format_thread_detail(detail: ThreadDetail) -> str:
         f"branch: {detail.branch or '-'}  worktree: {detail.worktree_path or '-'}",
         f"created: {detail.created_at or '-'}  updated: {detail.updated_at or '-'}",
         f"status: {format_status(detail)}",
-        f"provider: {detail.provider_name or '-'}  session={detail.provider_session_id or '-'}  thread={detail.provider_thread_id or '-'}",
+        f"provider: {detail.provider_name or '-'}  instance={detail.provider_instance_id or '-'}  session={detail.provider_session_id or '-'}  thread={detail.provider_thread_id or '-'}",
         f"messages: {detail.message_counts or '{}'}",
         f"db: {detail.database_kind}  {detail.database}",
     ]
@@ -1332,7 +1439,7 @@ def run_search(
         raise UsageError(f"--limit must be between 1 and {MAX_LIMIT}.")
 
     since_value = parse_when(since, now=now) if since else None
-    until_value = parse_when(until, now=now) if until else None
+    until_value = parse_when(until, now=now, end_of_day=True) if until else None
     candidates = discover_candidates(cwd=cwd, home=home, env=env, db=db, base_dir=base_dir)
     databases = [candidate_metadata(candidate) for candidate in candidates]
 
@@ -1366,12 +1473,15 @@ def run_search(
         warnings: list[str] = []
         for candidate in existing:
             try:
-                detail = show_thread(candidate, thread_id, include_deleted=include_deleted)
+                detail, detail_warnings = show_thread(
+                    candidate, thread_id, include_deleted=include_deleted
+                )
             except SearchError as error:
                 warnings.append(str(error))
                 continue
             databases_for = next(item for item in databases if item["path"] == str(candidate.path))
             databases_for["searched"] = True
+            warnings.extend(detail_warnings)
             if detail is not None:
                 details.append(asdict(detail) | {"status": format_status(detail)})
         if not details:
@@ -1394,20 +1504,30 @@ def run_search(
     matches: list[Match] = []
     for candidate in existing:
         db_meta = next(item for item in databases if item["path"] == str(candidate.path))
+        try:
+            found, db_warnings = search_database(
+                candidate,
+                query,
+                active_only=active_only,
+                include_deleted=include_deleted,
+                project=project,
+                since=since_value,
+                until=until_value,
+                thread_id=thread_id,
+                limit=limit,
+            )
+        except SearchError as error:
+            db_meta["error"] = str(error)
+            warnings.append(str(error))
+            continue
         db_meta["searched"] = True
-        found, db_warnings = search_database(
-            candidate,
-            query,
-            active_only=active_only,
-            include_deleted=include_deleted,
-            project=project,
-            since=since_value,
-            until=until_value,
-            thread_id=thread_id,
-            limit=limit,
-        )
         matches.extend(found)
         warnings.extend(db_warnings)
+
+    if not any(item.get("searched") for item in databases):
+        raise SearchError(
+            "No searchable T3 database among the candidates.\n" + "\n".join(warnings)
+        )
 
     merged = merge_matches(matches)
     truncated = len(merged) > limit
@@ -1448,7 +1568,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--project", help="Restrict to project title or workspace path (LIKE, parameterized).")
     parser.add_argument("--since", help="Only threads updated at/after this time (ISO date/time or 7d/24h/30m).")
-    parser.add_argument("--until", help="Only threads updated at/before this time.")
+    parser.add_argument(
+        "--until",
+        help="Only threads updated at/before this time. A date-only value is the end of that day.",
+    )
     parser.add_argument(
         "--active-only",
         action="store_true",
@@ -1524,6 +1647,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 provider_name=item.get("provider_name"),
                 provider_session_id=item.get("provider_session_id"),
                 provider_thread_id=item.get("provider_thread_id"),
+                provider_instance_id=item.get("provider_instance_id"),
                 message_counts=item.get("message_counts") or {},
                 first_user_snippet=item.get("first_user_snippet"),
                 last_assistant_snippet=item.get("last_assistant_snippet"),

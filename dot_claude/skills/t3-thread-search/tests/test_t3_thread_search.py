@@ -457,6 +457,156 @@ class MultipleDatabaseTests(unittest.TestCase):
             payload = json.loads(json.dumps(tts.asdict(report)))
             self.assertEqual(payload["mode"], "list-dbs")
 
+    def test_t3code_home_uses_userdata_not_dev(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            env_base = home / "custom"
+            userdata = env_base / "userdata" / "state.sqlite"
+            dev = env_base / "dev" / "state.sqlite"
+            full_fixture(userdata)
+            full_fixture(dev)
+            candidates = tts.discover_candidates(
+                cwd=home, home=home, env={"T3CODE_HOME": str(env_base)}
+            )
+            env_paths = [candidate.path for candidate in candidates if candidate.kind == "env"]
+            self.assertEqual(env_paths, [userdata])
+
+    def test_db_directory_prefers_userdata_over_sibling_sqlite(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            decoy = base / "state.sqlite"
+            userdata = base / "userdata" / "state.sqlite"
+            write_db(decoy, ["CREATE TABLE unrelated (id INTEGER);"])
+            full_fixture(userdata)
+            candidates = tts.discover_candidates(cwd=base, home=base, env={}, db=str(base))
+            self.assertEqual(candidates[0].path, userdata)
+
+    def test_one_bad_database_does_not_abort_the_rest(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            good = home / ".t3" / "userdata" / "state.sqlite"
+            bad = home / ".t3" / "dev" / "state.sqlite"
+            full_fixture(good)
+            write_db(bad, ["CREATE TABLE unrelated (id INTEGER);"])
+            report = tts.run_search(
+                query="rebuild",
+                cwd=home,
+                home=home,
+                env={},
+            )
+            self.assertTrue(report.results)
+            self.assertTrue(any("Missing required table" in warning for warning in report.warnings))
+            self.assertIn("thread-active", [row["thread_id"] for row in report.results])
+
+
+class ReviewFixTests(unittest.TestCase):
+    def test_recovery_limit_does_not_starve_other_threads(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            db = Path(raw) / "state.sqlite"
+            statements = [FULL_SCHEMA]
+            inserts = [
+                """
+                INSERT INTO projection_projects VALUES
+                  ('proj-active', 'T3 Code', '/repo/t3code', '2026-01-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL);
+                INSERT INTO projection_threads VALUES
+                  ('thread-chatty', 'proj-active', 'Chatty', 'main', NULL,
+                   '2026-05-01T00:00:00.000Z', '2026-05-03T00:00:00.000Z', NULL, NULL),
+                  ('thread-quiet-b', 'proj-active', 'Quiet B', 'main', NULL,
+                   '2026-05-01T00:00:00.000Z', '2026-05-02T00:00:00.000Z', NULL, NULL),
+                  ('thread-quiet-c', 'proj-active', 'Quiet C', 'main', NULL,
+                   '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL, NULL);
+                """
+            ]
+            messages = ["INSERT INTO projection_thread_messages VALUES"]
+            rows = []
+            for index in range(30):
+                rows.append(
+                    f"('msg-chatty-{index}', 'thread-chatty', NULL, 'user', 'shared needle {index}', 0, "
+                    f"'2026-05-01T00:00:{index:02d}.000Z', '2026-05-01T00:00:{index:02d}.000Z')"
+                )
+            rows.append(
+                "('msg-b', 'thread-quiet-b', NULL, 'user', 'shared needle b', 0, "
+                "'2026-05-01T00:00:40.000Z', '2026-05-01T00:00:40.000Z')"
+            )
+            rows.append(
+                "('msg-c', 'thread-quiet-c', NULL, 'user', 'shared needle c', 0, "
+                "'2026-05-01T00:00:41.000Z', '2026-05-01T00:00:41.000Z')"
+            )
+            messages.append(",\n".join(rows) + ";")
+            write_db(db, statements + inserts + ["\n".join(messages)])
+            report = search(db, "shared needle", limit=5)
+            ids = {row["thread_id"] for row in report.results}
+            self.assertEqual(ids, {"thread-chatty", "thread-quiet-b", "thread-quiet-c"})
+
+    def test_checkpointed_open_does_not_create_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            db = Path(raw) / "state.sqlite"
+            full_fixture(db)
+            wal = Path(str(db) + "-wal")
+            shm = Path(str(db) + "-shm")
+            self.assertFalse(wal.exists())
+            self.assertFalse(shm.exists())
+            conn = tts.connect_readonly(db)
+            try:
+                conn.execute("SELECT COUNT(*) FROM projection_threads").fetchone()
+            finally:
+                conn.close()
+            self.assertFalse(wal.exists())
+            self.assertFalse(shm.exists())
+
+    def test_until_date_includes_that_day(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            db = Path(raw) / "state.sqlite"
+            full_fixture(db)
+            report = search(db, "rebuild", until="2026-05-02")
+            self.assertIn("thread-active", [row["thread_id"] for row in report.results])
+
+    def test_workspace_match_snippet_is_the_path(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            db = Path(raw) / "state.sqlite"
+            full_fixture(db)
+            report = search(db, "/repo/t3code")
+            self.assertTrue(report.results)
+            self.assertIn("/repo/t3code", report.results[0]["snippet"] or "")
+
+    def test_sessions_table_without_thread_id_does_not_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            db = Path(raw) / "state.sqlite"
+            write_db(
+                db,
+                [
+                    """
+                    CREATE TABLE projection_projects (
+                      project_id TEXT PRIMARY KEY,
+                      title TEXT NOT NULL,
+                      workspace_root TEXT NOT NULL,
+                      created_at TEXT NOT NULL,
+                      updated_at TEXT NOT NULL,
+                      deleted_at TEXT
+                    );
+                    CREATE TABLE projection_threads (
+                      thread_id TEXT PRIMARY KEY,
+                      project_id TEXT NOT NULL,
+                      title TEXT NOT NULL,
+                      created_at TEXT NOT NULL,
+                      updated_at TEXT NOT NULL,
+                      deleted_at TEXT
+                    );
+                    CREATE TABLE projection_thread_sessions (
+                      status TEXT NOT NULL,
+                      provider_name TEXT
+                    );
+                    INSERT INTO projection_projects VALUES
+                      ('proj-active', 'T3 Code', '/repo/t3code', '2026-01-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL);
+                    INSERT INTO projection_threads VALUES
+                      ('thread-active', 'proj-active', 'Legacy title search',
+                       '2026-05-01T00:00:00.000Z', '2026-05-02T00:00:00.000Z', NULL);
+                    """
+                ],
+            )
+            report = search(db, "Legacy title")
+            self.assertEqual(report.results[0]["thread_id"], "thread-active")
+
 
 if __name__ == "__main__":
     unittest.main()
