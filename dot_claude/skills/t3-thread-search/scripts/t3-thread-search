@@ -1,0 +1,1543 @@
+#!/usr/bin/env python3
+"""Read-only search over a T3 Code `state.sqlite` projection database."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+import sys
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
+
+LIKE_ESCAPE = "!"
+DEFAULT_LIMIT = 20
+MAX_LIMIT = 100
+SNIPPET_MAX = 240
+SNIPPET_BODY = 236
+SNIPPET_CONTEXT = 72
+BUSY_TIMEOUT_MS = 5000
+IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+RELATIVE_WHEN_RE = re.compile(r"^(\d+)([dhm])$")
+ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+ISO_DT_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$"
+)
+
+REQUIRED_TABLES = ("projection_projects", "projection_threads")
+OPTIONAL_TABLES = (
+    "projection_thread_messages",
+    "projection_thread_sessions",
+    "projection_turns",
+)
+
+THREAD_COLUMNS = (
+    "thread_id",
+    "project_id",
+    "title",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "archived_at",
+    "branch",
+    "worktree_path",
+)
+PROJECT_COLUMNS = ("project_id", "title", "workspace_root", "deleted_at")
+MESSAGE_COLUMNS = (
+    "message_id",
+    "thread_id",
+    "role",
+    "text",
+    "is_streaming",
+    "created_at",
+)
+SESSION_COLUMNS = (
+    "thread_id",
+    "provider_name",
+    "provider_session_id",
+    "provider_thread_id",
+    "provider_instance_id",
+)
+TURN_COLUMNS = ("assistant_message_id",)
+
+RANK = {
+    "thread_id": 0,
+    "title": 1,
+    "user": 2,
+    "assistant": 3,
+    "project": 4,
+    "provider": 5,
+    "branch": 6,
+}
+UI_RANK = {
+    "thread_id": 0,
+    "user": 0,
+    "title": 1,
+    "project": 1,
+    "branch": 1,
+    "assistant": 2,
+    "provider": 3,
+}
+
+
+class SearchError(Exception):
+    """User-facing failure with a stable exit code."""
+
+    exit_code = 1
+
+
+class UsageError(SearchError):
+    exit_code = 2
+
+
+@dataclass(frozen=True)
+class Candidate:
+    path: Path
+    kind: str
+    source: str
+
+    def resolved(self) -> Path:
+        return self.path.expanduser()
+
+
+@dataclass
+class TableSchema:
+    name: str
+    columns: dict[str, str]
+
+    def has(self, column: str) -> bool:
+        return column in self.columns
+
+
+@dataclass
+class DatabaseSchema:
+    path: Path
+    tables: dict[str, TableSchema]
+    missing_required: list[str]
+    missing_optional: list[str]
+    missing_columns: dict[str, list[str]]
+
+    def table(self, name: str) -> TableSchema | None:
+        return self.tables.get(name)
+
+    def has_table(self, name: str) -> bool:
+        return name in self.tables
+
+    def has_column(self, table: str, column: str) -> bool:
+        schema = self.tables.get(table)
+        return schema is not None and schema.has(column)
+
+
+@dataclass
+class Match:
+    thread_id: str
+    title: str
+    project_id: str | None
+    project_title: str | None
+    workspace_root: str | None
+    branch: str | None
+    worktree_path: str | None
+    created_at: str | None
+    updated_at: str | None
+    archived: bool
+    deleted: bool
+    project_deleted: bool
+    source: str
+    sources: list[str]
+    snippet: str | None
+    message_created_at: str | None
+    provider_name: str | None
+    provider_session_id: str | None
+    provider_thread_id: str | None
+    database: str
+    database_kind: str
+    rank: int
+
+
+@dataclass
+class ThreadDetail:
+    thread_id: str
+    title: str
+    project_id: str | None
+    project_title: str | None
+    workspace_root: str | None
+    branch: str | None
+    worktree_path: str | None
+    created_at: str | None
+    updated_at: str | None
+    archived: bool
+    deleted: bool
+    project_deleted: bool
+    provider_name: str | None
+    provider_session_id: str | None
+    provider_thread_id: str | None
+    message_counts: dict[str, int]
+    first_user_snippet: str | None
+    last_assistant_snippet: str | None
+    database: str
+    database_kind: str
+
+
+@dataclass
+class SearchReport:
+    mode: str
+    query: str | None
+    databases: list[dict[str, Any]]
+    results: list[dict[str, Any]]
+    warnings: list[str]
+    truncated: bool
+    limit: int
+
+
+def ident(name: str) -> str:
+    if not IDENT_RE.fullmatch(name):
+        raise SearchError(f"Refusing to use invalid SQL identifier {name!r}.")
+    return name
+
+
+def quote_ident(name: str) -> str:
+    return '"' + ident(name).replace('"', '""') + '"'
+
+
+def escape_like_pattern(value: str) -> str:
+    return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+
+
+def like_contains(value: str) -> str:
+    return f"%{escape_like_pattern(value)}%"
+
+
+def fold_ascii_case(value: str) -> str:
+    return re.sub(r"[A-Z]", lambda match: match.group(0).lower(), value)
+
+
+def build_snippet(text: str | None, query: str | None) -> str | None:
+    if text is None:
+        return None
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if not normalized:
+        return None
+    if len(normalized) <= SNIPPET_MAX:
+        return normalized
+    if not query or not query.strip():
+        return normalized[:SNIPPET_BODY] + "…"
+    needle = fold_ascii_case(re.sub(r"\s+", " ", query).strip())
+    haystack = fold_ascii_case(normalized)
+    match_index = haystack.find(needle) if needle else -1
+    ideal_start = 0 if match_index < 0 else max(0, match_index - SNIPPET_CONTEXT)
+    start = min(ideal_start, max(0, len(normalized) - SNIPPET_BODY))
+    end = min(len(normalized), start + SNIPPET_BODY)
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(normalized) else ""
+    return f"{prefix}{normalized[start:end]}{suffix}"
+
+
+def parse_when(value: str, *, now: datetime | None = None) -> str:
+    raw = value.strip()
+    relative = RELATIVE_WHEN_RE.fullmatch(raw)
+    if relative:
+        amount = int(relative.group(1))
+        unit = relative.group(2)
+        delta = {"d": timedelta(days=amount), "h": timedelta(hours=amount), "m": timedelta(minutes=amount)}[
+            unit
+        ]
+        origin = now or datetime.now(timezone.utc)
+        return (origin - delta).strftime("%Y-%m-%dT%H:%M:%S")
+    if ISO_DATE_RE.fullmatch(raw):
+        return f"{raw}T00:00:00"
+    if ISO_DT_RE.fullmatch(raw):
+        return raw.replace(" ", "T").replace("Z", "+00:00")
+    raise UsageError(
+        f"Invalid date {value!r}. Use ISO-8601 (`2026-05-01` or `2026-05-01T12:00:00`) or a relative value like `7d`, `24h`, `30m`."
+    )
+
+
+def expand_path(value: str | Path, *, cwd: Path) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = cwd / path
+    return path
+
+
+def is_linked_worktree(cwd: Path) -> Path | None:
+    """Return the linked worktree root containing cwd, else None.
+
+    Matches T3's rule in packages/shared/src/devHome.ts: a `.git` *file* whose
+    `gitdir:` path has `worktrees` as the penultimate segment. A `.git`
+    directory is the main checkout. A submodule `.git` file pointing at
+    `modules/<name>` is not a worktree.
+    """
+
+    directory = cwd.resolve()
+    while True:
+        git_path = directory / ".git"
+        if git_path.is_dir():
+            return None
+        if git_path.is_file():
+            gitdir = None
+            try:
+                contents = git_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return None
+            for line in contents.splitlines():
+                stripped = line.strip()
+                if stripped.lower().startswith("gitdir:"):
+                    gitdir = stripped.split(":", 1)[1].strip()
+                    break
+            if not gitdir:
+                return None
+            segments = [part for part in Path(gitdir.replace("\\", "/")).parts if part not in ("/",)]
+            if len(segments) >= 3 and segments[-2] == "worktrees":
+                return directory
+            return None
+        parent = directory.parent
+        if parent == directory:
+            return None
+        directory = parent
+
+
+def resolve_sqlite_candidate(path: Path) -> Path | None:
+    if path.is_file():
+        return path
+    if not path.is_dir():
+        return None
+    nested = path / "state.sqlite"
+    if nested.is_file():
+        return nested
+    userdata = path / "userdata" / "state.sqlite"
+    if userdata.is_file():
+        return userdata
+    return None
+
+
+def discover_candidates(
+    *,
+    cwd: Path,
+    home: Path,
+    env: Mapping[str, str],
+    db: str | None = None,
+    base_dir: str | None = None,
+) -> list[Candidate]:
+    if db and base_dir:
+        raise UsageError("Use only one of --db or --base-dir/--home-dir.")
+
+    if db:
+        explicit = expand_path(db, cwd=cwd)
+        sqlite_path = resolve_sqlite_candidate(explicit) or (
+            explicit if explicit.suffix == ".sqlite" else explicit / "userdata" / "state.sqlite"
+        )
+        return [Candidate(path=sqlite_path, kind="explicit", source="--db")]
+
+    if base_dir:
+        base = expand_path(base_dir, cwd=cwd)
+        return [
+            Candidate(
+                path=base / "userdata" / "state.sqlite",
+                kind="explicit-base",
+                source="--base-dir/--home-dir",
+            )
+        ]
+
+    candidates: list[Candidate] = []
+    seen: set[Path] = set()
+
+    def add(path: Path, kind: str, source: str) -> None:
+        resolved = path.expanduser()
+        try:
+            key = resolved.resolve() if resolved.exists() else resolved
+        except OSError:
+            key = resolved
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(Candidate(path=resolved, kind=kind, source=source))
+
+    worktree = is_linked_worktree(cwd)
+    if worktree is not None:
+        add(worktree / ".t3" / "userdata" / "state.sqlite", "worktree", f"linked worktree {worktree}")
+
+    t3_home = env.get("T3CODE_HOME", "").strip()
+    if t3_home:
+        add(expand_path(t3_home, cwd=cwd) / "userdata" / "state.sqlite", "env", "T3CODE_HOME")
+
+    add(home / ".t3" / "userdata" / "state.sqlite", "production", "~/.t3/userdata")
+    add(home / ".t3" / "dev" / "state.sqlite", "development", "~/.t3/dev")
+    return candidates
+
+
+def candidate_metadata(candidate: Candidate) -> dict[str, Any]:
+    path = candidate.path
+    exists = path.is_file()
+    info: dict[str, Any] = {
+        "path": str(path),
+        "kind": candidate.kind,
+        "source": candidate.source,
+        "exists": exists,
+    }
+    if exists:
+        stat = path.stat()
+        info["size_bytes"] = stat.st_size
+        info["mtime"] = datetime.fromtimestamp(stat.st_mtime, timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        info["wal"] = path.with_name(path.name + "-wal").is_file()
+        info["shm"] = path.with_name(path.name + "-shm").is_file()
+    return info
+
+
+def sqlite_uri(path: Path) -> str:
+    return path.resolve().as_uri() + "?mode=ro"
+
+
+def connect_readonly(path: Path) -> sqlite3.Connection:
+    if not path.is_file():
+        raise SearchError(
+            f"Database does not exist at {str(path)!r}. Pass --db or --base-dir, or run --list-dbs."
+        )
+    try:
+        conn = sqlite3.connect(sqlite_uri(path), uri=True)
+    except sqlite3.Error as error:
+        raise SearchError(f"Failed to open {str(path)!r} read-only: {error}") from error
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+        conn.execute("PRAGMA query_only = ON")
+    except sqlite3.Error as error:
+        conn.close()
+        raise SearchError(f"Failed to lock {str(path)!r} to query-only: {error}") from error
+    return conn
+
+
+def inspect_schema(conn: sqlite3.Connection, path: Path) -> DatabaseSchema:
+    tables: dict[str, TableSchema] = {}
+    for row in conn.execute(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ):
+        name = row["name"]
+        ident(name)
+        columns: dict[str, str] = {}
+        for column in conn.execute(f"PRAGMA table_info({quote_ident(name)})"):
+            col_name = column["name"]
+            ident(col_name)
+            columns[col_name] = column["type"]
+        tables[name] = TableSchema(name=name, columns=columns)
+
+    missing_required = [name for name in REQUIRED_TABLES if name not in tables]
+    missing_optional = [name for name in OPTIONAL_TABLES if name not in tables]
+    missing_columns: dict[str, list[str]] = {}
+    expected = {
+        "projection_threads": THREAD_COLUMNS,
+        "projection_projects": PROJECT_COLUMNS,
+        "projection_thread_messages": MESSAGE_COLUMNS,
+        "projection_thread_sessions": SESSION_COLUMNS,
+        "projection_turns": TURN_COLUMNS,
+    }
+    for table_name, columns in expected.items():
+        table = tables.get(table_name)
+        if table is None:
+            continue
+        absent = [column for column in columns if not table.has(column)]
+        if absent:
+            missing_columns[table_name] = absent
+
+    return DatabaseSchema(
+        path=path,
+        tables=tables,
+        missing_required=missing_required,
+        missing_optional=missing_optional,
+        missing_columns=missing_columns,
+    )
+
+
+def require_projection_schema(schema: DatabaseSchema) -> None:
+    if schema.missing_required:
+        present = ", ".join(sorted(schema.tables)) or "(none)"
+        missing = ", ".join(schema.missing_required)
+        raise SearchError(
+            f"{schema.path} is not a T3 projection database. Missing required table(s): {missing}. Present: {present}."
+        )
+    threads = schema.table("projection_threads")
+    projects = schema.table("projection_projects")
+    assert threads is not None and projects is not None
+    for table, needed in (
+        (threads, ("thread_id", "project_id", "title")),
+        (projects, ("project_id", "title")),
+    ):
+        absent = [column for column in needed if not table.has(column)]
+        if absent:
+            raise SearchError(
+                f"{schema.path} table {table.name} is missing required column(s): {', '.join(absent)}."
+            )
+
+
+def sql_null_if_missing(schema: DatabaseSchema, table: str, column: str, alias: str) -> str:
+    if schema.has_column(table, column):
+        return f"{quote_ident(table)}.{quote_ident(column)} AS {quote_ident(alias)}"
+    return f"NULL AS {quote_ident(alias)}"
+
+
+def thread_status_filters(
+    schema: DatabaseSchema,
+    *,
+    active_only: bool,
+    include_deleted: bool,
+    table_alias: str = "projection_threads",
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    if schema.has_column("projection_threads", "deleted_at") and not include_deleted:
+        clauses.append(f"{quote_ident(table_alias)}.{quote_ident('deleted_at')} IS NULL")
+    if active_only and schema.has_column("projection_threads", "archived_at"):
+        clauses.append(f"{quote_ident(table_alias)}.{quote_ident('archived_at')} IS NULL")
+    if active_only and schema.has_column("projection_projects", "deleted_at"):
+        clauses.append(f"{quote_ident('projection_projects')}.{quote_ident('deleted_at')} IS NULL")
+    if not clauses:
+        return "", []
+    return " AND " + " AND ".join(clauses), []
+
+
+def project_filter_sql(
+    schema: DatabaseSchema, project: str | None
+) -> tuple[str, list[Any]]:
+    if not project:
+        return "", []
+    clauses = [f"{quote_ident('projection_projects')}.{quote_ident('title')} LIKE ? ESCAPE '{LIKE_ESCAPE}'"]
+    params: list[Any] = [like_contains(project)]
+    if schema.has_column("projection_projects", "workspace_root"):
+        clauses.append(
+            f"{quote_ident('projection_projects')}.{quote_ident('workspace_root')} LIKE ? ESCAPE '{LIKE_ESCAPE}'"
+        )
+        params.append(like_contains(project))
+    return " AND (" + " OR ".join(clauses) + ")", params
+
+
+def recency_filter_sql(
+    schema: DatabaseSchema, since: str | None, until: str | None
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    column = (
+        f"{quote_ident('projection_threads')}.{quote_ident('updated_at')}"
+        if schema.has_column("projection_threads", "updated_at")
+        else None
+    )
+    if column is None:
+        return "", []
+    if since:
+        clauses.append(f"{column} >= ?")
+        params.append(since)
+    if until:
+        clauses.append(f"{column} <= ?")
+        params.append(until)
+    if not clauses:
+        return "", []
+    return " AND " + " AND ".join(clauses), params
+
+
+def thread_id_filter_sql(thread_id: str | None) -> tuple[str, list[Any]]:
+    if not thread_id:
+        return "", []
+    return f" AND {quote_ident('projection_threads')}.{quote_ident('thread_id')} = ?", [thread_id]
+
+
+def thread_select(schema: DatabaseSchema) -> str:
+    pieces = [
+        f"{quote_ident('projection_threads')}.{quote_ident('thread_id')} AS {quote_ident('thread_id')}",
+        f"{quote_ident('projection_threads')}.{quote_ident('project_id')} AS {quote_ident('project_id')}",
+        f"{quote_ident('projection_threads')}.{quote_ident('title')} AS {quote_ident('title')}",
+        sql_null_if_missing(schema, "projection_threads", "created_at", "created_at"),
+        sql_null_if_missing(schema, "projection_threads", "updated_at", "updated_at"),
+        sql_null_if_missing(schema, "projection_threads", "deleted_at", "deleted_at"),
+        sql_null_if_missing(schema, "projection_threads", "archived_at", "archived_at"),
+        sql_null_if_missing(schema, "projection_threads", "branch", "branch"),
+        sql_null_if_missing(schema, "projection_threads", "worktree_path", "worktree_path"),
+        f"{quote_ident('projection_projects')}.{quote_ident('title')} AS {quote_ident('project_title')}",
+        sql_null_if_missing(schema, "projection_projects", "workspace_root", "workspace_root"),
+        sql_null_if_missing(schema, "projection_projects", "deleted_at", "project_deleted_at"),
+    ]
+    if schema.has_table("projection_thread_sessions"):
+        pieces.extend(
+            [
+                sql_null_if_missing(schema, "projection_thread_sessions", "provider_name", "provider_name"),
+                sql_null_if_missing(
+                    schema, "projection_thread_sessions", "provider_session_id", "provider_session_id"
+                ),
+                sql_null_if_missing(
+                    schema, "projection_thread_sessions", "provider_thread_id", "provider_thread_id"
+                ),
+            ]
+        )
+    else:
+        pieces.extend(
+            [
+                "NULL AS provider_name",
+                "NULL AS provider_session_id",
+                "NULL AS provider_thread_id",
+            ]
+        )
+    return ",\n          ".join(pieces)
+
+
+def thread_from(schema: DatabaseSchema) -> str:
+    sql = f"""
+        FROM {quote_ident("projection_threads")}
+        LEFT JOIN {quote_ident("projection_projects")}
+          ON {quote_ident("projection_projects")}.{quote_ident("project_id")}
+           = {quote_ident("projection_threads")}.{quote_ident("project_id")}
+    """
+    if schema.has_table("projection_thread_sessions"):
+        sql += f"""
+        LEFT JOIN {quote_ident("projection_thread_sessions")}
+          ON {quote_ident("projection_thread_sessions")}.{quote_ident("thread_id")}
+           = {quote_ident("projection_threads")}.{quote_ident("thread_id")}
+        """
+    return sql
+
+
+def row_to_match(
+    row: sqlite3.Row,
+    *,
+    source: str,
+    snippet: str | None,
+    message_created_at: str | None,
+    database: Candidate,
+    rank: int,
+) -> Match:
+    return Match(
+        thread_id=row["thread_id"],
+        title=row["title"],
+        project_id=row["project_id"],
+        project_title=row["project_title"],
+        workspace_root=row["workspace_root"],
+        branch=row["branch"],
+        worktree_path=row["worktree_path"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        archived=row["archived_at"] is not None,
+        deleted=row["deleted_at"] is not None,
+        project_deleted=row["project_deleted_at"] is not None,
+        source=source,
+        sources=[source],
+        snippet=snippet,
+        message_created_at=message_created_at,
+        provider_name=row["provider_name"] if "provider_name" in row.keys() else None,
+        provider_session_id=row["provider_session_id"] if "provider_session_id" in row.keys() else None,
+        provider_thread_id=row["provider_thread_id"] if "provider_thread_id" in row.keys() else None,
+        database=str(database.path),
+        database_kind=database.kind,
+        rank=rank,
+    )
+
+
+def merge_matches(matches: Iterable[Match]) -> list[Match]:
+    best: dict[tuple[str, str], Match] = {}
+    for match in matches:
+        key = (match.database, match.thread_id)
+        current = best.get(key)
+        if current is None:
+            best[key] = match
+            continue
+        sources = list(dict.fromkeys([*current.sources, *match.sources]))
+        match_key = (match.rank, match.updated_at is None, match.updated_at or "", match.thread_id)
+        current_key = (current.rank, current.updated_at is None, current.updated_at or "", current.thread_id)
+        if match_key < current_key:
+            winner = match
+            snippet = match.snippet or current.snippet
+            message_created_at = match.message_created_at or current.message_created_at
+        else:
+            winner = current
+            snippet = current.snippet or match.snippet
+            message_created_at = current.message_created_at or match.message_created_at
+        best[key] = Match(
+            **{
+                **asdict(winner),
+                "sources": sources,
+                "snippet": snippet,
+                "message_created_at": message_created_at,
+            }
+        )
+    ordered = list(best.values())
+    ordered.sort(key=lambda item: item.thread_id)
+    ordered.sort(key=lambda item: item.updated_at or "", reverse=True)
+    ordered.sort(key=lambda item: item.rank)
+    return ordered
+
+
+def search_metadata(
+    conn: sqlite3.Connection,
+    schema: DatabaseSchema,
+    candidate: Candidate,
+    query: str,
+    *,
+    active_only: bool,
+    include_deleted: bool,
+    project: str | None,
+    since: str | None,
+    until: str | None,
+    thread_id: str | None,
+    limit: int,
+) -> list[Match]:
+    status_sql, status_params = thread_status_filters(
+        schema, active_only=active_only, include_deleted=include_deleted
+    )
+    project_sql, project_params = project_filter_sql(schema, project)
+    recency_sql, recency_params = recency_filter_sql(schema, since, until)
+    thread_sql, thread_params = thread_id_filter_sql(thread_id)
+    pattern = like_contains(query)
+    exact = query
+
+    where_common = f"{status_sql}{project_sql}{recency_sql}{thread_sql}"
+    common_params = [*status_params, *project_params, *recency_params, *thread_params]
+
+    clauses = [
+        (
+            "thread_id",
+            f"{quote_ident('projection_threads')}.{quote_ident('thread_id')} = ?",
+            [exact],
+        ),
+        (
+            "title",
+            f"{quote_ident('projection_threads')}.{quote_ident('title')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
+            [pattern],
+        ),
+        (
+            "project",
+            f"{quote_ident('projection_projects')}.{quote_ident('title')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
+            [pattern],
+        ),
+    ]
+    if schema.has_column("projection_projects", "workspace_root"):
+        clauses.append(
+            (
+                "project",
+                f"{quote_ident('projection_projects')}.{quote_ident('workspace_root')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
+                [pattern],
+            )
+        )
+    if schema.has_column("projection_threads", "branch"):
+        clauses.append(
+            (
+                "branch",
+                f"{quote_ident('projection_threads')}.{quote_ident('branch')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
+                [pattern],
+            )
+        )
+    if schema.has_column("projection_threads", "worktree_path"):
+        clauses.append(
+            (
+                "branch",
+                f"{quote_ident('projection_threads')}.{quote_ident('worktree_path')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
+                [pattern],
+            )
+        )
+    if schema.has_column("projection_threads", "thread_id"):
+        clauses.append(
+            (
+                "thread_id",
+                f"{quote_ident('projection_threads')}.{quote_ident('thread_id')} LIKE ? ESCAPE '{LIKE_ESCAPE}'",
+                [pattern],
+            )
+        )
+
+    matches: list[Match] = []
+    rank_table = UI_RANK if active_only else RANK
+    seen_sql: set[tuple[str, str]] = set()
+    for source, clause, params in clauses:
+        key = (source, clause)
+        if key in seen_sql:
+            continue
+        seen_sql.add(key)
+        sql = f"""
+            SELECT {thread_select(schema)}
+            {thread_from(schema)}
+            WHERE ({clause})
+            {where_common}
+            ORDER BY {quote_ident("projection_threads")}.{quote_ident("updated_at") if schema.has_column("projection_threads", "updated_at") else "thread_id"} DESC
+            LIMIT ?
+        """
+        rows = conn.execute(sql, [*params, *common_params, limit]).fetchall()
+        for row in rows:
+            snippet = row["title"] if source in {"title", "thread_id"} else row["project_title"]
+            if source == "branch":
+                snippet = row["branch"] or row["worktree_path"]
+            if source == "project":
+                snippet = row["project_title"] or row["workspace_root"]
+            matches.append(
+                row_to_match(
+                    row,
+                    source=source,
+                    snippet=build_snippet(snippet, query),
+                    message_created_at=None,
+                    database=candidate,
+                    rank=rank_table.get(source, 9),
+                )
+            )
+    return matches
+
+
+def search_providers(
+    conn: sqlite3.Connection,
+    schema: DatabaseSchema,
+    candidate: Candidate,
+    query: str,
+    *,
+    active_only: bool,
+    include_deleted: bool,
+    project: str | None,
+    since: str | None,
+    until: str | None,
+    thread_id: str | None,
+    limit: int,
+) -> list[Match]:
+    if active_only or not schema.has_table("projection_thread_sessions"):
+        return []
+    columns = [
+        column
+        for column in ("provider_session_id", "provider_thread_id", "provider_instance_id", "provider_name")
+        if schema.has_column("projection_thread_sessions", column)
+    ]
+    if not columns:
+        return []
+    status_sql, status_params = thread_status_filters(
+        schema, active_only=active_only, include_deleted=include_deleted
+    )
+    project_sql, project_params = project_filter_sql(schema, project)
+    recency_sql, recency_params = recency_filter_sql(schema, since, until)
+    thread_sql, thread_params = thread_id_filter_sql(thread_id)
+    likes = " OR ".join(
+        f"{quote_ident('projection_thread_sessions')}.{quote_ident(column)} LIKE ? ESCAPE '{LIKE_ESCAPE}'"
+        for column in columns
+    )
+    exacts = " OR ".join(
+        f"{quote_ident('projection_thread_sessions')}.{quote_ident(column)} = ?" for column in columns
+    )
+    pattern = like_contains(query)
+    sql = f"""
+        SELECT {thread_select(schema)}
+        {thread_from(schema)}
+        WHERE (({exacts}) OR ({likes}))
+        {status_sql}{project_sql}{recency_sql}{thread_sql}
+        LIMIT ?
+    """
+    params = [
+        *([query] * len(columns)),
+        *([pattern] * len(columns)),
+        *status_params,
+        *project_params,
+        *recency_params,
+        *thread_params,
+        limit,
+    ]
+    matches: list[Match] = []
+    for row in conn.execute(sql, params):
+        snippet = (
+            row["provider_thread_id"]
+            or row["provider_session_id"]
+            or row["provider_name"]
+        )
+        matches.append(
+            row_to_match(
+                row,
+                source="provider",
+                snippet=build_snippet(snippet, query),
+                message_created_at=None,
+                database=candidate,
+                rank=RANK["provider"],
+            )
+        )
+    return matches
+
+
+def search_messages(
+    conn: sqlite3.Connection,
+    schema: DatabaseSchema,
+    candidate: Candidate,
+    query: str,
+    *,
+    active_only: bool,
+    include_deleted: bool,
+    project: str | None,
+    since: str | None,
+    until: str | None,
+    thread_id: str | None,
+    limit: int,
+) -> list[Match]:
+    if not schema.has_table("projection_thread_messages"):
+        return []
+    messages = schema.table("projection_thread_messages")
+    assert messages is not None
+    for needed in ("thread_id", "role", "text"):
+        if not messages.has(needed):
+            return []
+
+    status_sql, status_params = thread_status_filters(
+        schema, active_only=active_only, include_deleted=include_deleted
+    )
+    project_sql, project_params = project_filter_sql(schema, project)
+    recency_sql, recency_params = recency_filter_sql(schema, since, until)
+    thread_sql, thread_params = thread_id_filter_sql(thread_id)
+    pattern = like_contains(query)
+    streaming_sql = ""
+    if messages.has("is_streaming"):
+        streaming_sql = f" AND {quote_ident('projection_thread_messages')}.{quote_ident('is_streaming')} = 0"
+
+    if active_only:
+        if not schema.has_table("projection_turns") or not schema.has_column(
+            "projection_turns", "assistant_message_id"
+        ):
+            assistant_sql = ""
+        else:
+            assistant_sql = f"""
+                OR (
+                  {quote_ident("projection_thread_messages")}.{quote_ident("role")} = 'assistant'
+                  AND {quote_ident("projection_thread_messages")}.{quote_ident("message_id")} IN (
+                    SELECT {quote_ident("projection_turns")}.{quote_ident("assistant_message_id")}
+                    FROM {quote_ident("projection_turns")}
+                    WHERE {quote_ident("projection_turns")}.{quote_ident("assistant_message_id")} IS NOT NULL
+                  )
+                )
+            """
+        role_sql = f"""
+            AND (
+              {quote_ident("projection_thread_messages")}.{quote_ident("role")} = 'user'
+              {assistant_sql}
+            )
+        """
+        message_created_expr = (
+            f"{quote_ident('projection_thread_messages')}.{quote_ident('created_at')}"
+            if schema.has_column("projection_thread_messages", "created_at")
+            else "NULL"
+        )
+        message_id_expr = (
+            f"{quote_ident('projection_thread_messages')}.{quote_ident('message_id')}"
+            if schema.has_column("projection_thread_messages", "message_id")
+            else f"{quote_ident('projection_threads')}.{quote_ident('thread_id')}"
+        )
+        sql = f"""
+            WITH ranked AS (
+              SELECT
+                {thread_select(schema)},
+                CASE {quote_ident("projection_thread_messages")}.{quote_ident("role")}
+                  WHEN 'user' THEN 'user'
+                  ELSE 'assistant'
+                END AS match_source,
+                {quote_ident("projection_thread_messages")}.{quote_ident("text")} AS match_text,
+                {message_created_expr} AS message_created_at,
+                CASE {quote_ident("projection_thread_messages")}.{quote_ident("role")}
+                  WHEN 'user' THEN 0
+                  ELSE 1
+                END AS match_rank,
+                ROW_NUMBER() OVER (
+                  PARTITION BY {quote_ident("projection_threads")}.{quote_ident("thread_id")}
+                  ORDER BY
+                    CASE {quote_ident("projection_thread_messages")}.{quote_ident("role")}
+                      WHEN 'user' THEN 0
+                      ELSE 1
+                    END ASC,
+                    {message_created_expr} DESC,
+                    {message_id_expr} ASC
+                ) AS thread_match_rank
+              FROM {quote_ident("projection_thread_messages")}
+              INNER JOIN {quote_ident("projection_threads")}
+                ON {quote_ident("projection_threads")}.{quote_ident("thread_id")}
+                 = {quote_ident("projection_thread_messages")}.{quote_ident("thread_id")}
+              INNER JOIN {quote_ident("projection_projects")}
+                ON {quote_ident("projection_projects")}.{quote_ident("project_id")}
+                 = {quote_ident("projection_threads")}.{quote_ident("project_id")}
+              {"LEFT JOIN " + quote_ident("projection_thread_sessions") + " ON " + quote_ident("projection_thread_sessions") + "." + quote_ident("thread_id") + " = " + quote_ident("projection_threads") + "." + quote_ident("thread_id") if schema.has_table("projection_thread_sessions") else ""}
+              WHERE {quote_ident("projection_thread_messages")}.{quote_ident("text")} LIKE ? ESCAPE '{LIKE_ESCAPE}'
+              {streaming_sql}
+              {role_sql}
+              {status_sql}{project_sql}{recency_sql}{thread_sql}
+            )
+            SELECT * FROM ranked
+            WHERE thread_match_rank = 1
+            ORDER BY match_rank ASC, updated_at DESC, thread_id ASC
+            LIMIT ?
+        """
+        params = [pattern, *status_params, *project_params, *recency_params, *thread_params, limit]
+        rows = conn.execute(sql, params).fetchall()
+        matches: list[Match] = []
+        for row in rows:
+            source = row["match_source"]
+            matches.append(
+                row_to_match(
+                    row,
+                    source=source,
+                    snippet=build_snippet(row["match_text"], query),
+                    message_created_at=row["message_created_at"],
+                    database=candidate,
+                    rank=UI_RANK.get(source, 2),
+                )
+            )
+        return matches
+
+    sql = f"""
+        SELECT
+          {thread_select(schema)},
+          CASE {quote_ident("projection_thread_messages")}.{quote_ident("role")}
+            WHEN 'user' THEN 'user'
+            ELSE 'assistant'
+          END AS match_source,
+          {quote_ident("projection_thread_messages")}.{quote_ident("text")} AS match_text,
+          {sql_null_if_missing(schema, "projection_thread_messages", "created_at", "message_created_at")}
+        FROM {quote_ident("projection_thread_messages")}
+        INNER JOIN {quote_ident("projection_threads")}
+          ON {quote_ident("projection_threads")}.{quote_ident("thread_id")}
+           = {quote_ident("projection_thread_messages")}.{quote_ident("thread_id")}
+        LEFT JOIN {quote_ident("projection_projects")}
+          ON {quote_ident("projection_projects")}.{quote_ident("project_id")}
+           = {quote_ident("projection_threads")}.{quote_ident("project_id")}
+        {"LEFT JOIN " + quote_ident("projection_thread_sessions") + " ON " + quote_ident("projection_thread_sessions") + "." + quote_ident("thread_id") + " = " + quote_ident("projection_threads") + "." + quote_ident("thread_id") if schema.has_table("projection_thread_sessions") else ""}
+        WHERE {quote_ident("projection_thread_messages")}.{quote_ident("text")} LIKE ? ESCAPE '{LIKE_ESCAPE}'
+          AND {quote_ident("projection_thread_messages")}.{quote_ident("role")} IN ('user', 'assistant')
+          {streaming_sql}
+          {status_sql}{project_sql}{recency_sql}{thread_sql}
+        ORDER BY
+          CASE {quote_ident("projection_thread_messages")}.{quote_ident("role")}
+            WHEN 'user' THEN 0 ELSE 1
+          END ASC,
+          {quote_ident("projection_thread_messages")}.{quote_ident("created_at") if schema.has_column("projection_thread_messages", "created_at") else "thread_id"} DESC
+        LIMIT ?
+    """
+    params = [pattern, *status_params, *project_params, *recency_params, *thread_params, limit]
+    matches = []
+    for row in conn.execute(sql, params):
+        source = row["match_source"]
+        matches.append(
+            row_to_match(
+                row,
+                source=source,
+                snippet=build_snippet(row["match_text"], query),
+                message_created_at=row["message_created_at"],
+                database=candidate,
+                rank=RANK.get(source, 3),
+            )
+        )
+    return matches
+
+
+def search_database(
+    candidate: Candidate,
+    query: str,
+    *,
+    active_only: bool,
+    include_deleted: bool,
+    project: str | None,
+    since: str | None,
+    until: str | None,
+    thread_id: str | None,
+    limit: int,
+) -> tuple[list[Match], list[str]]:
+    warnings: list[str] = []
+    conn = connect_readonly(candidate.path)
+    try:
+        schema = inspect_schema(conn, candidate.path)
+        require_projection_schema(schema)
+        if schema.missing_optional:
+            warnings.append(
+                f"{candidate.path}: optional table(s) missing: {', '.join(schema.missing_optional)}."
+            )
+        if schema.missing_columns:
+            details = "; ".join(
+                f"{table}: {', '.join(columns)}" for table, columns in schema.missing_columns.items()
+            )
+            warnings.append(f"{candidate.path}: optional column(s) missing: {details}.")
+        matches = [
+            *search_metadata(
+                conn,
+                schema,
+                candidate,
+                query,
+                active_only=active_only,
+                include_deleted=include_deleted,
+                project=project,
+                since=since,
+                until=until,
+                thread_id=thread_id,
+                limit=limit,
+            ),
+            *search_providers(
+                conn,
+                schema,
+                candidate,
+                query,
+                active_only=active_only,
+                include_deleted=include_deleted,
+                project=project,
+                since=since,
+                until=until,
+                thread_id=thread_id,
+                limit=limit,
+            ),
+            *search_messages(
+                conn,
+                schema,
+                candidate,
+                query,
+                active_only=active_only,
+                include_deleted=include_deleted,
+                project=project,
+                since=since,
+                until=until,
+                thread_id=thread_id,
+                limit=limit,
+            ),
+        ]
+        return matches, warnings
+    finally:
+        conn.close()
+
+
+def show_thread(candidate: Candidate, thread_id: str, *, include_deleted: bool) -> ThreadDetail | None:
+    conn = connect_readonly(candidate.path)
+    try:
+        schema = inspect_schema(conn, candidate.path)
+        require_projection_schema(schema)
+        status_sql, status_params = thread_status_filters(
+            schema, active_only=False, include_deleted=include_deleted
+        )
+        sql = f"""
+            SELECT {thread_select(schema)}
+            {thread_from(schema)}
+            WHERE {quote_ident("projection_threads")}.{quote_ident("thread_id")} = ?
+            {status_sql}
+            LIMIT 1
+        """
+        row = conn.execute(sql, [thread_id, *status_params]).fetchone()
+        if row is None:
+            return None
+
+        counts: dict[str, int] = {}
+        first_user = None
+        last_assistant = None
+        if schema.has_table("projection_thread_messages"):
+            count_rows = conn.execute(
+                f"""
+                SELECT {quote_ident("role")} AS role, COUNT(*) AS n
+                FROM {quote_ident("projection_thread_messages")}
+                WHERE {quote_ident("thread_id")} = ?
+                GROUP BY {quote_ident("role")}
+                """,
+                [thread_id],
+            ).fetchall()
+            counts = {item["role"]: item["n"] for item in count_rows}
+            user_row = conn.execute(
+                f"""
+                SELECT {quote_ident("text")} AS text
+                FROM {quote_ident("projection_thread_messages")}
+                WHERE {quote_ident("thread_id")} = ?
+                  AND {quote_ident("role")} = 'user'
+                ORDER BY {quote_ident("created_at") if schema.has_column("projection_thread_messages", "created_at") else "message_id"} ASC
+                LIMIT 1
+                """,
+                [thread_id],
+            ).fetchone()
+            if user_row:
+                first_user = build_snippet(user_row["text"], None)
+            assistant_sql = f"""
+                SELECT {quote_ident("projection_thread_messages")}.{quote_ident("text")} AS text
+                FROM {quote_ident("projection_thread_messages")}
+                WHERE {quote_ident("projection_thread_messages")}.{quote_ident("thread_id")} = ?
+                  AND {quote_ident("projection_thread_messages")}.{quote_ident("role")} = 'assistant'
+            """
+            params: list[Any] = [thread_id]
+            if schema.has_table("projection_turns") and schema.has_column(
+                "projection_turns", "assistant_message_id"
+            ):
+                assistant_sql += f"""
+                  AND {quote_ident("projection_thread_messages")}.{quote_ident("message_id")} IN (
+                    SELECT {quote_ident("projection_turns")}.{quote_ident("assistant_message_id")}
+                    FROM {quote_ident("projection_turns")}
+                    WHERE {quote_ident("projection_turns")}.{quote_ident("assistant_message_id")} IS NOT NULL
+                      AND {quote_ident("projection_turns")}.{quote_ident("thread_id")} = ?
+                  )
+                """
+                params.append(thread_id)
+            assistant_sql += f"""
+                ORDER BY {quote_ident("projection_thread_messages")}.{quote_ident("created_at") if schema.has_column("projection_thread_messages", "created_at") else "message_id"} DESC
+                LIMIT 1
+            """
+            assistant_row = conn.execute(assistant_sql, params).fetchone()
+            if assistant_row:
+                last_assistant = build_snippet(assistant_row["text"], None)
+
+        return ThreadDetail(
+            thread_id=row["thread_id"],
+            title=row["title"],
+            project_id=row["project_id"],
+            project_title=row["project_title"],
+            workspace_root=row["workspace_root"],
+            branch=row["branch"],
+            worktree_path=row["worktree_path"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            archived=row["archived_at"] is not None,
+            deleted=row["deleted_at"] is not None,
+            project_deleted=row["project_deleted_at"] is not None,
+            provider_name=row["provider_name"],
+            provider_session_id=row["provider_session_id"],
+            provider_thread_id=row["provider_thread_id"],
+            message_counts=counts,
+            first_user_snippet=first_user,
+            last_assistant_snippet=last_assistant,
+            database=str(candidate.path),
+            database_kind=candidate.kind,
+        )
+    finally:
+        conn.close()
+
+
+def match_to_dict(match: Match) -> dict[str, Any]:
+    payload = asdict(match)
+    status = []
+    if match.deleted:
+        status.append("deleted")
+    if match.archived:
+        status.append("archived")
+    if match.project_deleted:
+        status.append("project-deleted")
+    if not status:
+        status.append("active")
+    payload["status"] = "+".join(status)
+    return payload
+
+
+def format_status(match: Match | ThreadDetail) -> str:
+    labels = []
+    if match.deleted:
+        labels.append("DELETED")
+    if match.archived:
+        labels.append("archived")
+    if match.project_deleted:
+        labels.append("project-deleted")
+    return ", ".join(labels) if labels else "active"
+
+
+def format_text_report(report: SearchReport) -> str:
+    lines: list[str] = []
+    lines.append(f"mode: {report.mode}")
+    if report.query:
+        lines.append(f"query: {report.query}")
+    lines.append("databases:")
+    for database in report.databases:
+        marker = "searched" if database.get("searched") else ("missing" if not database["exists"] else "listed")
+        extra = ""
+        if database.get("exists"):
+            extra = f"  size={database.get('size_bytes')} mtime={database.get('mtime')}"
+        lines.append(
+            f"  - [{database['kind']}] {database['path']} ({marker}, via {database['source']}){extra}"
+        )
+    if report.warnings:
+        lines.append("warnings:")
+        for warning in report.warnings:
+            lines.append(f"  - {warning}")
+    if not report.results:
+        lines.append("results: 0")
+        lines.append("No matching threads. Try a shorter query, --include-deleted, or --list-dbs.")
+        return "\n".join(lines) + "\n"
+
+    lines.append(f"results: {len(report.results)}{' (truncated)' if report.truncated else ''}")
+    for index, item in enumerate(report.results, start=1):
+        lines.append("")
+        title = item["title"] or "(untitled)"
+        lines.append(f"{index}. {item['thread_id']}  {title!r}")
+        project = item.get("project_title") or "(no project)"
+        workspace = item.get("workspace_root") or ""
+        lines.append(f"   project: {project}  {workspace}".rstrip())
+        location = []
+        if item.get("branch"):
+            location.append(f"branch {item['branch']}")
+        if item.get("worktree_path"):
+            location.append(f"worktree {item['worktree_path']}")
+        if location:
+            lines.append("   " + " · ".join(location))
+        lines.append(
+            f"   created: {item.get('created_at') or '-'}  updated: {item.get('updated_at') or '-'}"
+        )
+        lines.append(f"   status: {item.get('status')}")
+        sources = ", ".join(item.get("sources") or [item["source"]])
+        match_line = f"   match: {sources}"
+        if item.get("message_created_at"):
+            match_line += f" @ {item['message_created_at']}"
+        lines.append(match_line)
+        if item.get("snippet"):
+            lines.append(f"   snippet: {item['snippet']}")
+        if item.get("provider_thread_id") or item.get("provider_session_id"):
+            lines.append(
+                "   provider: "
+                + " ".join(
+                    part
+                    for part in (
+                        item.get("provider_name"),
+                        item.get("provider_thread_id"),
+                        item.get("provider_session_id"),
+                    )
+                    if part
+                )
+            )
+        lines.append(f"   db: {item['database_kind']}  {item['database']}")
+    if report.query and len(report.query) < 3:
+        lines.append("")
+        lines.append("note: short queries become broad %term% LIKE scans and can be slow on large databases.")
+    lines.append("")
+    lines.append("Follow up with --db <path> --thread <thread_id> for one thread's metadata and bounded snippets.")
+    return "\n".join(lines) + "\n"
+
+
+def format_thread_detail(detail: ThreadDetail) -> str:
+    lines = [
+        f"thread: {detail.thread_id}",
+        f"title: {detail.title}",
+        f"project: {detail.project_title or '-'}  {detail.workspace_root or ''}".rstrip(),
+        f"branch: {detail.branch or '-'}  worktree: {detail.worktree_path or '-'}",
+        f"created: {detail.created_at or '-'}  updated: {detail.updated_at or '-'}",
+        f"status: {format_status(detail)}",
+        f"provider: {detail.provider_name or '-'}  session={detail.provider_session_id or '-'}  thread={detail.provider_thread_id or '-'}",
+        f"messages: {detail.message_counts or '{}'}",
+        f"db: {detail.database_kind}  {detail.database}",
+    ]
+    if detail.first_user_snippet:
+        lines.append(f"first user: {detail.first_user_snippet}")
+    if detail.last_assistant_snippet:
+        lines.append(f"last assistant: {detail.last_assistant_snippet}")
+    lines.append("Full conversation text is intentionally omitted.")
+    return "\n".join(lines) + "\n"
+
+
+def run_search(
+    *,
+    query: str | None,
+    cwd: Path,
+    home: Path,
+    env: Mapping[str, str],
+    db: str | None = None,
+    base_dir: str | None = None,
+    project: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    active_only: bool = False,
+    include_deleted: bool = False,
+    limit: int = DEFAULT_LIMIT,
+    thread_id: str | None = None,
+    list_dbs: bool = False,
+    now: datetime | None = None,
+) -> SearchReport:
+    if active_only and include_deleted:
+        raise UsageError("--active-only already excludes deleted threads; do not combine it with --include-deleted.")
+    if limit < 1 or limit > MAX_LIMIT:
+        raise UsageError(f"--limit must be between 1 and {MAX_LIMIT}.")
+
+    since_value = parse_when(since, now=now) if since else None
+    until_value = parse_when(until, now=now) if until else None
+    candidates = discover_candidates(cwd=cwd, home=home, env=env, db=db, base_dir=base_dir)
+    databases = [candidate_metadata(candidate) for candidate in candidates]
+
+    if list_dbs:
+        return SearchReport(
+            mode="list-dbs",
+            query=None,
+            databases=databases,
+            results=[],
+            warnings=[],
+            truncated=False,
+            limit=limit,
+        )
+
+    existing = [candidate for candidate in candidates if candidate.path.is_file()]
+    if not existing:
+        if db or base_dir:
+            target = candidates[0].path if candidates else db or base_dir
+            raise SearchError(
+                f"Database does not exist at {str(target)!r}. Pass a real state.sqlite or T3 base dir."
+            )
+        considered = "\n".join(f"  - {item['kind']}: {item['path']}" for item in databases) or "  (none)"
+        raise SearchError(
+            "No T3 state.sqlite found. Considered:\n"
+            f"{considered}\n"
+            "Pass --db PATH or --base-dir PATH. This tool does not recursively scan the home directory."
+        )
+
+    if thread_id and not query:
+        details = []
+        warnings: list[str] = []
+        for candidate in existing:
+            try:
+                detail = show_thread(candidate, thread_id, include_deleted=include_deleted)
+            except SearchError as error:
+                warnings.append(str(error))
+                continue
+            databases_for = next(item for item in databases if item["path"] == str(candidate.path))
+            databases_for["searched"] = True
+            if detail is not None:
+                details.append(asdict(detail) | {"status": format_status(detail)})
+        if not details:
+            raise SearchError(f"Thread {thread_id!r} was not found in the selected database(s).")
+        return SearchReport(
+            mode="thread",
+            query=None,
+            databases=databases,
+            results=details,
+            warnings=warnings,
+            truncated=False,
+            limit=limit,
+        )
+
+    if not query:
+        raise UsageError("Provide a search query, or use --list-dbs / --thread.")
+
+    mode = "ui" if active_only else "recovery"
+    warnings = []
+    matches: list[Match] = []
+    for candidate in existing:
+        db_meta = next(item for item in databases if item["path"] == str(candidate.path))
+        db_meta["searched"] = True
+        found, db_warnings = search_database(
+            candidate,
+            query,
+            active_only=active_only,
+            include_deleted=include_deleted,
+            project=project,
+            since=since_value,
+            until=until_value,
+            thread_id=thread_id,
+            limit=limit,
+        )
+        matches.extend(found)
+        warnings.extend(db_warnings)
+
+    merged = merge_matches(matches)
+    truncated = len(merged) > limit
+    merged = merged[:limit]
+    if len(query) < 3:
+        warnings.append(
+            "Short queries become broad %term% LIKE scans and may be slower on large databases. Indexes are not added."
+        )
+    return SearchReport(
+        mode=mode,
+        query=query,
+        databases=databases,
+        results=[match_to_dict(match) for match in merged],
+        warnings=warnings,
+        truncated=truncated,
+        limit=limit,
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="t3-thread-search",
+        description="Read-only search of T3 Code projection threads in state.sqlite.",
+        epilog=(
+            "Opens SQLite with mode=ro and PRAGMA query_only=ON. Never copies, vacuums, "
+            "indexes, or starts a T3 server against the database. Default recovery search "
+            "includes archived non-deleted threads. --active-only reproduces T3 command-palette "
+            "message search (no archived/deleted, user + canonical final assistant only)."
+        ),
+    )
+    parser.add_argument("query", nargs="?", help="Text to search in titles, messages, projects, or provider IDs.")
+    parser.add_argument("--db", help="Path to state.sqlite, a userdata directory, or a T3 base directory.")
+    parser.add_argument(
+        "--base-dir",
+        "--home-dir",
+        dest="base_dir",
+        help="T3 base/home directory. Uses <base-dir>/userdata/state.sqlite (explicit-home rule).",
+    )
+    parser.add_argument("--project", help="Restrict to project title or workspace path (LIKE, parameterized).")
+    parser.add_argument("--since", help="Only threads updated at/after this time (ISO date/time or 7d/24h/30m).")
+    parser.add_argument("--until", help="Only threads updated at/before this time.")
+    parser.add_argument(
+        "--active-only",
+        action="store_true",
+        help="UI/command-palette semantics: exclude archived and deleted; canonical final assistant only.",
+    )
+    parser.add_argument(
+        "--include-deleted",
+        action="store_true",
+        help="Include deleted threads (labeled). Default recovery search excludes them.",
+    )
+    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help=f"Max results (default {DEFAULT_LIMIT}, max {MAX_LIMIT}).")
+    parser.add_argument("--thread", dest="thread_id", help="Show one thread, or restrict a search to that thread.")
+    parser.add_argument("--list-dbs", action="store_true", help="List candidate databases and exit.")
+    parser.add_argument("--json", action="store_true", help="Machine-readable JSON on stdout.")
+    parser.add_argument("--cwd", help="Directory used for linked-worktree discovery (default: process cwd).")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    cwd = expand_path(args.cwd, cwd=Path.cwd()) if args.cwd else Path.cwd()
+    try:
+        report = run_search(
+            query=args.query,
+            cwd=cwd,
+            home=Path.home(),
+            env=os.environ,
+            db=args.db,
+            base_dir=args.base_dir,
+            project=args.project,
+            since=args.since,
+            until=args.until,
+            active_only=args.active_only,
+            include_deleted=args.include_deleted,
+            limit=args.limit,
+            thread_id=args.thread_id,
+            list_dbs=args.list_dbs,
+        )
+    except SearchError as error:
+        if args.json:
+            json.dump({"error": str(error)}, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        else:
+            print(error, file=sys.stderr)
+        return error.exit_code
+
+    if args.json:
+        json.dump(asdict(report), sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+        return 0
+
+    if report.mode == "list-dbs":
+        print(format_text_report(report), end="")
+        return 0
+    if report.mode == "thread":
+        for index, item in enumerate(report.results):
+            if index:
+                print("---")
+            detail = ThreadDetail(
+                thread_id=item["thread_id"],
+                title=item["title"],
+                project_id=item.get("project_id"),
+                project_title=item.get("project_title"),
+                workspace_root=item.get("workspace_root"),
+                branch=item.get("branch"),
+                worktree_path=item.get("worktree_path"),
+                created_at=item.get("created_at"),
+                updated_at=item.get("updated_at"),
+                archived=item.get("archived", False),
+                deleted=item.get("deleted", False),
+                project_deleted=item.get("project_deleted", False),
+                provider_name=item.get("provider_name"),
+                provider_session_id=item.get("provider_session_id"),
+                provider_thread_id=item.get("provider_thread_id"),
+                message_counts=item.get("message_counts") or {},
+                first_user_snippet=item.get("first_user_snippet"),
+                last_assistant_snippet=item.get("last_assistant_snippet"),
+                database=item["database"],
+                database_kind=item["database_kind"],
+            )
+            print(format_thread_detail(detail), end="")
+        for warning in report.warnings:
+            print(f"warning: {warning}", file=sys.stderr)
+        return 0
+
+    print(format_text_report(report), end="")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
