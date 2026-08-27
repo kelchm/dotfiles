@@ -608,5 +608,252 @@ class ReviewFixTests(unittest.TestCase):
             self.assertEqual(report.results[0]["thread_id"], "thread-active")
 
 
+class RemoteEnvironmentTests(unittest.TestCase):
+    ENV_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    ENV_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    THREAD = "7368d725-8731-436b-a2b0-064ac9bb63af"
+
+    def _db_with_env(self, directory: Path, env_id: str, thread_id: str, title: str) -> Path:
+        db = directory / env_id / "state.sqlite"
+        write_db(
+            db,
+            [
+                FULL_SCHEMA,
+                f"""
+                INSERT INTO projection_projects VALUES
+                  ('proj-active', 'T3 Code', '/repo/t3code', '2026-01-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL);
+                INSERT INTO projection_threads VALUES
+                  ('{thread_id}', 'proj-active', '{title}', 'main', NULL,
+                   '2026-05-01T00:00:00.000Z', '2026-05-02T00:00:00.000Z', NULL, NULL);
+                """,
+            ],
+        )
+        (db.parent / "environment-id").write_text(env_id + "\n", encoding="utf-8")
+        return db
+
+    def test_parse_full_t3_thread_url(self) -> None:
+        url = f"https://app.t3.codes/{self.ENV_A}/{self.THREAD}"
+        parsed = tts.parse_thread_ref(url)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.environment_id, self.ENV_A)
+        self.assertEqual(parsed.thread_id, self.THREAD)
+        self.assertEqual(parsed.host, "app.t3.codes")
+        self.assertIsNone(tts.parse_thread_ref("https://app.t3.codes/pair?host=https://backend.example"))
+
+    def test_url_lookup_uses_both_identifiers(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            db = self._db_with_env(root, self.ENV_A, self.THREAD, "From URL")
+            url = f"https://app.t3.codes/{self.ENV_A}/{self.THREAD}"
+            report = tts.run_search(query=url, cwd=root, home=root, env={}, db=str(db))
+            self.assertEqual(report.results[0]["scoped_id"], f"{self.ENV_A}/{self.THREAD}")
+            self.assertEqual(report.results[0]["environment_id"], self.ENV_A)
+            self.assertEqual(report.mode, "thread")
+
+    def test_same_bare_id_across_multiple_environments(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            db_a = self._db_with_env(root, self.ENV_A, self.THREAD, "Alpha copy")
+            db_b = self._db_with_env(root, self.ENV_B, self.THREAD, "Bravo copy")
+            first = tts.run_search(query=None, cwd=root, home=root, env={}, db=str(db_a), thread_id=self.THREAD)
+            second = tts.run_search(query=None, cwd=root, home=root, env={}, db=str(db_b), thread_id=self.THREAD)
+            self.assertEqual(first.results[0]["environment_id"], self.ENV_A)
+            self.assertEqual(second.results[0]["environment_id"], self.ENV_B)
+            self.assertEqual(first.results[0]["scoped_id"], f"{self.ENV_A}/{self.THREAD}")
+            self.assertEqual(second.results[0]["thread_id"], second.results[0]["thread_id"])
+            combined = tts.run_search(
+                query=None,
+                cwd=root,
+                home=root,
+                env={},
+                db=str(db_a),
+                thread_id=self.THREAD,
+                remotes=[
+                    tts.RemoteEnvironment(
+                        environment_id=self.ENV_B,
+                        status="searched",
+                        provenance="rpc",
+                        host="https://backend.example:3773",
+                        details=[
+                            {
+                                "thread_id": self.THREAD,
+                                "title": "Bravo copy",
+                                "token": "should-not-leak",
+                            }
+                        ],
+                    )
+                ],
+            )
+            env_ids = {row["environment_id"] for row in combined.results}
+            self.assertEqual(env_ids, {self.ENV_A, self.ENV_B})
+            dumped = json.dumps(tts.asdict(combined))
+            self.assertNotIn("should-not-leak", dumped)
+
+    def test_find_exact_thread_id_on_remote_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            local = self._db_with_env(root, self.ENV_A, "11111111-1111-4111-8111-111111111111", "Local only")
+            report = tts.run_search(
+                query=None,
+                cwd=root,
+                home=root,
+                env={},
+                db=str(local),
+                thread_id=self.THREAD,
+                remotes=[
+                    tts.RemoteEnvironment(
+                        environment_id=self.ENV_B,
+                        status="searched",
+                        provenance="rpc",
+                        host="https://remote.example",
+                        details=[{"thread_id": self.THREAD, "title": "Remote hit"}],
+                    )
+                ],
+            )
+            self.assertEqual(len(report.results), 1)
+            self.assertEqual(report.results[0]["environment_id"], self.ENV_B)
+            self.assertEqual(report.results[0]["provenance"], "rpc")
+            self.assertEqual(report.results[0]["host"], "https://remote.example")
+
+    def test_disconnected_remote_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            local = self._db_with_env(root, self.ENV_A, self.THREAD, "Local")
+            report = tts.run_search(
+                query=None,
+                cwd=root,
+                home=root,
+                env={},
+                db=str(local),
+                thread_id="99999999-9999-4999-8999-999999999999",
+                remotes=[
+                    tts.RemoteEnvironment(
+                        environment_id=self.ENV_B,
+                        status="disconnected",
+                        provenance="rpc",
+                        host="https://down.example",
+                        error="connection refused",
+                    )
+                ],
+            )
+            statuses = {item["environment_id"]: item["status"] for item in report.environments}
+            self.assertEqual(statuses[self.ENV_B], "disconnected")
+            self.assertTrue(any("disconnected" in warning for warning in report.warnings))
+            self.assertNotEqual(report.not_found_kind, None)
+
+    def test_not_found_versus_not_queried(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            local = self._db_with_env(root, self.ENV_A, self.THREAD, "Local")
+            missing = "99999999-9999-4999-8999-999999999999"
+            not_queried = tts.run_search(
+                query=None,
+                cwd=root,
+                home=root,
+                env={},
+                db=str(local),
+                thread_id=missing,
+            )
+            self.assertEqual(not_queried.not_found_kind, "not_queried")
+            self.assertTrue(any(tts.NOT_QUERIED_REMOTE_MESSAGE in warning for warning in not_queried.warnings))
+            self.assertFalse(not_queried.remote_queried)
+
+            remote_miss = tts.run_search(
+                query=None,
+                cwd=root,
+                home=root,
+                env={},
+                db=str(local),
+                thread_id=missing,
+                remotes=[
+                    tts.RemoteEnvironment(
+                        environment_id=self.ENV_B,
+                        status="searched",
+                        provenance="rpc",
+                        host="https://remote.example",
+                        details=[],
+                    )
+                ],
+            )
+            self.assertTrue(remote_miss.remote_queried)
+            self.assertEqual(remote_miss.not_found_kind, "not_found")
+            self.assertTrue(any("Not found in the environments searched." in warning for warning in remote_miss.warnings))
+            self.assertFalse(any(tts.NOT_QUERIED_REMOTE_MESSAGE in warning for warning in remote_miss.warnings))
+
+    def test_outputs_never_expose_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            local = self._db_with_env(root, self.ENV_A, self.THREAD, "Local")
+            remote_path = root / "remote.json"
+            remote_path.write_text(
+                json.dumps(
+                    {
+                        "environments": [
+                            {
+                                "environment_id": self.ENV_B,
+                                "status": "searched",
+                                "host": "https://backend.example",
+                                "token": "sk-live-secret",
+                                "credential": {"bearer": "super-secret"},
+                                "matches": [
+                                    {
+                                        "thread_id": self.THREAD,
+                                        "title": "Remote",
+                                        "authorization": "Bearer abc",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            from contextlib import redirect_stdout
+            from io import StringIO
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = tts.main(
+                    [
+                        "--db",
+                        str(local),
+                        "--remote-json",
+                        str(remote_path),
+                        "--json",
+                        self.THREAD,
+                    ]
+                )
+            self.assertEqual(code, 0)
+            body = stdout.getvalue()
+            self.assertNotIn("sk-live-secret", body)
+            self.assertNotIn("super-secret", body)
+            self.assertNotIn("Bearer abc", body)
+            parsed = json.loads(body)
+            self.assertTrue(parsed["results"])
+
+    def test_ssh_disconnected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            local = self._db_with_env(root, self.ENV_A, self.THREAD, "Local")
+
+            def fail_ssh(argv, stdin):
+                self.assertEqual(argv[0], "ssh")
+                self.assertNotIn("sk-live-secret", " ".join(argv))
+                return type("Completed", (), {"returncode": 255, "stdout": b"", "stderr": b"Permission denied"})()
+
+            report = tts.run_search(
+                query=None,
+                cwd=root,
+                home=root,
+                env={},
+                db=str(local),
+                thread_id="99999999-9999-4999-8999-999999999999",
+                ssh="user@remote.example",
+                ssh_exec=fail_ssh,
+            )
+            self.assertTrue(any(item.get("status") == "disconnected" for item in report.environments))
+            self.assertTrue(any("disconnected" in warning for warning in report.warnings))
+
+
 if __name__ == "__main__":
     unittest.main()

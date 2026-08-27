@@ -1,11 +1,12 @@
 ---
 name: t3-thread-search
 description: >
-  Find T3 Code threads in a local state.sqlite projection database by title, thread ID,
-  user or assistant message text, project title or workspace path, provider session/thread ID,
-  or approximate date. Use for recovering archived conversations, looking up thread-… IDs,
-  and reproducing T3 command-palette search. Use when the user runs /t3-thread-search or
-  /find-t3-thread, or asks to find, search, locate, or look up a T3 thread, chat, or conversation.
+  Find T3 Code threads by title, thread ID, T3 thread URL, environmentId, user or assistant
+  message text, project, provider ID, or date. Searches local state.sqlite and can merge
+  remote environments. Canonical identity is (environmentId, threadId). Use for recovering
+  archived conversations, looking up UUIDs or https://app.t3.codes/<env>/<thread> URLs,
+  command-palette search, and remote/multi-environment lookup. Use when the user runs
+  /t3-thread-search or /find-t3-thread.
 ---
 
 # T3 thread search
@@ -30,8 +31,12 @@ If `python3` is missing, retry with `python`, then `mise -C "$HOME/.claude/skill
 | `--since` / `--until` | ISO date/time or relative `7d` / `24h` / `30m`. Date-only `--until` is end of that day. |
 | `--active-only` | Command-palette / UI semantics |
 | `--include-deleted` | Opt in to deleted threads (labeled) |
-| `--thread ID` | One thread's metadata and bounded snippets, or restrict a search |
-| `--list-dbs` | Show candidate databases without searching |
+| `--thread ID` | Thread ID, `environmentId/threadId`, or a full T3 thread URL |
+| `--environment ID` | Restrict to this environment. Combined with `--thread` this is the canonical identity |
+| `--endpoint URL` | Remote T3 HTTP(S) endpoint. Recorded as not queried unless `--remote-json` supplies RPC results |
+| `--ssh TARGET` | Explicit SSH host that owns the database. Never copies the remote DB |
+| `--remote-json PATH` | Sanitized federated RPC results (`orchestration.searchThreads` per environment). No tokens |
+| `--list-dbs` | Show candidate databases and environment IDs |
 | `--limit N` | Default 20, max 100 |
 | `--json` | Machine-readable output |
 | `--cwd PATH` | Discover worktree-local `.t3` as if started from this directory |
@@ -40,19 +45,27 @@ Default search is **recovery**: active + archived, non-deleted, titles, projects
 
 ## Agent flow
 
-1. Resolve the database. If the user did not name one, run `--list-dbs` (or search the listed candidates). Always report the path actually queried.
-2. Run a recovery search with the user's words first (title + messages + project + provider in one invocation).
-3. If that is noisy, refine with `--project`, `--since`, `--thread`, or `--active-only`.
-4. Return a compact ranked list. Do not dump full conversations.
-5. For a chosen thread, run `--db <path> --thread <id>`. That prints metadata, provider IDs, message counts, the first user snippet, and the last canonical assistant snippet.
+1. Parse the user's request for a thread URL, `(environmentId, threadId)`, or a bare UUID. Canonical identity is `(environmentId, threadId)`. A bare UUID does **not** identify the environment.
+2. Resolve local databases (`--list-dbs`). Each DB is associated with `<stateDir>/environment-id` when that file exists. Always report environment ID, database path, and provenance.
+3. Search matching local databases.
+4. If the harness has an authenticated T3 RPC/MCP session, federate like the web client: call `orchestration.searchThreads` once per connected environment and attach `environmentId` to each hit. Feed sanitized results through `--remote-json` (never tokens). That RPC is **active/UI** search only; archived recovery needs SQLite or SSH on the owning host.
+5. There is no official T3 search CLI today. With **explicit user authorization**, `--ssh user@host` runs this same read-only helper on the owner. Do not `scp`/`cp` a live remote database.
+6. Return scoped identities (`environmentId/threadId`), host/endpoint, and database or API queried.
+7. For a chosen thread: `--environment <id> --thread <id>` (or the URL). Do not dump full conversations.
+
+A local miss is not a global miss. If remotes were not queried, say exactly:
+
+> Not found in the environments searched; remote environments were not queried.
+
+Then ask for the full thread URL, environment ID, authenticated endpoint, or SSH target.
+
+Distinguish: authoritative not found in a searched environment, environment disconnected, environment not searched, stale cache hint. Do not scrape browser/desktop credential stores. Do not print bearer, relay, pairing, or SSH credentials. Do not pass secrets on the command line.
 
 Natural-language mapping:
 
-- "Find the T3 thread where we discussed X" → recovery search for `X`
-- "Find recent threads for `/path/to/project` mentioning Y" → `--project /path/to/project --since 7d Y`
-- "Search archived T3 threads for this error" → recovery search (archived is already on)
-- "Look up thread `thread-…`" → `--thread thread-…`
-- "Same semantics as T3's command palette" → `--active-only`
+- `https://app.t3.codes/<environmentId>/<threadId>` → parse both IDs and look up that identity
+- Bare UUID → search every local environment, then connected remotes; never conclude "does not exist"
+- "Same semantics as T3's command palette" → `--active-only` (local SQLite plus per-environment `searchThreads` RPC)
 
 ## Database locations
 
@@ -88,17 +101,11 @@ Canonical files live in `~/.claude/skills/t3-thread-search/` (Claude Code and Gr
 Examples:
 
 ```bash
-# Claude / Grok / Codex — recovery search
 python3 "$HOME/.claude/skills/t3-thread-search/scripts/t3-thread-search" "projection rebuild performance"
-
-# Codex may use the symlink path instead
-python3 "$HOME/.codex/skills/t3-thread-search/scripts/t3-thread-search" --active-only "reconnect"
-
-# Explicit live install
-python3 "$HOME/.claude/skills/t3-thread-search/scripts/t3-thread-search" --db "$HOME/.t3/userdata/state.sqlite" "provider_thread_id"
-
-# Follow-up
-python3 "$HOME/.claude/skills/t3-thread-search/scripts/t3-thread-search" --db "$HOME/.t3/userdata/state.sqlite" --thread 'thread-…'
+python3 "$HOME/.claude/skills/t3-thread-search/scripts/t3-thread-search" --json --thread "https://app.t3.codes/<environmentId>/<threadId>"
+python3 "$HOME/.claude/skills/t3-thread-search/scripts/t3-thread-search" --environment "<environmentId>" --thread "<threadId>"
+python3 "$HOME/.claude/skills/t3-thread-search/scripts/t3-thread-search" --remote-json /tmp/t3-search-rpc.json --active-only "reconnect"
+python3 "$HOME/.claude/skills/t3-thread-search/scripts/t3-thread-search" --ssh user@host --ssh-base-dir '~/.t3' --thread "<threadId>"
 ```
 
 On Windows, invoke `python` on the same script path under `%USERPROFILE%\.claude\skills\t3-thread-search\scripts\t3-thread-search`.

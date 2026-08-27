@@ -8,11 +8,13 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
+from urllib.parse import parse_qs, unquote, urlparse
 
 LIKE_ESCAPE = "!"
 DEFAULT_LIMIT = 20
@@ -22,6 +24,33 @@ SNIPPET_BODY = 236
 SNIPPET_CONTEXT = 72
 BUSY_TIMEOUT_MS = 5000
 IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+SECRET_KEY_RE = re.compile(
+    r"(token|secret|password|bearer|pairing|authorization|credential|cookie|private[_-]?key)",
+    re.IGNORECASE,
+)
+RESERVED_URL_SEGMENTS = {
+    "pair",
+    "connect",
+    "settings",
+    "login",
+    "auth",
+    "oauth",
+    "api",
+    "ws",
+    "health",
+    "ready",
+    ".",
+    "..",
+}
+NOT_QUERIED_REMOTE_MESSAGE = (
+    "Not found in the environments searched; remote environments were not queried."
+)
+REMOTE_REQUEST_HINT = (
+    "Request the full thread URL, environment ID, authenticated endpoint, or SSH target."
+)
 RELATIVE_WHEN_RE = re.compile(r"^(\d+)([dhm])$")
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 ISO_DT_RE = re.compile(
@@ -99,9 +128,32 @@ class Candidate:
     path: Path
     kind: str
     source: str
+    environment_id: str | None = None
+    host: str | None = None
+    provenance: str = "sqlite"
 
     def resolved(self) -> Path:
         return self.path.expanduser()
+
+
+@dataclass(frozen=True)
+class ThreadRef:
+    raw: str
+    thread_id: str | None = None
+    environment_id: str | None = None
+    url: str | None = None
+    host: str | None = None
+
+
+@dataclass
+class RemoteEnvironment:
+    environment_id: str | None
+    status: str
+    provenance: str
+    host: str | None = None
+    matches: list[dict[str, Any]] = field(default_factory=list)
+    details: list[dict[str, Any]] = field(default_factory=list)
+    error: str | None = None
 
 
 @dataclass
@@ -157,6 +209,10 @@ class Match:
     database: str
     database_kind: str
     rank: int
+    environment_id: str | None = None
+    host: str | None = None
+    provenance: str = "sqlite"
+    scoped_id: str | None = None
 
 
 @dataclass
@@ -182,6 +238,10 @@ class ThreadDetail:
     last_assistant_snippet: str | None
     database: str
     database_kind: str
+    environment_id: str | None = None
+    host: str | None = None
+    provenance: str = "sqlite"
+    scoped_id: str | None = None
 
 
 @dataclass
@@ -193,6 +253,9 @@ class SearchReport:
     warnings: list[str]
     truncated: bool
     limit: int
+    environments: list[dict[str, Any]] = field(default_factory=list)
+    remote_queried: bool = False
+    not_found_kind: str | None = None
 
 
 def ident(name: str) -> str:
@@ -211,6 +274,145 @@ def escape_like_pattern(value: str) -> str:
 
 def like_contains(value: str) -> str:
     return f"%{escape_like_pattern(value)}%"
+
+
+def scoped_identity(environment_id: str | None, thread_id: str | None) -> str | None:
+    if not thread_id:
+        return None
+    return f"{environment_id or 'unknown'}/{thread_id}"
+
+
+def looks_like_thread_id(value: str) -> bool:
+    raw = value.strip()
+    return bool(UUID_RE.fullmatch(raw) or raw.startswith("thread-"))
+
+
+def _parse_thread_url(raw: str) -> ThreadRef | None:
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    query = {key: values[-1] for key, values in parse_qs(parsed.query).items() if values}
+    env_from_query = query.get("environmentId") or query.get("environment_id")
+    thread_from_query = query.get("threadId") or query.get("thread_id")
+    segments = [unquote(part) for part in parsed.path.split("/") if part]
+    env = env_from_query
+    thread = thread_from_query
+    if segments and segments[0].lower() not in RESERVED_URL_SEGMENTS:
+        if env is None and len(segments) >= 1:
+            env = segments[0]
+        if thread is None and len(segments) >= 2:
+            thread = segments[1]
+    if thread is None and env is not None and looks_like_thread_id(env) and len(segments) < 2:
+        thread = env
+        env = env_from_query
+    if thread is None:
+        return None
+    return ThreadRef(
+        raw=raw,
+        thread_id=thread,
+        environment_id=env,
+        url=raw,
+        host=parsed.netloc or None,
+    )
+
+
+def parse_thread_ref(value: str | None) -> ThreadRef | None:
+    if value is None:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    if "://" in raw:
+        return _parse_thread_url(raw)
+    stripped = raw.strip("/")
+    parts = [part for part in stripped.split("/") if part]
+    if (
+        len(parts) == 2
+        and parts[0].lower() not in RESERVED_URL_SEGMENTS
+        and looks_like_thread_id(parts[0])
+        and looks_like_thread_id(parts[1])
+    ):
+        return ThreadRef(raw=raw, environment_id=parts[0], thread_id=parts[1])
+    tokens = raw.split()
+    if len(tokens) == 2 and looks_like_thread_id(tokens[0]) and looks_like_thread_id(tokens[1]):
+        return ThreadRef(raw=raw, environment_id=tokens[0], thread_id=tokens[1])
+    if looks_like_thread_id(raw):
+        return ThreadRef(raw=raw, thread_id=raw)
+    return None
+
+
+def read_environment_id(db_path: Path) -> str | None:
+    path = db_path.parent / "environment-id"
+    if not path.is_file():
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return raw or None
+
+
+def redact_secrets(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: redact_secrets(item)
+            for key, item in value.items()
+            if not SECRET_KEY_RE.search(str(key))
+        }
+    if isinstance(value, list):
+        return [redact_secrets(item) for item in value]
+    if isinstance(value, str) and value.lower().startswith("bearer "):
+        return "[redacted]"
+    return value
+
+
+def load_remote_json(path: Path) -> list[RemoteEnvironment]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise UsageError(f"Failed to read --remote-json {str(path)!r}: {error}") from error
+    payload = redact_secrets(payload)
+    rows = payload.get("environments") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise UsageError("--remote-json must contain an environments array.")
+    remotes: list[RemoteEnvironment] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        remotes.append(
+            RemoteEnvironment(
+                environment_id=row.get("environment_id") or row.get("environmentId"),
+                status=row.get("status") or "searched",
+                provenance=row.get("provenance") or "rpc",
+                host=row.get("host") or row.get("endpoint"),
+                matches=list(row.get("matches") or []),
+                details=list(row.get("details") or []),
+                error=row.get("error"),
+            )
+        )
+    return remotes
+
+
+def remote_match_to_result(remote: RemoteEnvironment, item: dict[str, Any], *, rank: int = 0) -> dict[str, Any]:
+    thread_id = item.get("thread_id") or item.get("threadId")
+    environment_id = item.get("environment_id") or item.get("environmentId") or remote.environment_id
+    payload = redact_secrets(dict(item))
+    payload.update(
+        {
+            "thread_id": thread_id,
+            "environment_id": environment_id,
+            "scoped_id": scoped_identity(environment_id, thread_id),
+            "host": payload.get("host") or remote.host,
+            "provenance": remote.provenance,
+            "database": payload.get("database") or remote.host or remote.provenance,
+            "database_kind": remote.provenance,
+            "source": payload.get("source") or "remote",
+            "sources": payload.get("sources") or [payload.get("source") or "remote"],
+            "rank": rank,
+            "status": payload.get("status") or "active",
+        }
+    )
+    return payload
 
 
 def fold_ascii_case(value: str) -> str:
@@ -374,11 +576,15 @@ def discover_candidates(
 def candidate_metadata(candidate: Candidate) -> dict[str, Any]:
     path = candidate.path
     exists = path.is_file()
+    environment_id = candidate.environment_id or (read_environment_id(path) if exists else None)
     info: dict[str, Any] = {
         "path": str(path),
         "kind": candidate.kind,
         "source": candidate.source,
         "exists": exists,
+        "environment_id": environment_id,
+        "host": candidate.host,
+        "provenance": candidate.provenance,
     }
     if exists:
         stat = path.stat()
@@ -652,13 +858,17 @@ def row_to_match(
         database=str(database.path),
         database_kind=database.kind,
         rank=rank,
+        environment_id=database.environment_id,
+        host=database.host,
+        provenance=database.provenance,
+        scoped_id=scoped_identity(database.environment_id, row["thread_id"]),
     )
 
 
 def merge_matches(matches: Iterable[Match]) -> list[Match]:
-    best: dict[tuple[str, str], Match] = {}
+    best: dict[tuple[str, str, str], Match] = {}
     for match in matches:
-        key = (match.database, match.thread_id)
+        key = (match.environment_id or "", match.database, match.thread_id)
         current = best.get(key)
         if current is None:
             best[key] = match
@@ -1289,6 +1499,10 @@ def show_thread(
             last_assistant_snippet=last_assistant,
             database=str(candidate.path),
             database_kind=candidate.kind,
+            environment_id=candidate.environment_id,
+            host=candidate.host,
+            provenance=candidate.provenance,
+            scoped_id=scoped_identity(candidate.environment_id, row["thread_id"]),
         )
         return detail, warnings
     except sqlite3.Error as error:
@@ -1309,6 +1523,7 @@ def match_to_dict(match: Match) -> dict[str, Any]:
     if not status:
         status.append("active")
     payload["status"] = "+".join(status)
+    payload["scoped_id"] = match.scoped_id or scoped_identity(match.environment_id, match.thread_id)
     return payload
 
 
@@ -1328,14 +1543,29 @@ def format_text_report(report: SearchReport) -> str:
     lines.append(f"mode: {report.mode}")
     if report.query:
         lines.append(f"query: {report.query}")
+    if report.environments:
+        lines.append("environments:")
+        for environment in report.environments:
+            env_id = environment.get("environment_id") or "unknown"
+            status = environment.get("status") or "listed"
+            extra = []
+            if environment.get("host"):
+                extra.append(f"host={environment['host']}")
+            if environment.get("database"):
+                extra.append(environment["database"])
+            suffix = f"  {' '.join(extra)}" if extra else ""
+            lines.append(
+                f"  - {env_id}  {status}  via {environment.get('provenance') or environment.get('source') or '-'}{suffix}"
+            )
     lines.append("databases:")
     for database in report.databases:
-        marker = "searched" if database.get("searched") else ("missing" if not database["exists"] else "listed")
+        marker = "searched" if database.get("searched") else ("missing" if not database.get("exists") else "listed")
         extra = ""
         if database.get("exists"):
             extra = f"  size={database.get('size_bytes')} mtime={database.get('mtime')}"
+        env = f" env={database['environment_id']}" if database.get("environment_id") else ""
         lines.append(
-            f"  - [{database['kind']}] {database['path']} ({marker}, via {database['source']}){extra}"
+            f"  - [{database['kind']}] {database['path']} ({marker}, via {database['source']}){env}{extra}"
         )
     if report.warnings:
         lines.append("warnings:")
@@ -1343,14 +1573,25 @@ def format_text_report(report: SearchReport) -> str:
             lines.append(f"  - {warning}")
     if not report.results:
         lines.append("results: 0")
-        lines.append("No matching threads. Try a shorter query, --include-deleted, or --list-dbs.")
+        if report.not_found_kind == "not_queried":
+            lines.append(NOT_QUERIED_REMOTE_MESSAGE)
+            lines.append(REMOTE_REQUEST_HINT)
+        elif report.not_found_kind == "not_found":
+            lines.append("Not found in the environments searched.")
+        else:
+            lines.append("No matching threads. Try a shorter query, --include-deleted, or --list-dbs.")
         return "\n".join(lines) + "\n"
 
     lines.append(f"results: {len(report.results)}{' (truncated)' if report.truncated else ''}")
     for index, item in enumerate(report.results, start=1):
         lines.append("")
-        title = item["title"] or "(untitled)"
-        lines.append(f"{index}. {item['thread_id']}  {title!r}")
+        title = item.get("title") or "(untitled)"
+        identity = item.get("scoped_id") or item.get("thread_id")
+        lines.append(f"{index}. {identity}  {title!r}")
+        env_line = f"   environment: {item.get('environment_id') or 'unknown'}"
+        if item.get("host"):
+            env_line += f"  host: {item['host']}"
+        lines.append(env_line)
         project = item.get("project_title") or "(no project)"
         workspace = item.get("workspace_root") or ""
         lines.append(f"   project: {project}  {workspace}".rstrip())
@@ -1386,7 +1627,9 @@ def format_text_report(report: SearchReport) -> str:
                     if part
                 )
             )
-        lines.append(f"   db: {item['database_kind']}  {item['database']}")
+        lines.append(
+            f"   provenance: {item.get('provenance') or item.get('database_kind')}  {item.get('database')}"
+        )
     if report.query and len(report.query) < 3:
         lines.append("")
         lines.append("note: short queries become broad %term% LIKE scans and can be slow on large databases.")
@@ -1397,6 +1640,8 @@ def format_text_report(report: SearchReport) -> str:
 
 def format_thread_detail(detail: ThreadDetail) -> str:
     lines = [
+        f"identity: {detail.scoped_id or scoped_identity(detail.environment_id, detail.thread_id)}",
+        f"environment: {detail.environment_id or 'unknown'}",
         f"thread: {detail.thread_id}",
         f"title: {detail.title}",
         f"project: {detail.project_title or '-'}  {detail.workspace_root or ''}".rstrip(),
@@ -1405,7 +1650,8 @@ def format_thread_detail(detail: ThreadDetail) -> str:
         f"status: {format_status(detail)}",
         f"provider: {detail.provider_name or '-'}  instance={detail.provider_instance_id or '-'}  session={detail.provider_session_id or '-'}  thread={detail.provider_thread_id or '-'}",
         f"messages: {detail.message_counts or '{}'}",
-        f"db: {detail.database_kind}  {detail.database}",
+        f"host: {detail.host or '-'}",
+        f"provenance: {detail.provenance}  {detail.database}",
     ]
     if detail.first_user_snippet:
         lines.append(f"first user: {detail.first_user_snippet}")
@@ -1413,6 +1659,60 @@ def format_thread_detail(detail: ThreadDetail) -> str:
         lines.append(f"last assistant: {detail.last_assistant_snippet}")
     lines.append("Full conversation text is intentionally omitted.")
     return "\n".join(lines) + "\n"
+
+
+def bind_candidate(candidate: Candidate) -> Candidate:
+    env_id = candidate.environment_id
+    if env_id is None and candidate.path.is_file():
+        env_id = read_environment_id(candidate.path)
+    return Candidate(
+        path=candidate.path,
+        kind=candidate.kind,
+        source=candidate.source,
+        environment_id=env_id,
+        host=candidate.host,
+        provenance=candidate.provenance,
+    )
+
+
+def run_ssh_search(
+    target: str,
+    *,
+    script_path: Path,
+    remote_argv: list[str],
+    ssh_exec: Callable[[list[str], bytes], Any] | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    argv = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        target,
+        "python3",
+        "-",
+        *remote_argv,
+    ]
+    stdin = script_path.read_bytes()
+    try:
+        if ssh_exec is not None:
+            completed = ssh_exec(argv, stdin)
+        else:
+            completed = subprocess.run(argv, input=stdin, capture_output=True, check=False)
+    except OSError as error:
+        return None, str(error)
+    if getattr(completed, "returncode", 1) != 0:
+        stderr = getattr(completed, "stderr", b"") or b""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        return None, str(stderr).strip() or f"ssh exit {completed.returncode}"
+    stdout = getattr(completed, "stdout", b"") or b""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8")
+    try:
+        return redact_secrets(json.loads(stdout)), None
+    except json.JSONDecodeError as error:
+        return None, f"Remote helper returned invalid JSON: {error}"
 
 
 def run_search(
@@ -1432,18 +1732,71 @@ def run_search(
     thread_id: str | None = None,
     list_dbs: bool = False,
     now: datetime | None = None,
+    environment_id: str | None = None,
+    endpoint: str | None = None,
+    ssh: str | None = None,
+    ssh_base_dir: str | None = None,
+    remote_json: str | None = None,
+    remotes: list[RemoteEnvironment] | None = None,
+    ssh_exec: Callable[[list[str], bytes], Any] | None = None,
+    script_path: Path | None = None,
 ) -> SearchReport:
     if active_only and include_deleted:
         raise UsageError("--active-only already excludes deleted threads; do not combine it with --include-deleted.")
     if limit < 1 or limit > MAX_LIMIT:
         raise UsageError(f"--limit must be between 1 and {MAX_LIMIT}.")
 
+    query_ref = parse_thread_ref(query) if query else None
+    thread_ref = parse_thread_ref(thread_id)
+    if thread_ref is None and query_ref is not None and query is not None and query.strip() == query_ref.raw:
+        thread_ref = query_ref
+    env_filter = environment_id
+    host_from_url = None
+    if thread_ref is not None:
+        if thread_id is None and thread_ref.thread_id:
+            thread_id = thread_ref.thread_id
+        if env_filter is None:
+            env_filter = thread_ref.environment_id
+        host_from_url = thread_ref.host
+        if query is not None and query.strip() == thread_ref.raw:
+            query = None
+
     since_value = parse_when(since, now=now) if since else None
     until_value = parse_when(until, now=now, end_of_day=True) if until else None
-    candidates = discover_candidates(cwd=cwd, home=home, env=env, db=db, base_dir=base_dir)
+    candidates = [bind_candidate(candidate) for candidate in discover_candidates(cwd=cwd, home=home, env=env, db=db, base_dir=base_dir)]
     databases = [candidate_metadata(candidate) for candidate in candidates]
+    environment_records: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    remote_queried = False
+
+    loaded_remotes = list(remotes or [])
+    if remote_json:
+        loaded_remotes.extend(load_remote_json(Path(remote_json)))
 
     if list_dbs:
+        environment_records = [
+            {
+                "environment_id": item.get("environment_id"),
+                "status": "listed" if item.get("exists") else "missing",
+                "provenance": "sqlite",
+                "host": None,
+                "database": item.get("path"),
+                "kind": item.get("kind"),
+            }
+            for item in databases
+        ]
+        for remote in loaded_remotes:
+            environment_records.append(
+                {
+                    "environment_id": remote.environment_id,
+                    "status": remote.status,
+                    "provenance": remote.provenance,
+                    "host": remote.host,
+                    "database": remote.host,
+                    "kind": remote.provenance,
+                    "error": remote.error,
+                }
+            )
         return SearchReport(
             mode="list-dbs",
             query=None,
@@ -1452,10 +1805,32 @@ def run_search(
             warnings=[],
             truncated=False,
             limit=limit,
+            environments=environment_records,
+            remote_queried=bool(loaded_remotes),
         )
 
     existing = [candidate for candidate in candidates if candidate.path.is_file()]
-    if not existing:
+    if env_filter:
+        searchable = [candidate for candidate in existing if candidate.environment_id == env_filter]
+        skipped = [candidate for candidate in existing if candidate.environment_id != env_filter]
+        for candidate in skipped:
+            meta = next(item for item in databases if item["path"] == str(candidate.path))
+            meta["status"] = "not_searched"
+            meta["reason"] = "environment mismatch" if candidate.environment_id else "unidentified environment"
+            environment_records.append(
+                {
+                    "environment_id": candidate.environment_id,
+                    "status": "not_searched",
+                    "provenance": "sqlite",
+                    "host": None,
+                    "database": str(candidate.path),
+                    "kind": candidate.kind,
+                    "note": meta["reason"],
+                }
+            )
+        existing = searchable
+    files_exist = any(candidate.path.is_file() for candidate in candidates)
+    if not existing and not loaded_remotes and not ssh and not endpoint and not files_exist:
         if db or base_dir:
             target = candidates[0].path if candidates else db or base_dir
             raise SearchError(
@@ -1468,43 +1843,37 @@ def run_search(
             "Pass --db PATH or --base-dir PATH. This tool does not recursively scan the home directory."
         )
 
-    if thread_id and not query:
-        details = []
-        warnings: list[str] = []
-        for candidate in existing:
-            try:
-                detail, detail_warnings = show_thread(
-                    candidate, thread_id, include_deleted=include_deleted
-                )
-            except SearchError as error:
-                warnings.append(str(error))
-                continue
-            databases_for = next(item for item in databases if item["path"] == str(candidate.path))
-            databases_for["searched"] = True
-            warnings.extend(detail_warnings)
-            if detail is not None:
-                details.append(asdict(detail) | {"status": format_status(detail)})
-        if not details:
-            raise SearchError(f"Thread {thread_id!r} was not found in the selected database(s).")
-        return SearchReport(
-            mode="thread",
-            query=None,
-            databases=databases,
-            results=details,
-            warnings=warnings,
-            truncated=False,
-            limit=limit,
-        )
-
-    if not query:
-        raise UsageError("Provide a search query, or use --list-dbs / --thread.")
-
-    mode = "ui" if active_only else "recovery"
-    warnings = []
+    lookup_only = bool(thread_id and not query)
+    mode = "thread" if lookup_only else ("ui" if active_only else "recovery")
+    results: list[dict[str, Any]] = []
     matches: list[Match] = []
+
     for candidate in existing:
         db_meta = next(item for item in databases if item["path"] == str(candidate.path))
         try:
+            if lookup_only:
+                detail, detail_warnings = show_thread(
+                    candidate, thread_id, include_deleted=include_deleted
+                )
+                warnings.extend(detail_warnings)
+                db_meta["searched"] = True
+                environment_records.append(
+                    {
+                        "environment_id": candidate.environment_id,
+                        "status": "searched",
+                        "provenance": "sqlite",
+                        "host": None,
+                        "database": str(candidate.path),
+                        "kind": candidate.kind,
+                    }
+                )
+                if detail is not None:
+                    payload = asdict(detail) | {"status": format_status(detail)}
+                    payload["scoped_id"] = detail.scoped_id or scoped_identity(
+                        detail.environment_id, detail.thread_id
+                    )
+                    results.append(payload)
+                continue
             found, db_warnings = search_database(
                 candidate,
                 query,
@@ -1519,31 +1888,179 @@ def run_search(
         except SearchError as error:
             db_meta["error"] = str(error)
             warnings.append(str(error))
+            environment_records.append(
+                {
+                    "environment_id": candidate.environment_id,
+                    "status": "error",
+                    "provenance": "sqlite",
+                    "host": None,
+                    "database": str(candidate.path),
+                    "kind": candidate.kind,
+                    "error": str(error),
+                }
+            )
             continue
         db_meta["searched"] = True
         matches.extend(found)
         warnings.extend(db_warnings)
+        if not lookup_only:
+            environment_records.append(
+                {
+                    "environment_id": candidate.environment_id,
+                    "status": "searched",
+                    "provenance": "sqlite",
+                    "host": None,
+                    "database": str(candidate.path),
+                    "kind": candidate.kind,
+                }
+            )
 
-    if not any(item.get("searched") for item in databases):
+    for remote in loaded_remotes:
+        if env_filter and remote.environment_id and remote.environment_id != env_filter:
+            environment_records.append(
+                {
+                    "environment_id": remote.environment_id,
+                    "status": "not_searched",
+                    "provenance": remote.provenance,
+                    "host": remote.host,
+                    "database": remote.host,
+                    "kind": remote.provenance,
+                    "note": "environment mismatch",
+                }
+            )
+            continue
+        environment_records.append(
+            {
+                "environment_id": remote.environment_id,
+                "status": remote.status,
+                "provenance": remote.provenance,
+                "host": remote.host,
+                "database": remote.host,
+                "kind": remote.provenance,
+                "error": remote.error,
+            }
+        )
+        if remote.status == "disconnected":
+            warnings.append(
+                f"Environment {remote.environment_id or remote.host or 'unknown'} is disconnected."
+            )
+            continue
+        if remote.status != "searched":
+            continue
+        remote_queried = True
+        if lookup_only:
+            remote_details = remote.details or [
+                item for item in remote.matches if (item.get("thread_id") or item.get("threadId")) == thread_id
+            ]
+            for item in remote_details:
+                if (item.get("thread_id") or item.get("threadId")) != thread_id:
+                    continue
+                results.append(remote_match_to_result(remote, item))
+        else:
+            for item in remote.matches:
+                results.append(remote_match_to_result(remote, item))
+
+    if ssh:
+        remote_argv = ["--json"]
+        if lookup_only:
+            remote_argv.extend(["--thread", thread_id or ""])
+        elif query:
+            remote_argv.append(query)
+        if include_deleted:
+            remote_argv.append("--include-deleted")
+        if active_only:
+            remote_argv.append("--active-only")
+        if env_filter:
+            remote_argv.extend(["--environment", env_filter])
+        remote_home = ssh_base_dir or "~/.t3"
+        remote_argv.extend(["--base-dir", remote_home])
+        payload, ssh_error = run_ssh_search(
+            ssh,
+            script_path=script_path or Path(__file__),
+            remote_argv=remote_argv,
+            ssh_exec=ssh_exec,
+        )
+        if ssh_error is not None:
+            environment_records.append(
+                {
+                    "environment_id": env_filter,
+                    "status": "disconnected",
+                    "provenance": "ssh",
+                    "host": ssh,
+                    "database": None,
+                    "kind": "ssh",
+                    "error": ssh_error,
+                }
+            )
+            warnings.append(f"SSH environment {ssh} is disconnected.")
+        else:
+            remote_queried = True
+            environment_records.extend(payload.get("environments") or [])
+            results.extend(payload.get("results") or [])
+            warnings.extend(payload.get("warnings") or [])
+
+    if endpoint:
+        covered = any(
+            record.get("host") == endpoint or record.get("database") == endpoint
+            for record in environment_records
+        )
+        if not covered:
+            environment_records.append(
+                {
+                    "environment_id": env_filter,
+                    "status": "not_queried",
+                    "provenance": "endpoint",
+                    "host": endpoint or host_from_url,
+                    "database": None,
+                    "kind": "endpoint",
+                    "note": "No authenticated T3 RPC results were supplied for this endpoint.",
+                }
+            )
+            warnings.append(
+                f"Endpoint {endpoint} was not queried. Provide --remote-json from an authenticated T3 RPC session, or --ssh with authorization."
+            )
+
+    if not lookup_only:
+        merged = merge_matches(matches)
+        results = [match_to_dict(match) for match in merged] + results
+
+    truncated = len(results) > limit
+    results = results[:limit]
+    if query is not None and len(query) < 3:
+        warnings.append(
+            "Short queries become broad %term% LIKE scans and may be slower on large databases. Indexes are not added."
+        )
+
+    searched_any = any(item.get("searched") for item in databases) or remote_queried
+    if not searched_any and not remote_queried and (db or base_dir) and any(item.get("error") for item in databases):
         raise SearchError(
             "No searchable T3 database among the candidates.\n" + "\n".join(warnings)
         )
 
-    merged = merge_matches(matches)
-    truncated = len(merged) > limit
-    merged = merged[:limit]
-    if len(query) < 3:
-        warnings.append(
-            "Short queries become broad %term% LIKE scans and may be slower on large databases. Indexes are not added."
-        )
+    not_found_kind = None
+    if not results and (lookup_only or thread_id):
+        if remote_queried:
+            not_found_kind = "not_found"
+            warnings.append("Not found in the environments searched.")
+        else:
+            not_found_kind = "not_queried"
+            warnings.append(NOT_QUERIED_REMOTE_MESSAGE)
+            warnings.append(REMOTE_REQUEST_HINT)
+
+    if not lookup_only and query is None and not thread_id:
+        raise UsageError("Provide a search query, or use --list-dbs / --thread.")
+
     return SearchReport(
         mode=mode,
         query=query,
         databases=databases,
-        results=[match_to_dict(match) for match in merged],
+        results=redact_secrets(results),
         warnings=warnings,
         truncated=truncated,
         limit=limit,
+        environments=redact_secrets(environment_records),
+        remote_queried=remote_queried,
+        not_found_kind=not_found_kind,
     )
 
 
@@ -1583,7 +2100,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include deleted threads (labeled). Default recovery search excludes them.",
     )
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help=f"Max results (default {DEFAULT_LIMIT}, max {MAX_LIMIT}).")
-    parser.add_argument("--thread", dest="thread_id", help="Show one thread, or restrict a search to that thread.")
+    parser.add_argument(
+        "--thread",
+        dest="thread_id",
+        help="Thread ID, environmentId/threadId, or a full T3 thread URL.",
+    )
+    parser.add_argument(
+        "--environment",
+        dest="environment_id",
+        help="Restrict to this T3 environmentId. Combined with --thread this is the canonical identity.",
+    )
+    parser.add_argument(
+        "--endpoint",
+        help="Remote T3 HTTP(S) endpoint. Does not scrape credentials; without --remote-json it is recorded as not queried.",
+    )
+    parser.add_argument(
+        "--ssh",
+        help="Explicit SSH target that owns the database. Runs this helper remotely; never copies the remote DB.",
+    )
+    parser.add_argument(
+        "--ssh-base-dir",
+        help="Remote T3 base/home directory for --ssh (default ~/.t3 → userdata/state.sqlite).",
+    )
+    parser.add_argument(
+        "--remote-json",
+        help="Sanitized RPC/search results from connected environments (no tokens). Used to merge federated search.",
+    )
     parser.add_argument("--list-dbs", action="store_true", help="List candidate databases and exit.")
     parser.add_argument("--json", action="store_true", help="Machine-readable JSON on stdout.")
     parser.add_argument("--cwd", help="Directory used for linked-worktree discovery (default: process cwd).")
@@ -1610,6 +2152,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit=args.limit,
             thread_id=args.thread_id,
             list_dbs=args.list_dbs,
+            environment_id=args.environment_id,
+            endpoint=args.endpoint,
+            ssh=args.ssh,
+            ssh_base_dir=args.ssh_base_dir,
+            remote_json=args.remote_json,
         )
     except SearchError as error:
         if args.json:
@@ -1620,7 +2167,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return error.exit_code
 
     if args.json:
-        json.dump(asdict(report), sys.stdout, indent=2, sort_keys=True)
+        json.dump(redact_secrets(asdict(report)), sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
         return 0
 
@@ -1653,6 +2200,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 last_assistant_snippet=item.get("last_assistant_snippet"),
                 database=item["database"],
                 database_kind=item["database_kind"],
+                environment_id=item.get("environment_id"),
+                host=item.get("host"),
+                provenance=item.get("provenance") or "sqlite",
+                scoped_id=item.get("scoped_id"),
             )
             print(format_thread_detail(detail), end="")
         for warning in report.warnings:
