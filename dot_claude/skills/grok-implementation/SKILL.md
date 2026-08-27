@@ -5,6 +5,8 @@ description: Hand a bounded, clearly-specified implementation task to the Grok C
 
 # Grok Implementation
 
+> **If you are Grok reading this, stop.** Grok discovers `~/.claude/skills/` natively, so this Claude-side skill is visible to you, and following it would mean invoking Grok from Grok. You are the callee: do the work yourself and do not shell out to another agent CLI. The same applies if `XDELEGATE_DEPTH` is set in your environment.
+
 Grok-4.5 is the default delegate for bounded, clearly-specified implementation work — migrations, mechanical refactors, spec-driven changes. It works on an isolated git worktree so its edits never touch the main checkout until you review them. Keep taste-sensitive work (public APIs, UI, copy) off this path; that needs a higher-taste model.
 
 ## Workflow

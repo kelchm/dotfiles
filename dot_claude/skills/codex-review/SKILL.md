@@ -27,14 +27,20 @@ REPORT="$ARTIFACT_DIR/report.md"
 PROMPT="$ARTIFACT_DIR/prompt.md"
 
 # Review staged, unstaged, and untracked changes.
-codex -C "$PWD" review --uncommitted - < "$PROMPT" > "$REPORT"
+codex -C "$PWD" exec review --uncommitted > "$REPORT"
 
 # Review current branch against a base branch.
-codex -C "$PWD" review --base main - < "$PROMPT" > "$REPORT"
+codex -C "$PWD" exec review --base main > "$REPORT"
 
 # Review a single commit.
-codex -C "$PWD" review --commit <sha> - < "$PROMPT" > "$REPORT"
+codex -C "$PWD" exec review --commit <sha> > "$REPORT"
+
+# Custom review stance. Name the target in the prompt — target flags and a
+# prompt are mutually exclusive, and passing both exits 2 without running.
+codex -C "$PWD" exec review - < "$PROMPT" > "$REPORT"
 ```
+
+A target flag and `[PROMPT]` cannot be combined: `error: the argument '--base <BRANCH>' cannot be used with '[PROMPT]'`. Pick one. With no target flag, `review` defaults to the uncommitted changes, so say which target you mean inside the prompt when you need a stance.
 
 ## Review Prompt
 
