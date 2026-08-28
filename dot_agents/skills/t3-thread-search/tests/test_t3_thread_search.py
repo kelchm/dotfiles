@@ -5,6 +5,7 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import json
+import shlex
 import sqlite3
 import sys
 import tempfile
@@ -660,7 +661,8 @@ class RemoteEnvironmentTests(unittest.TestCase):
             self.assertEqual(first.results[0]["environment_id"], self.ENV_A)
             self.assertEqual(second.results[0]["environment_id"], self.ENV_B)
             self.assertEqual(first.results[0]["scoped_id"], f"{self.ENV_A}/{self.THREAD}")
-            self.assertEqual(second.results[0]["thread_id"], second.results[0]["thread_id"])
+            self.assertEqual(second.results[0]["thread_id"], self.THREAD)
+            self.assertEqual(second.results[0]["scoped_id"], f"{self.ENV_B}/{self.THREAD}")
             combined = tts.run_search(
                 query=None,
                 cwd=root,
@@ -853,6 +855,36 @@ class RemoteEnvironmentTests(unittest.TestCase):
             )
             self.assertTrue(any(item.get("status") == "disconnected" for item in report.environments))
             self.assertTrue(any("disconnected" in warning for warning in report.warnings))
+
+    def test_ssh_quotes_query_for_remote_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            local = self._db_with_env(root, self.ENV_A, self.THREAD, "Local")
+            captured: dict[str, list[str]] = {}
+
+            def capture_ssh(argv, stdin):
+                captured["argv"] = list(argv)
+                return type("Completed", (), {"returncode": 255, "stdout": b"", "stderr": b"no"})()
+
+            evil = "foo; rm -rf /; $(id)"
+            tts.run_search(
+                query=evil,
+                cwd=root,
+                home=root,
+                env={},
+                db=str(local),
+                ssh="user@remote.example",
+                ssh_exec=capture_ssh,
+            )
+            argv = captured["argv"]
+            self.assertEqual(argv[0], "ssh")
+            self.assertIn("--", argv)
+            self.assertEqual(argv[-2], "user@remote.example")
+            remote_command = argv[-1]
+            expected = " ".join(
+                ["python3", "-", "--json", shlex.quote(evil), "--base-dir", shlex.quote("~/.t3")]
+            )
+            self.assertEqual(remote_command, expected)
 
 
 if __name__ == "__main__":

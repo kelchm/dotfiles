@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -1682,16 +1683,18 @@ def run_ssh_search(
     remote_argv: list[str],
     ssh_exec: Callable[[list[str], bytes], Any] | None,
 ) -> tuple[dict[str, Any] | None, str | None]:
+    # OpenSSH joins the remote command into a string and runs it through the
+    # remote shell. Quote every argument so query/path values cannot inject.
+    remote_command = " ".join(["python3", "-", *(shlex.quote(arg) for arg in remote_argv)])
     argv = [
         "ssh",
         "-o",
         "BatchMode=yes",
         "-o",
         "IdentitiesOnly=yes",
+        "--",
         target,
-        "python3",
-        "-",
-        *remote_argv,
+        remote_command,
     ]
     stdin = script_path.read_bytes()
     try:
