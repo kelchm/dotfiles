@@ -24,8 +24,9 @@ Use the remotes, contribution guidance, and conversation rather than guessing.
   unless the user asked to keep it local or pause for discussion. That often means committing,
   pushing, and opening or updating a PR without making the user request each artifact separately.
 - In someone else's public project, regroup before opening a PR, posting replies, requesting
-  reviewers, or otherwise speaking as the user unless that outward action was already explicit.
-  Bring the user a recommendation and, when useful, a draft.
+  reviewers, or otherwise speaking as the user unless both the outward action and its substance
+  are already clear. When communication is expected but wording matters, bring the user a
+  recommendation and draft to review, then post it once approved.
 - Treat merging and deployment as separate decisions. A proactive PR is not permission to land or
   deploy it.
 - When ownership or the intended stopping point is genuinely unclear, inspect the available
@@ -47,7 +48,8 @@ great specifically because repository ownership and the active scope made target
 the natural next step. It performs that reversible step and reports without ceremony; the same
 initiative could be overreach in someone else's public project.
 
-In an upstream contribution, an agent opened a PR and later posted review replies under the user's
-account. The user responded, "I kind of wish you hadn't" and "do NOT reply for me." The useful
-default was to stop at the reviewed branch and bring back an opinion or draft before changing
-public state.
+In an upstream contribution, an agent posted a review reply under the user's account before showing
+them what it would say. The user responded, "do NOT reply for me." The failure was not that a reply
+would eventually be posted; it was removing the user's chance to review the substance and wording
+of communication made in their name. The useful default was to form an opinion, draft the exact
+reply, let the user review it, and then post it when approved.
