@@ -89,7 +89,18 @@ Cap the findings — long responses can cancel mid-generation. Add task-specific
 
 ## Reporting back
 
-Before relaying a finding, inspect the cited code or diff enough to decide whether it is real. Separate confirmed issues from suggestions you did not verify.
+Before relaying a finding, inspect the cited code or diff enough to decide whether it is real.
+Separate confirmed issues from suggestions you did not verify.
+
+The delegate's report is evidence, not authority. Give the acting agent's own verdict, including
+where it disagrees with the reviewer or prefers a smaller fix. Show the concrete finding and why it
+matters before recommending action; do not hide an unexplained concern behind the delegate's name.
+Agreement between models is not proof.
+
+For example, an independent review correctly found that a recovery command would not inherit the
+volume mounts it needed, so the acting agent replaced the procedure. The same review proposed an
+egress restriction that would not prevent the claimed exfiltration, so the agent rejected that fix
+and documented the boundary the policy actually provided. Useful review retained both judgments.
 
 If the delegate finds nothing, say so clearly and name the target it inspected — don't silently re-run.
 

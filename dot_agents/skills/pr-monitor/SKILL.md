@@ -3,9 +3,8 @@ name: pr-monitor
 description: >
   Monitor an existing pull request's current head for checks and review feedback until it is
   ready, blocked, merged, closed, or the monitoring window ends. Use when the user asks to
-  watch, monitor, wait on, or babysit a PR. A monitoring request neither expands nor revokes
-  authorization: continue already-authorized fixes, replies, and publication while keeping
-  merging and deployment separate.
+  watch, monitor, wait on, or babysit a PR. Monitoring preserves the active work context while
+  keeping merge and deployment separate.
 ---
 
 # PR monitor
@@ -13,20 +12,18 @@ description: >
 Keep a pull request moving toward a terminal state while composing with the work and authorization
 already established in the conversation.
 
-## Preserve the active scope
+## Preserve the active work
 
-Determine what the user has already authorized for this PR. Monitoring grants no new mutation
-permission, but it does not reset an active implementation or publication task to read-only.
+Monitoring grants no new mutation permission, but it does not reset an active implementation or
+publication task to read-only.
 
-- If fixing and publishing this PR are already authorized, address verified feedback, validate the
-  change, publish it, and continue monitoring the new head.
-- If the active scope is review-only or monitoring began as a standalone request, report actionable
-  findings without changing the PR.
-- Reply to or resolve review threads only when that interaction is already authorized.
-- Merging and deployment always remain separate actions unless the user explicitly included them.
+Continue already-agreed implementation and publication through verified fixes and the resulting
+new head. If monitoring began as a standalone or review-only request, report findings without
+silently expanding the task. Use `calibrate-initiative` when the appropriate degree of follow-through
+depends on repository or contribution context, and `review-feedback` to evaluate new comments.
 
-Do not ask again for an action that remains within the established scope. Stop for authorization
-only when a required action is genuinely outside it.
+Do not ask again for an action that remains within the established scope. Replying publicly,
+merging, and deployment remain separate when they were not already part of that scope.
 
 ## Establish a checkpoint
 
@@ -46,9 +43,7 @@ On each check:
 - Consider only checks attached to the current head. Do not let stale successes or failures decide
   readiness.
 - Inspect feedback newer than the checkpoint. Deduplicate repeated findings across reviewers,
-  bots, checks, and existing threads.
-- Verify automated findings against the source, then classify them as actionable, invalid, stale,
-  or duplicate.
+  bots, checks, and existing threads, then form a verdict with `review-feedback`.
 - Act on actionable findings within the active scope. If an update changes the head commit, reset
   head-specific conclusions and continue monitoring that new head.
 - Update the checkpoint and stay quiet when nothing meaningful changed.
