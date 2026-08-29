@@ -4,9 +4,10 @@ description: >
   Find T3 Code threads by title, thread ID, T3 thread URL, environmentId, user or assistant
   message text, project, provider ID, or date. Searches local state.sqlite and can merge
   remote environments. Canonical identity is (environmentId, threadId). Use for recovering
-  archived conversations, looking up UUIDs or https://app.t3.codes/<env>/<thread> URLs,
-  command-palette search, and remote/multi-environment lookup. Use when the user runs
-  /t3-thread-search or /find-t3-thread.
+  archived conversations, looking up UUIDs or T3 thread URLs,
+  command-palette search, remote/multi-environment lookup, and read-only execution status
+  checks such as “status?”, “is it hung?”, or “what is blocking this thread?”. Use when the
+  user runs /t3-thread-search or /find-t3-thread.
 ---
 
 # T3 thread search
@@ -42,6 +43,19 @@ If `python3` is missing, retry with `python`, then `mise -C "$HOME/.agents/skill
 | `--cwd PATH` | Discover worktree-local `.t3` as if started from this directory |
 
 Default search is **recovery**: active + archived, non-deleted, titles, projects, provider IDs, user messages, and all non-streaming assistant messages. `--active-only` is the optional UI-parity mode.
+
+## Thread status and monitoring
+
+For “status?”, “is it hung?”, “what is blocking this thread?”, or finite monitoring requests, use the companion helper:
+
+```bash
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-status" \
+  --thread "<environmentId>/<threadId>"
+```
+
+It reads `projection_threads`, `projection_thread_sessions`, `projection_turns`, and `projection_thread_activities` with the same SQLite `mode=ro` / `PRAGMA query_only=ON` protections. It reports `running/recent`, `awaiting-approval`, `awaiting-input`, `queued`, `completed`, `error`, `interrupted`, `idle/ready`, `idle/stopped`, `stale-suspect`, or `unknown`. A stale result means that no projection activity exceeded the threshold (five minutes by default); it does **not** prove that a provider is hung. Activity summaries are sanitized and payload JSON/full messages are never printed.
+
+Use `--watch-for 10m --interval 15s` only when the user explicitly asks to monitor. Monitoring must be finite (maximum 30 minutes), stop on terminal state or an explicit approval/input blocker, and never auto-approve, retry, kill, restart, or send input. A recent tool/task event is stronger liveness evidence than a session timestamp alone. If the projection tables are missing or inconsistent, report the limitation rather than guessing.
 
 ## Agent flow
 
