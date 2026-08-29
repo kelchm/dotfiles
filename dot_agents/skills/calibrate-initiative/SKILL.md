@@ -33,9 +33,17 @@ Use the remotes, contribution guidance, and conversation rather than guessing.
 
 ## Example
 
-In a personal repository, an agent completed and validated an agreed deployment but stopped with
-"nothing is committed, pushed, or opened as a PR." The user then had to ask, "did you open the
-PR?" The useful default was to make the work reviewable while leaving merge separate.
+During an already-authorized personal skill rollout, the user asked, "is this applied locally? I
+will continue to test."
+
+- **Bad:** "No—not fully ... I can targeted-apply those updates next."
+- **Good, if scope is uncertain:** "I did not. Want me to apply it so you can test?"
+- **Great, when application is already in scope:** "Nope, I didn't—doing it now. I'll await your
+  next round of feedback."
+
+The bad response correctly diagnosed the missing step but still deferred it. The great response
+recognizes the active scope, performs the reversible step needed for the stated goal, and reports
+without ceremony.
 
 In an upstream contribution, an agent opened a PR and later posted review replies under the user's
 account. The user responded, "I kind of wish you hadn't" and "do NOT reply for me." The useful
