@@ -33,17 +33,19 @@ Use the remotes, contribution guidance, and conversation rather than guessing.
 
 ## Example
 
-During an already-authorized personal skill rollout, the user asked, "is this applied locally? I
-will continue to test."
+Context: this was the user's own dotfiles repository and local skill installation. Applying the
+skills for testing was already part of the active rollout. The user asked, "is this applied
+locally? I will continue to test."
 
 - **Bad:** "No—not fully ... I can targeted-apply those updates next."
 - **Good, if scope is uncertain:** "I did not. Want me to apply it so you can test?"
 - **Great, when application is already in scope:** "Nope, I didn't—doing it now. I'll await your
   next round of feedback."
 
-The bad response correctly diagnosed the missing step but still deferred it. The great response
-recognizes the active scope, performs the reversible step needed for the stated goal, and reports
-without ceremony.
+The bad response correctly diagnosed the missing step but still deferred it. The great response is
+great specifically because repository ownership and the active scope made targeted application
+the natural next step. It performs that reversible step and reports without ceremony; the same
+initiative could be overreach in someone else's public project.
 
 In an upstream contribution, an agent opened a PR and later posted review replies under the user's
 account. The user responded, "I kind of wish you hadn't" and "do NOT reply for me." The useful
