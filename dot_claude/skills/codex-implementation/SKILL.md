@@ -2,7 +2,7 @@
 name: codex-implementation
 description: >-
   Hand a bounded, clearly-specified implementation task to the Codex CLI
-  (gpt-5.5) to run on an isolated git worktree — migrations, mechanical
+  (gpt-5.6-sol) to run on an isolated git worktree — migrations, mechanical
   refactors, spec-driven changes. Use when the work is well-defined enough to
   delegate and you want Codex's edits kept off the main checkout until reviewed.
   Not for taste-sensitive or user-facing code.
@@ -10,7 +10,11 @@ description: >-
 
 # Codex Implementation
 
-Use Codex (gpt-5.5) for bounded, clearly-specified implementation work you want done outside your own context. Codex works on an isolated git worktree so its edits never touch the main checkout until you review them. Keep taste-sensitive work (public APIs, UI, copy) off this path.
+Use Codex (gpt-5.6-sol) for bounded, clearly-specified implementation work you want done outside your own context. Codex works on an isolated git worktree so its edits never touch the main checkout until you review them. Keep taste-sensitive work (public APIs, UI, copy) off this path.
+
+## Execution placement
+
+Run the CLI from the persistent main session unless a thin Agent/Workflow wrapper materially helps parallelism. A wrapper should only run Codex and relay its output; label it with the actual model slug. Keep a run expected to finish within ten minutes in one foreground call. Run longer work from the persistent main session rather than backgrounding it inside a subagent, which can orphan the process when the subagent returns.
 
 ## Workflow
 
@@ -27,7 +31,7 @@ ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-impl.XXXXXX")"
 REPORT="$ARTIFACT_DIR/report.md"
 PROMPT="$ARTIFACT_DIR/prompt.md"
 
-codex -C "$WORKTREE" exec -s workspace-write - < "$PROMPT" > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$WORKTREE" exec -m gpt-5.6-sol -s workspace-write - < "$PROMPT" > "$REPORT"
 ```
 
 ## Implementation Prompt

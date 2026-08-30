@@ -9,6 +9,10 @@ description: Hand a bounded, clearly-specified implementation task to the Grok C
 
 Grok-4.5 is the default delegate for bounded, clearly-specified implementation work — migrations, mechanical refactors, spec-driven changes. It works on an isolated git worktree so its edits never touch the main checkout until you review them. Keep taste-sensitive work (public APIs, UI, copy) off this path; that needs a higher-taste model.
 
+## Execution placement
+
+Run the CLI from the persistent main session unless a thin Agent/Workflow wrapper materially helps parallelism. A wrapper should only run Grok and relay its output; label it with the actual model slug. Keep a run expected to finish within ten minutes in one foreground call. Run longer work from the persistent main session rather than backgrounding it inside a subagent, which can orphan the process when the subagent returns.
+
 ## Workflow
 
 1. Define the bounded task: exact scope, files in play, and the acceptance check (build/test/lint that must pass).
@@ -28,8 +32,9 @@ REPORT="$ARTIFACT_DIR/report.json"
 
 git -C "$REPO_ROOT" worktree add --detach "$WORKTREE"
 git -C "$WORKTREE" switch -c "$TASK_BRANCH"
-grok --no-auto-update --cwd "$WORKTREE" -m grok-4.5 --output-format json \
-  --always-approve --prompt-file "$PROMPT" > "$REPORT"
+XDELEGATE_DEPTH=1 grok --no-auto-update --cwd "$WORKTREE" -m grok-4.5 --output-format json \
+  --always-approve --deny "Bash(claude:*)" --deny "Bash(codex:*)" \
+  --prompt-file "$PROMPT" > "$REPORT"
 ```
 
 Create the worktree with **plain `git worktree add`**, give it the generated task branch, then point Grok at it with `--cwd`. Do not use Grok's own `-w` / `--worktree` flag: in headless mode it is silently ignored — no worktree is created, edits land in the real checkout, and nothing is printed to stderr. This mirrors how `codex-implementation` isolates Codex.
@@ -41,6 +46,8 @@ Require Grok to commit every intended change on `$TASK_BRANCH` and report the ex
 Keep the prompt tight and self-contained — Grok doesn't see our conversation:
 
 ```text
+You are the callee in a delegated task. Do not delegate any part of this work to another agent CLI.
+
 Implement <exact change> in this repo.
 
 Scope:

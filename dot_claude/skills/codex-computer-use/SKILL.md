@@ -1,6 +1,6 @@
 ---
 name: codex-computer-use
-description: Ask Codex CLI (gpt-5.5) to run local app verification that needs computer use, browser automation, simulators, screenshots, app launching, or independent runtime inspection. This is how gpt-5.5 is invoked for computer-use work. Use when the user asks Claude to have Codex or gpt-5.5 test a flow, verify UI behavior, inspect a running app, capture screenshots, or report confirmation and feedback about implemented behavior.
+description: Ask Codex CLI (gpt-5.6-sol) to run local app verification that needs computer use, browser automation, simulators, screenshots, app launching, or independent runtime inspection. Use when the user asks Claude to have Codex test a flow, verify UI behavior, inspect a running app, capture screenshots, or report confirmation and feedback about implemented behavior.
 ---
 
 # Codex Computer Use
@@ -8,6 +8,10 @@ description: Ask Codex CLI (gpt-5.5) to run local app verification that needs co
 Use Codex as a separate local verification agent when the task needs real UI interaction, screenshots, simulator/browser/device state, or an independent runtime check outside Claude's current context.
 
 Do not use this for ordinary code reading, typechecking, linting, or tests Claude can run directly. Launching apps, simulators, or browsers to verify the requested work is fine without asking; ask first only if the run could disrupt the user's environment beyond that (closing their apps, changing system settings, acting on real accounts or data).
+
+## Execution placement
+
+Run the CLI from the persistent main session unless a thin Agent/Workflow wrapper materially helps parallelism. A wrapper should only run Codex and relay its output; label it with the actual model slug. Keep a run expected to finish within ten minutes in one foreground call. Run longer work from the persistent main session rather than backgrounding it inside a subagent, which can orphan the process when the subagent returns.
 
 ## Workflow
 
@@ -21,7 +25,7 @@ ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-cu.XXXXXX")"
 REPORT="$ARTIFACT_DIR/report.md"
 PROMPT="$ARTIFACT_DIR/prompt.md"
 
-codex -C "$PWD" exec -s workspace-write - < "$PROMPT" > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$PWD" exec -m gpt-5.6-sol -s workspace-write - < "$PROMPT" > "$REPORT"
 ```
 
 `workspace-write` covers launching local apps, simulators, and browsers. Only widen to `danger-full-access` if a specific run genuinely needs it, and say so first.

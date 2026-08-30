@@ -53,6 +53,13 @@ CREATE TABLE projection_thread_activities (
 """
 
 
+class FrozenDateTime(datetime):
+    @classmethod
+    def now(cls, tz: timezone | None = None) -> FrozenDateTime:
+        fixed = cls(2026, 8, 29, 0, 0, 30, tzinfo=timezone.utc)
+        return fixed.replace(tzinfo=None) if tz is None else fixed.astimezone(tz)
+
+
 class StatusTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -183,6 +190,7 @@ class StatusTests(unittest.TestCase):
 
         with (
             patch.object(status, "resolve_candidates", return_value=([missing_candidate, self.candidate], "t")),
+            patch.object(status, "datetime", FrozenDateTime),
             patch.object(status.time, "monotonic", side_effect=[0.0, 1.0, 20.0]),
             patch.object(status.time, "sleep"),
             redirect_stdout(io.StringIO()) as stdout,
@@ -198,6 +206,7 @@ class StatusTests(unittest.TestCase):
 
         with (
             patch.object(status, "resolve_candidates", return_value=([self.candidate], "t")),
+            patch.object(status, "datetime", FrozenDateTime),
             patch.object(status.time, "monotonic", side_effect=[0.0, 1.0, 20.0]),
             patch.object(status.time, "sleep") as sleep,
             redirect_stdout(io.StringIO()) as stdout,

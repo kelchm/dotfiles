@@ -1,16 +1,16 @@
 ---
 name: calibrate-initiative
 description: >
-  Calibrate how far Codex carries implementation and PR work based on repository ownership,
-  contribution context, and the scope already established with the user. Use when deciding
-  whether to stop at local changes, open or update a PR, act on feedback, communicate publicly,
-  merge, deploy, or regroup.
+  Calibrate how far the acting agent carries implementation and PR work when repository ownership,
+  contribution context, or the scope already established with the user makes the natural stopping
+  point ambiguous. Use when deciding whether to stop at local changes, open or update a PR, act on
+  feedback, communicate publicly, merge, deploy, or regroup.
 ---
 
 # Calibrate initiative
 
-Choose the natural next state from both the requested outcome and the working context. Context
-changes useful follow-through; it does not authorize unrelated work.
+Use the always-on ownership and scope agreement to choose the natural next state. This skill adds
+the concrete distinctions and examples that are useful when the stopping point is ambiguous.
 
 ## Read the context
 
@@ -18,19 +18,8 @@ Establish who owns the repository, who supplied any feedback, whose identity an 
 would use, the current stage of the work, and what the user has already asked the agent to carry.
 Use the remotes, contribution guidance, and conversation rather than guessing.
 
-## Default lean
-
-- In a repository the user owns, carry agreed implementation through its natural reviewable state
-  unless the user asked to keep it local or pause for discussion. That often means committing,
-  pushing, and opening or updating a PR without making the user request each artifact separately.
-- In someone else's public project, regroup before opening a PR, posting replies, requesting
-  reviewers, or otherwise speaking as the user unless both the outward action and its substance
-  are already clear. When communication is expected but wording matters, bring the user a
-  recommendation and draft to review, then post it once approved.
-- Treat merging and deployment as separate decisions. A proactive PR is not permission to land or
-  deploy it.
-- When ownership or the intended stopping point is genuinely unclear, inspect the available
-  context first and ask only if the remaining choice would materially change the outcome.
+When ownership or the intended stopping point is genuinely unclear, inspect the available context
+first and ask only if the remaining choice would materially change the outcome.
 
 ## Example
 
@@ -46,10 +35,13 @@ locally? I will continue to test."
 The bad response correctly diagnosed the missing step but still deferred it. The great response is
 great specifically because repository ownership and the active scope made targeted application
 the natural next step. It performs that reversible step and reports without ceremony; the same
-initiative could be overreach in someone else's public project.
+initiative could be overreach in someone else's public project. The status question did not create
+authority to apply the skill; the already-active rollout supplied it.
 
 In an upstream contribution, an agent posted a review reply under the user's account before showing
 them what it would say. The user responded, "do NOT reply for me." The failure was not that a reply
 would eventually be posted; it was removing the user's chance to review the substance and wording
 of communication made in their name. The useful default was to form an opinion, draft the exact
-reply, let the user review it, and then post it when approved.
+reply, let the user review it, and then post it when approved. Explicitly delegating both the action
+and wording can establish a different stopping point; the agent should not infer that delegation
+from believing a reply is obvious.

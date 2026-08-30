@@ -1,0 +1,8 @@
+# Global instructions
+
+{{ template "shared-agent-working-agreements.md" . }}
+## Delegating to another agent CLI
+
+Grok (`grok`, grok-4.5) and Claude (`claude`) are available locally and already authenticated. Use the `delegate-review` skill for an independent second-pass review and the `delegate-implementation` skill for bounded, well-specified implementation work. Those skills own the verified invocation, sandbox, worktree, and recovery contracts; do not improvise them.
+
+Grok is the default delegate for bulk and mechanical work. Keep taste-sensitive work such as public APIs, UI, and copy off the delegation path.

@@ -18,7 +18,12 @@ supported by the proposed fix. State a concise verdict and why; do not merely re
 
 ## Respond proportionally
 
-- When the feedback exposes an obvious miss, say so plainly and fix it within the active scope.
+Give the verdict first. A request to assess or triage feedback is not by itself a request to change
+code or publish a response. Act on a finding only when the current request or an already-established
+implementation task includes doing so.
+
+- When the feedback exposes an obvious miss, say so plainly and fix it when doing so is within that
+  active implementation scope.
 - When the concern is real but its severity or prescription is inflated, address the narrow issue
   without inheriting the reviewer's scope.
 - When the claim is wrong or stale, explain the evidence and leave the code alone.
