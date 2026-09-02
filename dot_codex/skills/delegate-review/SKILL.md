@@ -24,6 +24,12 @@ REPORT="$ARTIFACT_DIR/report.json"
 
 Artifacts are scratch output and belong in `$TMPDIR`. This is the one place the temp hierarchy is fine — never put a *containment canary* there, because Grok's read-only sandbox leaves it writable.
 
+## Completion contract
+
+Run the delegate from the persistent main session and let the process reach a terminal state. Redirected headless calls can be completely silent for several minutes; silence is not evidence of a hang. Historical successful reviews have taken more than ten minutes, so do not impose a shorter timeout or interrupt a live process merely to regain the turn. Poll the running process and send the user a progress update instead.
+
+Treat the report body, not the process exit code, as the result. Exit 0 is still a failure when the report is empty, is not valid JSON when JSON was requested, or contains a terminal sentinel such as `Execution error`, `max turns reached`, or `error_max_turns`. Preserve the artifact and report the failure directly.
+
 ## The delegate must run outside your sandbox
 
 If `CODEX_SANDBOX` is set, every command you spawn inherits a seatbelt profile, and **no delegate CLI can start inside it**. Grok either refuses to run because its own sandbox cannot initialize (`Operation not permitted`) or cannot write its session state to `~/.grok` (`FS_PERMISSION_DENIED`). Adding writable roots or re-enabling network does not help; there is no configuration that makes nesting work.
@@ -32,20 +38,19 @@ Request escalated permissions for the delegate command, and say why: the delegat
 
 ## Grok
 
-Grok ships a bundled `/review` skill that works headless, takes **no prompt**, and collects the diff itself. It is the closest analogue to `codex exec review`, so don't hand-roll diff materialization.
+Drive Grok directly with a review prompt and let it collect the target diff. Do not invoke Grok's bundled `/review` skill: current versions try to spawn an internal reviewer, which conflicts with the delegation recursion guard. Older successful runs only worked because Grok improvised a second CLI invocation after that spawn was denied.
 
 ```bash
-# --local (uncommitted) | --branch <name> | --pr <number-or-url>
-XDELEGATE_DEPTH=1 grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json \
+# Name the target in $PROMPT: uncommitted changes, <base>...HEAD, a commit, or a PR.
+XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$PWD" -m grok-4.5 --output-format json \
   --always-approve --sandbox read-only \
-  --deny "Edit($PWD/**)" --deny "Write($PWD/**)" -p '/review --local' > "$REPORT"
+  --deny "Edit($PWD/**)" --deny "Write($PWD/**)" \
+  --prompt-file "$PROMPT" > "$REPORT"
 ```
 
-The reply is JSON with the report in `.text`; `/review` also writes a notes file under `$TMPDIR` whose path it prints. PR mode only *stages* a pending GitHub review for the user to submit.
+The reply is JSON with the report in `.text`. `--no-subagents` is required even with `XDELEGATE_DEPTH=1`: the environment marker and prompt govern cooperative behavior, while the CLI flag disables the failure-prone nested-review path in current Grok versions.
 
-When the review needs a specific stance, `/review` can't take one — drive Grok directly with `--prompt-file "$PROMPT"` instead of `-p '/review ...'`, naming the target in the prompt and letting Grok collect the diff itself.
-
-Keep the denies scoped to the repo. A blanket `Write(**)` blocks `/review` from writing its own notes file and breaks the run, and denying `Bash` removes the shell it needs to read the diff. Do **not** reach for `--tools` / `--disallowed-tools`: one unrecognized name silently restores the entire toolset with exit 0 and no warning. `--deny` fails closed with a hard error instead.
+Keep the denies scoped to the repo. Denying `Bash` removes the shell Grok needs to inspect the target. Do **not** reach for `--tools` / `--disallowed-tools`: one unrecognized name silently restores the entire toolset with exit 0 and no warning. `--deny` fails closed with a hard error instead.
 
 Grok's `--sandbox read-only` is not equivalent to `codex -s read-only` — it leaves `/tmp`, `/var/tmp`, `/var/folders` and `~/.grok` writable and can go unenforced on unsupported kernels. Treat it as defense-in-depth; the `--deny` rules carry the guarantee.
 
@@ -55,6 +60,7 @@ Claude has no review subcommand. Give it a review-stance prompt under an explici
 
 ```bash
 XDELEGATE_DEPTH=1 claude -p --no-session-persistence --model fable \
+  --safe-mode --strict-mcp-config \
   --permission-mode manual \
   --disallowed-tools Edit Write NotebookEdit Task \
   --allowed-tools "Read" "Grep" "Glob" "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" \
@@ -62,6 +68,10 @@ XDELEGATE_DEPTH=1 claude -p --no-session-persistence --model fable \
 ```
 
 Claude has no target-directory flag — it inherits the process working directory, so run it with the cwd already set to the repo.
+
+`--safe-mode --strict-mcp-config` prevents unrelated user/project hooks, plugins, MCP servers, skills, and settings from entering the delegated run. The callee declaration therefore must remain in the prompt; safe mode deliberately disables discovery of the global recursion rule.
+
+Claude's Bash allow-list matches the command prefix literally. Tell the reviewer to use plain `git status`, `git diff`, `git log`, and `git show` forms, without `git -C` or `git --no-pager` before the verb; those prefixed forms require approval and cannot proceed non-interactively.
 
 `--permission-mode manual` plus the allow-list is the guard: anything outside the list needs an approval that non-interactive mode can never grant, so it fails closed without hanging. Verified: `git` reads succeed while the edit tool, shell redirection, a python interpreter, a subagent, and writes outside the repo are all blocked. Do not substitute `--permission-mode plan` — it restricts writes only behaviorally, leaving the shell in place.
 
@@ -75,6 +85,8 @@ For a machine-readable report add `--output-format json --json-schema '<schema>'
 You are the callee in a delegated task. Do not delegate any part of this work to another agent CLI.
 
 Review <target> for bugs, regressions, missing tests, security issues, and requirement mismatches.
+
+For repository inspection, use only plain git status, git diff, git log, and git show forms. Do not prefix them with git -C or git --no-pager.
 
 Prioritize findings over summary. For each finding include:
 - severity

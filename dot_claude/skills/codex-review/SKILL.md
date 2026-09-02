@@ -14,7 +14,7 @@ Codex (gpt-5.6-sol) is an independent reviewer. Reach for it when the user wants
 
 ## Execution placement
 
-Run the CLI from the persistent main session unless a thin Agent/Workflow wrapper materially helps parallelism. A wrapper should only run Codex and relay its output; label it with the actual model slug. Keep a run expected to finish within ten minutes in one foreground call. Run longer work from the persistent main session rather than backgrounding it inside a subagent, which can orphan the process when the subagent returns.
+Run the CLI from the persistent main session and let it reach a terminal state. Redirected calls can be silent for several minutes; poll the process and update the user rather than interrupting it. Historical successful cross-harness reviews have taken more than ten minutes, so silence is not evidence of a hang. Treat an empty report or terminal sentinel such as `Execution error`, `max turns reached`, or `error_max_turns` as failure even when the CLI exits 0.
 
 ## Workflow
 
@@ -31,26 +31,28 @@ REPORT="$ARTIFACT_DIR/report.md"
 PROMPT="$ARTIFACT_DIR/prompt.md"
 
 # Review staged, unstaged, and untracked changes.
-XDELEGATE_DEPTH=1 codex -C "$PWD" exec review -m gpt-5.6-sol --uncommitted < /dev/null > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-5.6-sol --uncommitted < /dev/null > "$REPORT"
 
 # Review current branch against a base branch.
-XDELEGATE_DEPTH=1 codex -C "$PWD" exec review -m gpt-5.6-sol --base main < /dev/null > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-5.6-sol --base main < /dev/null > "$REPORT"
 
 # Review a single commit.
-XDELEGATE_DEPTH=1 codex -C "$PWD" exec review -m gpt-5.6-sol --commit <sha> < /dev/null > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-5.6-sol --commit <sha> < /dev/null > "$REPORT"
 
 # Custom review stance. Name the target in the prompt — target flags and a
 # prompt are mutually exclusive, and passing both exits 2 without running.
-XDELEGATE_DEPTH=1 codex -C "$PWD" exec review -m gpt-5.6-sol - < "$PROMPT" > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-5.6-sol - < "$PROMPT" > "$REPORT"
 ```
 
-A target flag and `[PROMPT]` cannot be combined: `error: the argument '--base <BRANCH>' cannot be used with '[PROMPT]'`. Pick one. With no target flag, `review` defaults to the uncommitted changes, so say which target you mean inside the prompt when you need a stance.
+A target flag and `[PROMPT]` cannot be combined: `error: the argument '--base <BRANCH>' cannot be used with '[PROMPT]'`. Pick one. With no target flag, `review` defaults to the uncommitted changes, so say which target you mean inside the prompt when you need a stance. Flag-only reviews rely on `XDELEGATE_DEPTH=1` plus the global recursion rule because they cannot also carry a custom callee prompt.
 
 ## Review Prompt
 
 Ask Codex to use a code-review stance:
 
 ```text
+You are the callee in a delegated task. Do not delegate any part of this work to another agent CLI.
+
 Review these changes for bugs, regressions, missing tests, security issues, and requirement mismatches.
 
 Prioritize findings over summary. For each finding include:

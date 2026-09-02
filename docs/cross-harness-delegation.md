@@ -4,7 +4,7 @@ Claude, Codex, and Grok can each hand bounded review or implementation work to t
 
 ## Verified capability matrix
 
-Recorded 2026-08-23 on macOS 25.5.0 (darwin), against **claude 2.1.228**, **codex-cli 0.148.0**, **grok 1.0.3 (1a29d5bc12d4)**. Re-check on a new major version of any CLI, and on a new platform — one macOS run is not a cross-platform claim.
+Originally recorded 2026-08-23 on macOS 25.5.0 (darwin), against **claude 2.1.228**, **codex-cli 0.148.0**, and **grok 1.0.3 (1a29d5bc12d4)**. The repaired six-cell matrix was run 2026-09-01 against **claude 2.1.257**, **codex-cli 0.152.0**, and **grok 1.0.13 (5e9a58528b76)**. Re-check after a relevant CLI update and on a new platform; one macOS run is not a cross-platform claim.
 
 **Not every cell here is canaried.** Cells with a filesystem or CLI transcript behind them, in the next section: Claude's prompt delivery, target directory, guard, and fail-closed behavior; Claude structured output; Grok's `--deny` fail-closed behavior; skill discovery for all three; Codex's `-C`, review subcommand, and env markers. Everything else — Codex `-s read-only` coverage, Codex stdin-close, Grok `--tools` fail-open, Grok `-w` being ignored headless, worktree isolation — is **inherited from prior verification or from the flag's own help output**, and is marked as such where it matters. Treat the two groups differently.
 
@@ -14,8 +14,9 @@ Recorded 2026-08-23 on macOS 25.5.0 (darwin), against **claude 2.1.228**, **code
 | Target directory | **no flag — inherits the process cwd** | `-C` / `--cd <DIR>` | `--cwd <DIR>` |
 | Read-only guard | `--permission-mode manual` + explicit `--allowed-tools` allow-list + `--disallowed-tools Edit Write NotebookEdit Task` | `-s read-only` (holds everywhere, including `/tmp`) | `--sandbox read-only` **plus** repo-scoped `--deny "Edit($PWD/**)" --deny "Write($PWD/**)"` — the sandbox alone leaves `/tmp`, `/var/tmp`, `/var/folders` and `~/.grok` writable |
 | Write + isolation | plain `git worktree add --detach` + run with cwd set to the worktree | plain `git worktree add --detach` + `-C "$WORKTREE"` | plain `git worktree add --detach` + `--cwd "$WORKTREE"` |
+| Integration ownership | callee leaves reviewed changes uncommitted; caller commits after validation | callee leaves reviewed changes uncommitted; caller commits after validation | callee leaves reviewed changes uncommitted; caller commits after validation |
 | Structured output | `--output-format json --json-schema '<schema>'` → validated object at `.structured_output` | `--output-schema FILE`; `--json` for JSONL events | `--json-schema '<schema>'` (implies `--output-format json`) → reply in `.text` |
-| Review entry point | none — no review subcommand; use a review-stance prompt under the guard | `codex exec review` with `--uncommitted` / `--base <branch>` / `--commit <sha>`, **or** custom instructions on stdin — never both | bundled `/review` skill: `--local` / `--branch <name>` / `--pr <n>`; takes **no** prompt and collects the diff itself |
+| Review entry point | none — use a review-stance prompt under the guard and disable customizations/MCP discovery | `codex exec review` with `--uncommitted` / `--base <branch>` / `--commit <sha>`, **or** custom instructions on stdin — never both | direct review-stance prompt with `--no-subagents`; do not use bundled `/review` for delegation |
 | Guard failure mode | **fails closed** — an unrecognized allow-list rule leaves writes blocked | fails closed | `--deny` / `--allow` **fail closed loudly** (unknown prefix → exit 1, no model call); `--tools` / `--disallowed-tools` **fail open silently** — never use them as a guard |
 
 ### Config discovery
@@ -30,6 +31,20 @@ Recorded 2026-08-23 on macOS 25.5.0 (darwin), against **claude 2.1.228**, **code
 | repo-scoped `.grok/config.toml` | no | no | **no — not read; `[skills]` must live in `~/.grok/config.toml`** |
 
 The two asymmetries that drive the whole design: **Grok natively discovers `~/.claude/skills/` and `~/.claude/CLAUDE.md`**, while **Codex reads neither** and only ever loads `$CODEX_HOME/skills`.
+
+### Live six-cell matrix
+
+`docs/verify-cross-harness-delegation.sh` runs billable live canaries for review and implementation through Claude, Codex, and Grok. Every cell gets its own Git repository under `$HOME`, review cells must identify a seeded division-by-zero regression without changing the fixture repository, and implementation cells must make exactly one requested file change, run a real acceptance command, and leave Git history untouched. Reports must be non-empty, Grok validation reads the report from JSON `.text`, exact completion tokens must be present, and semantic terminal sentinels are failures even when the process exits 0.
+
+The 2026-09-01 run passed all six cells. It also caught and corrected an invalid implementation assumption before the passing run: Claude `acceptEdits` and Codex `workspace-write` both allow the requested file edit but block unattended Git metadata writes. The safe common contract is therefore callee-owned edits and tests followed by caller-owned review and commit, rather than widening the delegate to an unrestricted mode just to let it commit.
+
+```bash
+./docs/verify-cross-harness-delegation.sh
+```
+
+Each cell has a 20-minute ceiling. That is a failure bound, not a suggestion to interrupt a quiet process: historical successful redirected calls took 6–11 minutes with no output. Poll a live process and communicate progress instead. Validate report content after completion because both Claude and Grok have emitted semantic failures with exit 0.
+
+The script requires authenticated `claude`, `codex`, and `grok` CLIs, `jq`, and either GNU `timeout` or `gtimeout` from coreutils. It fails before launching billable work when a prerequisite is missing, preserves artifacts on a failed cell or signal, and terminates active timeout-wrapped child processes on HUP, INT, or TERM.
 
 ## Canaries
 
@@ -125,9 +140,9 @@ grok --no-auto-update --cwd "$PWD" -m grok-4.5 --sandbox read-only --deny "NotAR
 
 Result: `Error: unknown tool prefix: NotARealPrefix`, non-zero exit, no model call.
 
-### Grok review guard: holds in the repo, not in `~/.grok`
+### Legacy Grok `/review` guard canary: holds in the repo, not in `~/.grok`
 
-Run under the exact shipped review command (`--always-approve --sandbox read-only --deny "Edit($PWD/**)" --deny "Write($PWD/**)"`), against four write vectors:
+This historical canary used the formerly shipped `/review` command with `--always-approve --sandbox read-only --deny "Edit($PWD/**)" --deny "Write($PWD/**)"`. The guard findings still describe Grok's permission boundary, but delegated reviews no longer use `/review` because its nested reviewer conflicts with the recursion guard.
 
 | vector | result |
 |---|---|
@@ -165,7 +180,7 @@ Three layers, in decreasing order of strength:
 
 1. **Mechanical, Grok side.** `[skills] ignore` in `~/.grok/config.toml` removes the looping skills from Grok's view entirely. Verified with `grok inspect`: skill count drops 28 → 26 and both `grok-*` entries disappear. Repo-scoped `.grok/config.toml` does **not** work — the key must be user-level. Two known gaps: it lists paths, so a *newly added* `grok-*` skill is not covered until the list is updated, and Grok still loads `~/.claude/CLAUDE.md`, which documents the Grok invocation directly. Layer 3 is what covers both.
 2. **Mechanical, Claude side.** `--disallowed-tools "Bash(claude:*)" "Bash(grok:*)" "Bash(codex:*)"` holds even under `--permission-mode acceptEdits`; the callee reported both delegate commands as permission-denied and did not route around them.
-3. **Prompt-level, every side.** Callers state `You are the callee in a delegated task. Do not delegate any part of this work to another agent CLI.` in the prompt file, and export `XDELEGATE_DEPTH=1`. The marker propagates into the child process — a Codex callee reads it back as `1` — and `~/.codex/AGENTS.md` carries the standing rule to honour it.
+3. **Prompt-level, every custom-prompt path.** Callers state `You are the callee in a delegated task. Do not delegate any part of this work to another agent CLI.` in the prompt file, and export `XDELEGATE_DEPTH=1`. Codex review target flags cannot be combined with a custom prompt, so those flag-only paths rely on the environment marker plus `~/.codex/AGENTS.md`. The marker propagates into the child process — a Codex callee reads it back as `1` — and the global file carries the standing rule to honour it.
 
 Grok's own `--deny` is **not** sufficient here and must not be relied on: `--deny "Bash(grok:*)"` matches the command string, so a callee reached the binary anyway via `/opt/homebrew/bin/grok`. Layer 1 is what actually carries the guarantee on the Grok side.
 
@@ -196,4 +211,4 @@ So the delegate invocation must be escalated to run outside the caller's sandbox
 
 Codex exports `CODEX_SANDBOX=seatbelt` and `CODEX_SANDBOX_NETWORK_DISABLED=1` into every sandboxed command, so a skill can detect the situation and explain it rather than failing opaquely.
 
-End-to-end verification, 2026-08-23: a Codex session asked for an independent review of an uncommitted change, auto-invoked `delegate-review`, ran Grok read-only, and relayed a real `ZeroDivisionError` in `average([])` — separating the confirmed bug from an unverified style suggestion. `git status` afterwards showed the review had written nothing.
+Historical end-to-end verification, 2026-08-23: a Codex session asked for an independent review of an uncommitted change, auto-invoked `delegate-review`, ran Grok read-only, and relayed a real `ZeroDivisionError` in `average([])` — separating the confirmed bug from an unverified style suggestion. `git status` afterwards showed the review had written nothing. That run used the now-superseded `/review` path; the current direct-prompt path is covered by the live six-cell matrix above.
