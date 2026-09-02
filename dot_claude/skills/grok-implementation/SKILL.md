@@ -11,7 +11,7 @@ Grok-4.5 is the default delegate for bounded, clearly-specified implementation w
 
 ## Execution placement
 
-Run the CLI from the persistent main session unless a thin Agent/Workflow wrapper materially helps parallelism. A wrapper should only run Grok and relay its output; label it with the actual model slug. Keep a run expected to finish within ten minutes in one foreground call. Run longer work from the persistent main session rather than backgrounding it inside a subagent, which can orphan the process when the subagent returns.
+Run the CLI from the persistent main session and let it reach a terminal state. Redirected calls can be silent for several minutes; poll the process and update the user rather than interrupting it. Treat an empty or invalid JSON report, `Execution error`, `max turns reached`, or `error_max_turns` as failure even when the CLI exits 0. Success also requires the intended worktree diff and acceptance checks; Grok is not responsible for committing.
 
 ## Workflow
 
@@ -19,7 +19,7 @@ Run the CLI from the persistent main session unless a thin Agent/Workflow wrappe
 2. Create a git worktree so Grok can't disturb the main checkout.
 3. Create a temporary artifact directory for the prompt and Grok's report.
 4. Run Grok against the worktree with a self-contained prompt.
-5. Read Grok's report, review its task commit, and integrate the accepted commit before removing the worktree.
+5. Read Grok's report, review the worktree diff, then create and integrate the task commit yourself before removing the worktree.
 
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -32,14 +32,14 @@ REPORT="$ARTIFACT_DIR/report.json"
 
 git -C "$REPO_ROOT" worktree add --detach "$WORKTREE"
 git -C "$WORKTREE" switch -c "$TASK_BRANCH"
-XDELEGATE_DEPTH=1 grok --no-auto-update --cwd "$WORKTREE" -m grok-4.5 --output-format json \
+XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$WORKTREE" -m grok-4.5 --output-format json \
   --always-approve --deny "Bash(claude:*)" --deny "Bash(codex:*)" \
   --prompt-file "$PROMPT" > "$REPORT"
 ```
 
 Create the worktree with **plain `git worktree add`**, give it the generated task branch, then point Grok at it with `--cwd`. Do not use Grok's own `-w` / `--worktree` flag: in headless mode it is silently ignored — no worktree is created, edits land in the real checkout, and nothing is printed to stderr. This mirrors how `codex-implementation` isolates Codex.
 
-Require Grok to commit every intended change on `$TASK_BRANCH` and report the exact SHA. Verify the worktree is clean, review that commit, and merge or cherry-pick it into the target checkout. Only after integration succeeds clean up with `git -C "$REPO_ROOT" worktree remove "$WORKTREE" && rmdir "$WORKTREE_PARENT"`; the task branch remains as a recovery point until you deliberately delete it. If Grok cannot create the commit, leave the worktree in place and export a complete patch before deciding how to recover.
+Require Grok to leave the intended changes uncommitted. Verify every changed file, rerun the acceptance check, then stage only the accepted files and create the task commit yourself. Integrate that verified commit into the target checkout before cleanup. The caller-owned commit contract also works for Claude `acceptEdits` and Codex `workspace-write`, neither of which permits unattended Git metadata writes. If integration fails, leave the worktree in place and export a complete patch before deciding how to recover.
 
 ## Implementation Prompt
 
@@ -56,8 +56,7 @@ Scope:
 
 When done:
 - run <build/test/lint> and make it pass
-- commit every intended change on the existing task branch
-- report the exact commit SHA; do not remove the worktree
+- leave the intended changes uncommitted for the caller to review
 - summarize what you changed and why, and flag anything you were unsure about
 
 Do not touch anything outside the stated scope.
@@ -71,7 +70,7 @@ Give each one its own worktree, or their edits collide. One `git worktree add` p
 
 ## Reporting Back
 
-Review the reported task commit yourself before merging — Grok is capable, but this path is autonomous and runs with `--always-approve`. Confirm the report's SHA exists, the worktree is clean, and the commit contains every intended file before integrating it. Summarize what actually changed, call out anything risky, and run the acceptance check in the main checkout after merge.
+Review the worktree diff yourself before merging — Grok is capable, but this path is autonomous and runs with `--always-approve`. Confirm every changed file is intended, rerun the acceptance check, create the task commit yourself, and integrate only that verified commit. Summarize what actually changed, call out anything risky, and run the acceptance check in the main checkout after merge.
 
 If Grok's changes miss the bar, redo the work with a higher-taste model rather than polishing its output.
 

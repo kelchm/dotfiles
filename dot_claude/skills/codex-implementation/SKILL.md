@@ -14,7 +14,7 @@ Use Codex (gpt-5.6-sol) for bounded, clearly-specified implementation work you w
 
 ## Execution placement
 
-Run the CLI from the persistent main session unless a thin Agent/Workflow wrapper materially helps parallelism. A wrapper should only run Codex and relay its output; label it with the actual model slug. Keep a run expected to finish within ten minutes in one foreground call. Run longer work from the persistent main session rather than backgrounding it inside a subagent, which can orphan the process when the subagent returns.
+Run the CLI from the persistent main session and let it reach a terminal state. Redirected calls can be silent for several minutes; poll the process and update the user rather than interrupting it. Treat an empty report or terminal sentinel such as `Execution error`, `max turns reached`, or `error_max_turns` as failure even when the CLI exits 0. Success requires the intended worktree diff and acceptance checks; Codex is not responsible for committing because `workspace-write` deliberately keeps Git metadata read-only.
 
 ## Workflow
 
@@ -22,15 +22,19 @@ Run the CLI from the persistent main session unless a thin Agent/Workflow wrappe
 2. Create a git worktree so Codex can't disturb the main checkout.
 3. Create a temporary artifact directory for the prompt and Codex's report.
 4. Run `codex exec` (workspace-write) against the worktree with a self-contained prompt.
-5. Read Codex's report, then review the worktree diff before merging anything.
+5. Read Codex's report, review the worktree diff, then create and integrate the task commit yourself before removing the worktree.
 
 ```bash
-git -C "$PWD" worktree add --detach ../codex-task
-WORKTREE="../codex-task"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+WORKTREE_PARENT="$(mktemp -d "$(dirname "$REPO_ROOT")/codex-task.XXXXXX")"
+WORKTREE="$WORKTREE_PARENT/worktree"
+TASK_BRANCH="codex/$(basename "$WORKTREE_PARENT")"
 ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-impl.XXXXXX")"
 REPORT="$ARTIFACT_DIR/report.md"
 PROMPT="$ARTIFACT_DIR/prompt.md"
 
+git -C "$REPO_ROOT" worktree add --detach "$WORKTREE"
+git -C "$WORKTREE" switch -c "$TASK_BRANCH"
 XDELEGATE_DEPTH=1 codex -C "$WORKTREE" exec -m gpt-5.6-sol -s workspace-write - < "$PROMPT" > "$REPORT"
 ```
 
@@ -39,6 +43,8 @@ XDELEGATE_DEPTH=1 codex -C "$WORKTREE" exec -m gpt-5.6-sol -s workspace-write - 
 Keep the prompt tight and self-contained — Codex doesn't see our conversation:
 
 ```text
+You are the callee in a delegated task. Do not delegate any part of this work to another agent CLI.
+
 Implement <exact change> in this repo.
 
 Scope:
@@ -47,6 +53,7 @@ Scope:
 
 When done:
 - run <build/test/lint> and make it pass
+- leave the intended changes uncommitted for the caller to review
 - summarize what you changed and why, and flag anything you were unsure about
 
 Do not touch anything outside the stated scope.
@@ -54,7 +61,9 @@ Do not touch anything outside the stated scope.
 
 ## Reporting Back
 
-Review the worktree diff yourself before merging — Codex is capable, but this path is autonomous. Summarize what actually changed, call out anything risky, and run the acceptance check in the main checkout after merge.
+Review the worktree diff yourself before merging — Codex is capable, but this path is autonomous. Confirm every changed file is intended, rerun the acceptance check, then stage only those files and create the task commit yourself. Integrate that verified commit, summarize what actually changed, call out anything risky, and run the acceptance check in the main checkout after merge.
+
+Only after integration succeeds, clean up with `git -C "$REPO_ROOT" worktree remove "$WORKTREE" && rmdir "$WORKTREE_PARENT"`. The task branch remains as a recovery point until you deliberately delete it. If integration fails, leave the worktree in place and export a complete patch before deciding how to recover.
 
 If Codex's changes miss the bar, redo the work with a higher-taste model rather than polishing its output.
 
