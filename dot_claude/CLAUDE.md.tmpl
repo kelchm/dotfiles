@@ -1,0 +1,58 @@
+# Personal Preferences
+
+{{ template "shared-agent-working-agreements.md" . }}
+## Commands
+
+- Don't start dev server commands such as `pnpm run dev`; assume the server is already running unless instructed otherwise.
+- Run read-only checks freely: lint, format, type-check, tests, and `git diff`.
+
+## Tooling
+
+- Lean toward declarative, project-scoped, version-pinned configs over global machine state.
+- Default to `mise` (`mise.toml`) for runtimes and tooling where it fits; pin versions rather than installing globally.
+- On macOS, prefer mise's `aqua` backend when possible; `brew` is the fallback when mise/aqua cannot provide the tool.
+
+## Code style
+
+- Strive for concise, simple solutions. Propose a simpler solution when one is available.
+- If asked to do too much at once, stop and state that clearly.
+
+## Language-specific guidance
+
+### Markdown
+
+- Don't hard-wrap prose. Write each paragraph and list item as one unbroken line and let the renderer soft-wrap.
+
+### TypeScript
+
+- Never use `any` unless necessary or specifically instructed.
+- Use `pnpm` or `bun`, never `npm`.
+
+## Picking models for workflows and subagents
+
+Rankings are relative; higher is better. Cost reflects the user's actual cost rather than list price. Intelligence is how hard a problem the model can handle unsupervised. Taste covers code quality, UI/UX, API design, and copy.
+
+| model         | cost | intelligence | taste |
+|---------------|------|--------------|-------|
+| grok-4.5      | 9    | 8            | 6     |
+| sonnet-5      | 5    | 5            | 7     |
+| opus-4.8      | 4    | 7            | 8     |
+| fable-5       | 2    | 9            | 9     |
+| gpt-5.6-sol   | 6    | 7            | 6     |
+| gpt-5.6-terra | 7    | 5            | 5     |
+| gpt-5.6-luna  | 8    | 4            | 4     |
+
+### Model-selection guidance
+
+- These are defaults, not limits. If a cheaper model's output misses the bar, rerun or redo the work with a smarter model without asking. Judge the output, not the price tag.
+- Cost is a tie-breaker only; when axes conflict for anything that ships, intelligence > taste > cost.
+- Grok-4.5 is the default for clear-spec implementation, migrations, mechanical refactors, and bulk analysis. Fall back to gpt-5.6-sol or a Claude model when Grok is not a fit.
+- Anything user-facing, including UI, API design, and copy, needs taste of at least 7.
+- Prefer fable-5, grok-4.5, or gpt-5.6-sol for reviews of plans and implementations.
+- Prefer a different model, ideally from a different vendor, than the implementer for consequential adversarial review. Same-model review is fine for quick sanity checks.
+- Never use Haiku.
+
+### Delegation routes
+
+- Claude models (`sonnet-5`, `opus-4.8`, and `fable-5`) run through the Agent/Workflow model parameter.
+- Grok and Codex models run through their headless CLIs. Use the matching review, implementation, or computer-use skill; those skills own the exact invocation, execution placement, sandbox, worktree, prompt, reporting, and recovery mechanics. Do not duplicate or improvise those contracts here.

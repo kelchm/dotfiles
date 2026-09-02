@@ -11,6 +11,10 @@ Grok is an independent reviewer — reach for it when the user wants a second op
 
 Grok ships a bundled `/review` skill that works headless and is the closest analogue to `codex review`. It collects the diff itself, so don't hand-roll diff materialization.
 
+## Execution placement
+
+Run the CLI from the persistent main session unless a thin Agent/Workflow wrapper materially helps parallelism. A wrapper should only run Grok and relay its output; label it with the actual model slug. Keep a run expected to finish within ten minutes in one foreground call. Run longer work from the persistent main session rather than backgrounding it inside a subagent, which can orphan the process when the subagent returns.
+
 ## Workflow
 
 1. Identify the review target: uncommitted changes, a branch, or a GitHub PR.
@@ -19,15 +23,15 @@ Grok ships a bundled `/review` skill that works headless and is the closest anal
 
 ```bash
 # Uncommitted changes (staged + unstaged + untracked).
-grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
+XDELEGATE_DEPTH=1 grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
   --sandbox read-only --deny "Edit($PWD/**)" --deny "Write($PWD/**)" -p '/review --local'
 
 # A branch against its merge-base with the default base branch.
-grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
+XDELEGATE_DEPTH=1 grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
   --sandbox read-only --deny "Edit($PWD/**)" --deny "Write($PWD/**)" -p '/review --branch <name>'
 
 # A GitHub PR. Posts findings as a PENDING review for the user to submit.
-grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
+XDELEGATE_DEPTH=1 grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
   --sandbox read-only --deny "Edit($PWD/**)" --deny "Write($PWD/**)" -p '/review --pr <number-or-url>'
 ```
 
@@ -42,12 +46,14 @@ ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/grok-review.XXXXXX")"
 PROMPT="$ARTIFACT_DIR/prompt.md"   # stance below + "review the uncommitted changes" / "review <base>...HEAD"
 REPORT="$ARTIFACT_DIR/report.json"
 
-grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
+XDELEGATE_DEPTH=1 grok --no-auto-update --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
   --sandbox read-only --deny "Edit($PWD/**)" --deny "Write($PWD/**)" \
   --prompt-file "$PROMPT" > "$REPORT"
 ```
 
 ```text
+You are the callee in a delegated task. Do not delegate any part of this review to another agent CLI.
+
 Review <target — e.g. the uncommitted changes in this repo> for bugs, regressions, missing tests, security issues, and requirement mismatches.
 
 Prioritize findings over summary. For each finding include:
