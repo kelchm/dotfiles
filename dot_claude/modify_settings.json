@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Merge the RTK PreToolUse adapter into ~/.claude/settings.json without taking over the file."""
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+ADAPTER = os.path.expanduser("~/.local/bin/rtk-pretooluse")
+HOOK_ENTRY = {
+    "matcher": "Bash",
+    "hooks": [{"type": "command", "command": ADAPTER}],
+}
+
+
+def _is_rtk_entry(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    for hook in entry.get("hooks") or []:
+        if not isinstance(hook, dict):
+            continue
+        command = hook.get("command")
+        if not isinstance(command, str):
+            continue
+        if "rtk hook claude" in command or command.endswith("rtk-pretooluse") or command == ADAPTER:
+            return True
+    return False
+
+
+def main() -> int:
+    raw = sys.stdin.read()
+    if not raw.strip():
+        data = {}
+        original = None
+    else:
+        original = raw
+        data = json.loads(raw)
+
+    hooks = data.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        hooks = {}
+        data["hooks"] = hooks
+    pre = hooks.get("PreToolUse")
+    if not isinstance(pre, list):
+        pre = []
+        hooks["PreToolUse"] = pre
+
+    existing = [entry for entry in pre if _is_rtk_entry(entry)]
+    already = (
+        len(existing) == 1
+        and existing[0].get("matcher") == "Bash"
+        and (existing[0].get("hooks") or [{}])[0].get("command") == ADAPTER
+        and sum(1 for entry in pre if _is_rtk_entry(entry)) == 1
+    )
+    if already and original is not None:
+        sys.stdout.write(original)
+        return 0
+
+    pre[:] = [entry for entry in pre if not _is_rtk_entry(entry)]
+    pre.append(HOOK_ENTRY)
+    json.dump(data, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

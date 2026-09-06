@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{ .chezmoi.homeDir }}/.local/bin/rtk-pretooluse",
+            "statusMessage": "RTK rewrite",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

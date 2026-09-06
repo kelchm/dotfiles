@@ -1,6 +1,7 @@
 # Global instructions
 
 {{ template "shared-agent-working-agreements.md" . }}
+{{ template "rtk-agent-instructions.md" . }}
 ## Delegating to another agent CLI
 
 Grok (`grok`, grok-4.5) and Claude (`claude`) are available locally and already authenticated. Use the `delegate-review` skill for an independent second-pass review and the `delegate-implementation` skill for bounded, well-specified implementation work. Those skills own the verified invocation, sandbox, worktree, and recovery contracts; do not improvise them.

@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Normalize PreToolUse payloads and rewrite shell commands through `rtk hook claude`.
+
+Claude Code sends snake_case `tool_name` / `tool_input`. Grok sends camelCase
+`toolName` / `toolInput` and names the shell tool `run_terminal_command`.
+`rtk hook claude` only rewrites the Claude shape, so Grok (and T3-through-Grok)
+silently no-op without this adapter.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+
+
+def _command(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        tool_input = payload.get("toolInput")
+    if not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command")
+    return command if isinstance(command, str) and command.strip() else None
+
+
+def main() -> int:
+    raw = sys.stdin.buffer.read()
+    if not raw.strip():
+        return 0
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return 0
+    command = _command(payload)
+    if command is None:
+        return 0
+    claude_payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    }
+    try:
+        result = subprocess.run(
+            ["rtk", "hook", "claude"],
+            input=json.dumps(claude_payload).encode(),
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return 0
+    if result.returncode != 0 or not result.stdout.strip():
+        return 0
+    sys.stdout.buffer.write(result.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
