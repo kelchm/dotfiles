@@ -45,7 +45,7 @@ Run the delegate from the persistent main session, poll it to completion, and up
 ## Grok
 
 ```bash
-XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$WORKTREE" -m grok-4.5 --output-format json \
+XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$WORKTREE" -m grok-4.6 --effort medium --output-format json \
   --always-approve --deny "Bash(claude:*)" --deny "Bash(codex:*)" \
   --prompt-file "$PROMPT" > "$REPORT"
 ```
@@ -58,7 +58,7 @@ Grok's `--deny` rules match the command string, so they stop a bare `grok`/`clau
 
 ```bash
 ACCEPTANCE_TOOL='Bash(<exact acceptance command>:*)'
-( cd "$WORKTREE" && XDELEGATE_DEPTH=1 claude -p --no-session-persistence --model fable \
+( cd "$WORKTREE" && XDELEGATE_DEPTH=1 claude -p --no-session-persistence --model fable --effort high \
     --safe-mode --strict-mcp-config \
     --permission-mode acceptEdits \
     --disallowed-tools "Bash(claude:*)" "Bash(grok:*)" "Bash(codex:*)" \

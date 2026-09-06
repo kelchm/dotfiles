@@ -1,6 +1,6 @@
 ---
 name: codex-computer-use
-description: Ask Codex CLI (gpt-5.6-sol) to run local app verification that needs computer use, browser automation, simulators, screenshots, app launching, or independent runtime inspection. Use when the user asks Claude to have Codex test a flow, verify UI behavior, inspect a running app, capture screenshots, or report confirmation and feedback about implemented behavior.
+description: Ask Codex CLI (gpt-6-astra) to run local app verification that needs computer use, browser automation, simulators, screenshots, app launching, or independent runtime inspection. Use when the user asks Claude to have Codex test a flow, verify UI behavior, inspect a running app, capture screenshots, or report confirmation and feedback about implemented behavior.
 ---
 
 # Codex Computer Use
@@ -25,7 +25,7 @@ ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-cu.XXXXXX")"
 REPORT="$ARTIFACT_DIR/report.md"
 PROMPT="$ARTIFACT_DIR/prompt.md"
 
-XDELEGATE_DEPTH=1 codex -C "$PWD" exec -m gpt-5.6-sol -s workspace-write - < "$PROMPT" > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$PWD" exec -m gpt-6-astra -c model_reasoning_effort=xhigh -s workspace-write - < "$PROMPT" > "$REPORT"
 ```
 
 `workspace-write` covers launching local apps, simulators, and browsers. Only widen to `danger-full-access` if a specific run genuinely needs it, and say so first.

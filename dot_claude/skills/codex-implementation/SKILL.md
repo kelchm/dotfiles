@@ -2,7 +2,7 @@
 name: codex-implementation
 description: >-
   Hand a bounded, clearly-specified implementation task to the Codex CLI
-  (gpt-5.6-sol) to run on an isolated git worktree — migrations, mechanical
+  (gpt-6-astra) to run on an isolated git worktree — migrations, mechanical
   refactors, spec-driven changes. Use when the work is well-defined enough to
   delegate and you want Codex's edits kept off the main checkout until reviewed.
   Not for taste-sensitive or user-facing code.
@@ -10,7 +10,7 @@ description: >-
 
 # Codex Implementation
 
-Use Codex (gpt-5.6-sol) for bounded, clearly-specified implementation work you want done outside your own context. Codex works on an isolated git worktree so its edits never touch the main checkout until you review them. Keep taste-sensitive work (public APIs, UI, copy) off this path.
+Use Codex (gpt-6-astra) for bounded, clearly-specified implementation work you want done outside your own context. Codex works on an isolated git worktree so its edits never touch the main checkout until you review them. Keep taste-sensitive work (public APIs, UI, copy) off this path.
 
 ## Execution placement
 
@@ -35,7 +35,7 @@ PROMPT="$ARTIFACT_DIR/prompt.md"
 
 git -C "$REPO_ROOT" worktree add --detach "$WORKTREE"
 git -C "$WORKTREE" switch -c "$TASK_BRANCH"
-XDELEGATE_DEPTH=1 codex -C "$WORKTREE" exec -m gpt-5.6-sol -s workspace-write - < "$PROMPT" > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$WORKTREE" exec -m gpt-6-astra -c model_reasoning_effort=xhigh -s workspace-write - < "$PROMPT" > "$REPORT"
 ```
 
 ## Implementation Prompt

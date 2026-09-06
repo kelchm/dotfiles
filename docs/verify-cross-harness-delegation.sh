@@ -212,7 +212,7 @@ make_review_prompt codex REVIEW_CANARY_OK_CODEX "$CODEX_REVIEW_PROMPT"
 
 printf 'Starting review matrix (Grok, Claude, Codex; timeout %ss per cell)\n' "$CELL_TIMEOUT_SECONDS"
 (
-  run_with_timeout env XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$GROK_REVIEW_REPO" -m grok-4.5 --output-format json \
+  run_with_timeout env XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$GROK_REVIEW_REPO" -m grok-4.6 --effort medium --output-format json \
     --always-approve --sandbox read-only \
     --deny "Edit($GROK_REVIEW_REPO/**)" --deny "Write($GROK_REVIEW_REPO/**)" \
     --prompt-file "$GROK_REVIEW_PROMPT" > "$CANARY_ROOT/grok-review.json" 2> "$CANARY_ROOT/grok-review.stderr"
@@ -220,7 +220,7 @@ printf 'Starting review matrix (Grok, Claude, Codex; timeout %ss per cell)\n' "$
 GROK_REVIEW_PID=$!
 (
   cd "$CLAUDE_REVIEW_REPO" || exit 1
-  run_with_timeout env XDELEGATE_DEPTH=1 claude -p --no-session-persistence --model fable \
+  run_with_timeout env XDELEGATE_DEPTH=1 claude -p --no-session-persistence --model fable --effort high \
     --safe-mode --strict-mcp-config --permission-mode manual \
     --disallowed-tools Edit Write NotebookEdit Task \
     --allowed-tools Read Grep Glob 'Bash(git status:*)' 'Bash(git diff:*)' 'Bash(git log:*)' 'Bash(git show:*)' \
@@ -228,7 +228,7 @@ GROK_REVIEW_PID=$!
 ) &
 CLAUDE_REVIEW_PID=$!
 (
-  run_with_timeout env XDELEGATE_DEPTH=1 codex -C "$CODEX_REVIEW_REPO" exec -s read-only -m gpt-5.6-sol review - \
+  run_with_timeout env XDELEGATE_DEPTH=1 codex -C "$CODEX_REVIEW_REPO" exec -s read-only -m gpt-6-astra -c model_reasoning_effort=xhigh review - \
     < "$CODEX_REVIEW_PROMPT" > "$CANARY_ROOT/codex-review.txt" 2> "$CANARY_ROOT/codex-review.stderr"
 ) &
 CODEX_REVIEW_PID=$!
@@ -281,14 +281,14 @@ make_implementation_prompt AFTER_CODEX "$CANARY_ROOT/codex-implementation.prompt
 
 printf 'Starting implementation matrix (isolated repo per harness)\n'
 (
-  run_with_timeout env XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$GROK_IMPL_REPO" -m grok-4.5 --output-format json \
+  run_with_timeout env XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$GROK_IMPL_REPO" -m grok-4.6 --effort medium --output-format json \
     --always-approve --deny 'Bash(claude:*)' --deny 'Bash(codex:*)' \
     --prompt-file "$CANARY_ROOT/grok-implementation.prompt" > "$CANARY_ROOT/grok-implementation.json" 2> "$CANARY_ROOT/grok-implementation.stderr"
 ) &
 GROK_IMPL_PID=$!
 (
   cd "$CLAUDE_IMPL_REPO" || exit 1
-  run_with_timeout env XDELEGATE_DEPTH=1 claude -p --no-session-persistence --model fable \
+  run_with_timeout env XDELEGATE_DEPTH=1 claude -p --no-session-persistence --model fable --effort high \
     --safe-mode --strict-mcp-config --permission-mode acceptEdits \
     --disallowed-tools 'Bash(claude:*)' 'Bash(grok:*)' 'Bash(codex:*)' \
     --allowed-tools 'Bash(./verify.sh:*)' \
@@ -296,7 +296,7 @@ GROK_IMPL_PID=$!
 ) &
 CLAUDE_IMPL_PID=$!
 (
-  run_with_timeout env XDELEGATE_DEPTH=1 codex -C "$CODEX_IMPL_REPO" exec -s workspace-write -m gpt-5.6-sol - \
+  run_with_timeout env XDELEGATE_DEPTH=1 codex -C "$CODEX_IMPL_REPO" exec -s workspace-write -m gpt-6-astra -c model_reasoning_effort=xhigh - \
     < "$CANARY_ROOT/codex-implementation.prompt" > "$CANARY_ROOT/codex-implementation.txt" 2> "$CANARY_ROOT/codex-implementation.stderr"
 ) &
 CODEX_IMPL_PID=$!

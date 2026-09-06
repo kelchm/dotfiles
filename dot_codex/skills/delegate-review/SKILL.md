@@ -42,7 +42,7 @@ Drive Grok directly with a review prompt and let it collect the target diff. Do 
 
 ```bash
 # Name the target in $PROMPT: uncommitted changes, <base>...HEAD, a commit, or a PR.
-XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$PWD" -m grok-4.5 --output-format json \
+XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$PWD" -m grok-4.6 --effort medium --output-format json \
   --always-approve --sandbox read-only \
   --deny "Edit($PWD/**)" --deny "Write($PWD/**)" \
   --prompt-file "$PROMPT" > "$REPORT"
@@ -59,7 +59,7 @@ Grok's `--sandbox read-only` is not equivalent to `codex -s read-only` — it le
 Claude has no review subcommand. Give it a review-stance prompt under an explicit allow-list, which is what makes the run read-only.
 
 ```bash
-XDELEGATE_DEPTH=1 claude -p --no-session-persistence --model fable \
+XDELEGATE_DEPTH=1 claude -p --no-session-persistence --model fable --effort high \
   --safe-mode --strict-mcp-config \
   --permission-mode manual \
   --disallowed-tools Edit Write NotebookEdit Task \
