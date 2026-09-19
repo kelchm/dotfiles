@@ -1,0 +1,30 @@
+{{- if eq .chezmoi.os "windows" -}}
+# hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
+#
+# See run_onchange_05-init-rtk.sh.tmpl. Refresh User PATH so a mise install
+# from 02 in this same apply is visible, then fail if rtk is still missing.
+
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+$shimDir = Join-Path $env:LOCALAPPDATA "mise\shims"
+if (Test-Path $shimDir) {
+    $env:Path = "$shimDir;$env:Path"
+}
+
+if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
+    Write-Error "rtk-init: mise not found on PATH."
+    exit 1
+}
+
+mise which rtk | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "rtk-init: rtk is pinned in mise.toml but not installed."
+    exit 1
+}
+
+mise exec -- rtk init -g --auto-patch
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+mise exec -- rtk init -g --codex
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+mise exec -- rtk init -g --opencode --auto-patch
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+{{- end }}

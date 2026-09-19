@@ -7,3 +7,7 @@
 ## Delegation recursion guard
 
 If `XDELEGATE_DEPTH` is set, this process is the callee in a delegated task. Do the work directly and do not invoke another agent CLI. When calling an agent CLI, always export `XDELEGATE_DEPTH=1` so the callee inherits this rule.
+
+## Shell commands
+
+Prefix supported commands with `rtk` when a harness hook does not already rewrite them. `rtk` is always safe: unknown commands pass through.
