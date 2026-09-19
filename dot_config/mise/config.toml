@@ -1,6 +1,15 @@
 [tools]
+# Coding-agent CLIs: mise is the install owner on every OS. Pin exact versions so
+# Mac and Windows stay in lockstep. Bump a pin here, then `chezmoi apply` (which
+# runs `mise install`). Do not `mise upgrade` these — that ignores the pin.
+# Backends: Aqua for Claude/Codex/OpenCode/RTK; xAI HTTP/Aqua for Grok.
+claude = "2.1.270"
+codex = "0.154.0"
+grok = "1.0.34"
 node = "lts"
+opencode = "1.18.26"
 python = "3.12"
+rtk = "0.48.0"
 uv = "latest"
 
 [settings]

@@ -23,6 +23,43 @@ IGNORE_GROK_IMPL='"~/.claude/skills/grok-implementation"'
 
 current=$(cat)
 
+# Vendor self-update off so mise owns the grok binary. Insert or rewrite
+# auto_update under [cli]; create [cli] when missing. Runs before the skills
+# merge so both invariants land on one apply.
+current=$(printf '%s\n' "$current" | awk '
+  function flush_cli() {
+    if (in_cli && !has_auto) print "auto_update = false"
+  }
+  $0 ~ /^\[cli\][[:space:]]*$/ {
+    flush_cli()
+    in_cli = 1
+    saw_cli = 1
+    has_auto = 0
+    print
+    next
+  }
+  $0 ~ /^\[[^]]+\][[:space:]]*$/ {
+    flush_cli()
+    in_cli = 0
+    print
+    next
+  }
+  in_cli && $0 ~ /^[[:space:]]*auto_update[[:space:]]*=/ {
+    print "auto_update = false"
+    has_auto = 1
+    next
+  }
+  { print }
+  END {
+    flush_cli()
+    if (!saw_cli) {
+      print ""
+      print "[cli]"
+      print "auto_update = false"
+    }
+  }
+')
+
 # Merge rather than short-circuit: a pre-existing [skills] table (for `paths`, say) must still
 # receive the ignore entries, or the guard silently never lands. Match only a table header at
 # column zero so a `[skills]` line inside a string or comment is not a false positive.
