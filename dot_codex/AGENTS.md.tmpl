@@ -7,4 +7,4 @@ Grok (`grok`, grok-4.5) and Claude (`claude`) are available locally and already 
 
 Grok is the default delegate for bulk and mechanical work. Keep taste-sensitive work such as public APIs, UI, and copy off the delegation path.
 
-@{{ replace "\\" "/" .chezmoi.homeDir }}/.codex/RTK.md
+@{{ if eq .chezmoi.os "windows" }}{{ replace "/" "\\" .chezmoi.homeDir }}\.codex\RTK.md{{ else }}{{ .chezmoi.homeDir }}/.codex/RTK.md{{ end }}
