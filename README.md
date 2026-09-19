@@ -54,22 +54,19 @@ chezmoi add ~/.some/new/file            # start managing a new file
 
 ### Harness CLIs and RTK
 
-Claude Code, Codex, Grok Build, and OpenCode are installed through mise on macOS and Windows (`latest` in `~/.config/mise/config.toml`). RTK is the shell-output filter those harnesses use, also mise-owned, not an agent. Vendor self-updaters are disabled where present so mise remains the single update owner.
+These ship too often to pin or to upgrade on every `chezmoi apply`. Chezmoi bootstraps them (`latest` in `mise.toml`); mise upgrades them.
+
+- Harness CLIs: Claude Code, Codex, Grok Build, OpenCode
+- Filter (not an agent): RTK
+- Vendor self-updaters are off so mise stays the owner
 
 ```bash
-mise run harness:outdated  # check for newer releases
-mise run harness:update    # Claude, Codex, Grok, OpenCode, and RTK
+chezmoi apply              # install if missing
+mise run harness:outdated  # what would bump
+mise run harness:update    # actually bump
 ```
 
-`chezmoi apply` installs a missing tool. It does not upgrade an already-installed `latest`. Do not use T3 Code’s provider update: it may upgrade a leftover Homebrew/npm/WinGet binary instead of the mise install. T3’s version arrow is advisory.
-
-When migrating an existing machine:
-
-1. Apply, then confirm `mise which claude`, `mise which codex`, `mise which grok`, `mise which opencode`, and `mise which rtk`.
-2. Remove Homebrew, npm, WinGet, or vendor-native copies that could shadow the mise shims.
-3. Restart T3 Code and confirm each provider’s resolved binary is the mise shim (Windows: include a Start Menu launch). T3 one-click update should be unavailable (`update=null`) for those paths.
-
-T3 is a launcher. It does not install these CLIs.
+On a machine that already had Homebrew, npm, or WinGet copies: apply, then uninstall those so the mise shims are what `which` finds.
 
 ## How it works
 
