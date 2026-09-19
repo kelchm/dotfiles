@@ -30,7 +30,7 @@ current=$(printf '%s\n' "$current" | awk '
   function flush_cli() {
     if (in_cli && !has_auto) print "auto_update = false"
   }
-  $0 ~ /^\[cli\][[:space:]]*$/ {
+  $0 ~ /^[[:space:]]*\[cli\][[:space:]]*(#.*)?$/ {
     flush_cli()
     in_cli = 1
     saw_cli = 1
@@ -38,7 +38,7 @@ current=$(printf '%s\n' "$current" | awk '
     print
     next
   }
-  $0 ~ /^\[[^]]+\][[:space:]]*$/ {
+  $0 ~ /^[[:space:]]*\[[^]]+\][[:space:]]*(#.*)?$/ {
     flush_cli()
     in_cli = 0
     print

@@ -10,8 +10,8 @@
   "$schema": "https://opencode.ai/config.json",
   "autoupdate": false
 }` -}}
-{{- else if regexMatch `(?m)^\s*"autoupdate"\s*:` $input -}}
-{{- $output = ($input | replaceAllRegex `(?m)^(\s*)"autoupdate"\s*:\s*(?:true|false|"notify")(\s*,?)` `${1}"autoupdate": false${2}`) -}}
+{{- else if regexMatch `"autoupdate"\s*:` $input -}}
+{{- $output = ($input | replaceAllRegex `"autoupdate"\s*:\s*(?:true|false|"notify")(\s*,?)` `"autoupdate": false${1}`) -}}
 {{- else -}}
 {{- $output = ($input | replaceAllRegex `(?s)^(.*?)\{` `${1}{
   "autoupdate": false,`) -}}
