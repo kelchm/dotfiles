@@ -1,13 +1,13 @@
 ---
 name: grok-implementation
-description: Hand a bounded, clearly-specified implementation task to the Grok CLI (grok-4.5) to run on an isolated git worktree — migrations, mechanical refactors, spec-driven changes. Grok is the default implementer for this kind of work. Use when the task is well-defined enough to delegate and you want Grok's edits kept off the main checkout until reviewed. Not for taste-sensitive or user-facing code.
+description: Hand a bounded, clearly-specified implementation task to the Grok CLI (grok-4.6) to run on an isolated git worktree — migrations, mechanical refactors, spec-driven changes. Grok is the default implementer for this kind of work. Use when the task is well-defined enough to delegate and you want Grok's edits kept off the main checkout until reviewed. Not for taste-sensitive or user-facing code.
 ---
 
 # Grok Implementation
 
 > **If you are Grok reading this, stop.** Grok discovers `~/.claude/skills/` natively, so this Claude-side skill is visible to you, and following it would mean invoking Grok from Grok. You are the callee: do the work yourself and do not shell out to another agent CLI. The same applies if `XDELEGATE_DEPTH` is set in your environment.
 
-Grok-4.5 is the default delegate for bounded, clearly-specified implementation work — migrations, mechanical refactors, spec-driven changes. It works on an isolated git worktree so its edits never touch the main checkout until you review them. Keep taste-sensitive work (public APIs, UI, copy) off this path; that needs a higher-taste model.
+Grok-4.6 is the default delegate for bounded, clearly-specified implementation work — migrations, mechanical refactors, spec-driven changes. It works on an isolated git worktree so its edits never touch the main checkout until you review them. Keep taste-sensitive work (public APIs, UI, copy) off this path; do it in the current session.
 
 ## Execution placement
 
@@ -32,7 +32,7 @@ REPORT="$ARTIFACT_DIR/report.json"
 
 git -C "$REPO_ROOT" worktree add --detach "$WORKTREE"
 git -C "$WORKTREE" switch -c "$TASK_BRANCH"
-XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$WORKTREE" -m grok-4.5 --output-format json \
+XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$WORKTREE" -m grok-4.6 --effort medium --output-format json \
   --always-approve --deny "Bash(claude:*)" --deny "Bash(codex:*)" \
   --prompt-file "$PROMPT" > "$REPORT"
 ```
@@ -72,6 +72,6 @@ Give each one its own worktree, or their edits collide. One `git worktree add` p
 
 Review the worktree diff yourself before merging — Grok is capable, but this path is autonomous and runs with `--always-approve`. Confirm every changed file is intended, rerun the acceptance check, create the task commit yourself, and integrate only that verified commit. Summarize what actually changed, call out anything risky, and run the acceptance check in the main checkout after merge.
 
-If Grok's changes miss the bar, redo the work with a higher-taste model rather than polishing its output.
+If Grok's changes miss the bar, redo the work in the current session rather than polishing its output.
 
 If `grok` isn't installed, isn't authenticated, or the command fails, report the error and offer to do the implementation directly instead.

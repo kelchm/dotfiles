@@ -1,6 +1,6 @@
 ---
 name: grok-review
-description: Ask the Grok CLI (grok-4.5) for an independent, read-only code review of uncommitted changes, a branch diff, or a GitHub PR. Use when the user wants a second-pass review, or when a change is broad or risky enough that a separate model's perspective is worth it. Grok reviews only — it never edits.
+description: Ask the Grok CLI (grok-4.6) for an independent, read-only code review of uncommitted changes, a branch diff, or a GitHub PR. Use when the user wants a second-pass review, or when a change is broad or risky enough that a separate model's perspective is worth it. Grok reviews only — it never edits.
 ---
 
 # Grok Review
@@ -26,7 +26,7 @@ ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/grok-review.XXXXXX")"
 PROMPT="$ARTIFACT_DIR/prompt.md"
 REPORT="$ARTIFACT_DIR/report.json"
 
-XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$PWD" -m grok-4.5 --output-format json --always-approve \
+XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$PWD" -m grok-4.6 --effort medium --output-format json --always-approve \
   --sandbox read-only --deny "Edit($PWD/**)" --deny "Write($PWD/**)" \
   --prompt-file "$PROMPT" > "$REPORT"
 ```
