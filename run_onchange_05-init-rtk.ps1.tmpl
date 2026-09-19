@@ -1,5 +1,8 @@
 {{- if eq .chezmoi.os "windows" -}}
-# hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
+# Update this setup when adopting a new harness.
+# Routine RTK upgrades do not require reinitialization; rerun manually
+# when RTK documents an integration migration.
+# Chezmoi reruns this script when its rendered contents change.
 #
 # See run_onchange_05-init-rtk.sh.tmpl. Refresh User PATH so a mise install
 # from 02 in this same apply is visible, then fail if rtk is still missing.
@@ -17,7 +20,7 @@ if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
 
 mise which rtk | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "rtk-init: rtk is pinned in mise.toml but not installed."
+    Write-Error "rtk-init: rtk is configured in mise but not installed."
     exit 1
 }
 

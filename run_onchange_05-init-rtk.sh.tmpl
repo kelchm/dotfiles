@@ -2,7 +2,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
+# Update this setup when adopting a new harness.
+# Routine RTK upgrades do not require reinitialization; rerun manually
+# when RTK documents an integration migration.
+# Chezmoi reruns this script when its rendered contents change.
 #
 # Chezmoi owns the stitch (@RTK.md in templates). RTK owns RTK.md, the Claude
 # hook, and the OpenCode plugin. Unadorned `rtk init -g` is Claude only.
@@ -17,7 +20,7 @@ if ! command -v mise >/dev/null 2>&1; then
 fi
 
 if ! mise which rtk >/dev/null 2>&1; then
-  echo "rtk-init: rtk is pinned in mise.toml but not installed." >&2
+  echo "rtk-init: rtk is configured in mise but not installed." >&2
   exit 1
 fi
 

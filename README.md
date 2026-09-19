@@ -74,6 +74,14 @@ Launch through mise shims or an activated shell so the updater settings are load
 
 On a machine that already had Homebrew, npm, or WinGet copies: apply, then remove those duplicate installations after checking that commands resolve through mise.
 
+RTK integration is initialized during bootstrap and when its setup scripts change (for example, when adding a harness). Routine RTK upgrades need no extra step. If RTK documents an integration migration, rerun the relevant command:
+
+```bash
+mise exec -- rtk init -g --auto-patch             # Claude
+mise exec -- rtk init -g --codex
+mise exec -- rtk init -g --opencode --auto-patch
+```
+
 ## How it works
 
 - Files are stored in chezmoi's source format (`dot_` prefix replaces leading `.`)
