@@ -1,3 +1,12 @@
+[tool_alias]
+# Explicit backends retain short names for the update tasks below.
+# Aqua recipes select the appropriate macOS/Windows release assets.
+claude = "aqua:anthropics/claude-code"
+codex = "aqua:openai/codex"
+grok = "http:grok"
+opencode = "aqua:anomalyco/opencode"
+rtk = "aqua:rtk-ai/rtk"
+
 [tools]
 # Harness CLIs (claude, codex, grok, opencode) and RTK (shell-output filter,
 # not an agent) track latest. mise is the install owner on every OS.
@@ -16,6 +25,8 @@ uv = "latest"
 python.uv_venv_auto = true  # auto-creates/activates .venv via uv
 # Let per-repo rust-toolchain.toml drive the Rust version.
 idiomatic_version_file_enable_tools = ["rust"]
+# Delay timestamped releases; Grok's HTTP feed has no release timestamps.
+minimum_release_age = "24h"
 
 [tasks."harness:outdated"]
 hide = true

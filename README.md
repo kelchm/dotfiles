@@ -54,11 +54,13 @@ chezmoi add ~/.some/new/file            # start managing a new file
 
 ### Harness CLIs and RTK
 
-These ship too often to pin or to upgrade on every `chezmoi apply`. Chezmoi bootstraps them (`latest` in `mise.toml`); mise upgrades them.
+These ship too often to pin or to upgrade on every `chezmoi apply`. Chezmoi bootstraps them (`latest` in `mise.toml`); mise upgrades them. `minimum_release_age = "24h"` delays new version selection where the backend supplies release timestamps; it does not downgrade installed versions.
 
 - Harness CLIs: Claude Code, Codex, Grok Build, OpenCode
 - Filter (not an agent): RTK
 - Vendor self-updaters are off so mise stays the owner
+
+Sources are explicit in `[tool_alias]`: Aqua recipes for Claude, Codex, OpenCode, and RTK; mise's HTTP recipe for Grok. These recipes handle macOS and Windows downloads without adding npm as an installation dependency. Grok's HTTP feed has no release timestamps, so the 24h delay cannot be enforced for it. Windows ARM support can depend on x64 emulation in the upstream recipe.
 
 ```bash
 chezmoi apply              # install if missing
