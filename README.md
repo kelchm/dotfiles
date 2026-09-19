@@ -9,7 +9,7 @@ Cross-platform dotfiles managed with [chezmoi](https://www.chezmoi.io/).
 | **Shell** | Fish, Zsh | PowerShell | — |
 | **Prompt** | — | — | Starship |
 | **Terminal** | Ghostty, iTerm2 | Windows Terminal (pwsh default) | — |
-| **Version mgmt** | — | — | mise (agent CLIs, Python, Node) |
+| **Version mgmt** | — | — | mise (harness CLIs, RTK, Python, Node) |
 | **Editor** | — | — | VSCode, EditorConfig |
 | **Git** | 1Password SSH signing | Credential Manager | Common config |
 | **SSH** | 1Password agent (socket) | 1Password agent (named pipe) | — |
@@ -52,13 +52,13 @@ chezmoi cd                              # cd into source directory
 chezmoi add ~/.some/new/file            # start managing a new file
 ```
 
-### Coding-agent CLIs
+### Harness CLIs and RTK
 
-Claude Code, Codex, Grok Build, OpenCode, and RTK are installed through mise on macOS and Windows (`latest` in `~/.config/mise/config.toml`). Vendor self-updaters are disabled where present so mise remains the single update owner.
+Claude Code, Codex, Grok Build, and OpenCode are installed through mise on macOS and Windows (`latest` in `~/.config/mise/config.toml`). RTK is the shell-output filter those harnesses use, also mise-owned, not an agent. Vendor self-updaters are disabled where present so mise remains the single update owner.
 
 ```bash
-mise run agent-clis:outdated  # check for newer releases
-mise run agent-clis:update    # upgrade all five
+mise run harness:outdated  # check for newer releases
+mise run harness:update    # Claude, Codex, Grok, OpenCode, and RTK
 ```
 
 `chezmoi apply` installs a missing tool. It does not upgrade an already-installed `latest`. Do not use T3 Code’s provider update: it may upgrade a leftover Homebrew/npm/WinGet binary instead of the mise install. T3’s version arrow is advisory.

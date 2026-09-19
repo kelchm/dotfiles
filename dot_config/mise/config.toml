@@ -1,7 +1,8 @@
 [tools]
-# Coding-agent CLIs track latest. mise is the install owner on every OS.
+# Harness CLIs (claude, codex, grok, opencode) and RTK (shell-output filter,
+# not an agent) track latest. mise is the install owner on every OS.
 # `chezmoi apply` runs `mise install` (fills in missing tools). Bump with
-# `mise upgrade claude codex grok opencode rtk` or `mise run agent-clis:update`.
+# `mise run harness:update`.
 claude = "latest"
 codex = "latest"
 grok = "latest"
@@ -16,10 +17,10 @@ python.uv_venv_auto = true  # auto-creates/activates .venv via uv
 # Let per-repo rust-toolchain.toml drive the Rust version.
 idiomatic_version_file_enable_tools = ["rust"]
 
-[tasks."agent-clis:outdated"]
+[tasks."harness:outdated"]
 hide = true
 run = "mise outdated claude codex grok opencode rtk"
 
-[tasks."agent-clis:update"]
-description = "Upgrade coding-agent CLIs (and rtk) to latest"
+[tasks."harness:update"]
+description = "Upgrade harness CLIs and RTK to latest"
 run = "mise upgrade claude codex grok opencode rtk"
