@@ -54,11 +54,14 @@ chezmoi add ~/.some/new/file            # start managing a new file
 
 ### Coding-agent CLIs
 
-Claude Code, Codex, Grok Build, OpenCode, and RTK are installed through mise on macOS and Windows. Versions are pinned in `~/.config/mise/config.toml`. Vendor self-updaters are disabled where present so mise remains the single update owner.
+Claude Code, Codex, Grok Build, OpenCode, and RTK are installed through mise on macOS and Windows (`latest` in `~/.config/mise/config.toml`). Vendor self-updaters are disabled where present so mise remains the single update owner.
 
-To bump a CLI, change the pin in that file and `chezmoi apply` (or `mise install`). Do not `mise upgrade` these tools — that ignores the pin. Do not use T3 Code’s provider update: mise-owned aqua installs are manual-only in T3, but a leftover Homebrew/npm/WinGet binary on PATH will be the one T3 upgrades.
+```bash
+mise run agent-clis:outdated  # check for newer releases
+mise run agent-clis:update    # upgrade all five
+```
 
-`chezmoi apply` installs a missing pin when the tracked mise config changes.
+`chezmoi apply` installs a missing tool. It does not upgrade an already-installed `latest`. Do not use T3 Code’s provider update: it may upgrade a leftover Homebrew/npm/WinGet binary instead of the mise install. T3’s version arrow is advisory.
 
 When migrating an existing machine:
 

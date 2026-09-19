@@ -1,18 +1,25 @@
 [tools]
-# Coding-agent CLIs: mise is the install owner on every OS. Pin exact versions so
-# Mac and Windows stay in lockstep. Bump a pin here, then `chezmoi apply` (which
-# runs `mise install`). Do not `mise upgrade` these — that ignores the pin.
-# Backends: Aqua for Claude/Codex/OpenCode/RTK; xAI HTTP/Aqua for Grok.
-claude = "2.1.270"
-codex = "0.154.0"
-grok = "1.0.34"
+# Coding-agent CLIs track latest. mise is the install owner on every OS.
+# `chezmoi apply` runs `mise install` (fills in missing tools). Bump with
+# `mise upgrade claude codex grok opencode rtk` or `mise run agent-clis:update`.
+claude = "latest"
+codex = "latest"
+grok = "latest"
 node = "lts"
-opencode = "1.18.26"
+opencode = "latest"
 python = "3.12"
-rtk = "0.48.0"
+rtk = "latest"
 uv = "latest"
 
 [settings]
 python.uv_venv_auto = true  # auto-creates/activates .venv via uv
 # Let per-repo rust-toolchain.toml drive the Rust version.
 idiomatic_version_file_enable_tools = ["rust"]
+
+[tasks."agent-clis:outdated"]
+hide = true
+run = "mise outdated claude codex grok opencode rtk"
+
+[tasks."agent-clis:update"]
+description = "Upgrade coding-agent CLIs (and rtk) to latest"
+run = "mise upgrade claude codex grok opencode rtk"
