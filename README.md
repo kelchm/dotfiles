@@ -54,21 +54,25 @@ chezmoi add ~/.some/new/file            # start managing a new file
 
 ### Harness CLIs and RTK
 
-These ship too often to pin or to upgrade on every `chezmoi apply`. Chezmoi bootstraps them (`latest` in `mise.toml`); mise upgrades them. `minimum_release_age = "24h"` delays new version selection where the backend supplies release timestamps; it does not downgrade installed versions.
+Chezmoi bootstraps the configured tools; mise upgrades them. Harnesses track `latest`, so machines share configuration and an update method, but may have different versions until each is upgraded.
 
 - Harness CLIs: Claude Code, Codex, Grok Build, OpenCode
 - Filter (not an agent): RTK
-- Vendor self-updaters are off so mise stays the owner
+- mise selects the installation backends using its registry defaults
+- Background self-updates are disabled through mise's environment settings
 
-Sources are explicit in `[tool_alias]`: Aqua recipes for Claude, Codex, OpenCode, and RTK; mise's HTTP recipe for Grok. These recipes handle macOS and Windows downloads without adding npm as an installation dependency. Grok's HTTP feed has no release timestamps, so the 24h delay cannot be enforced for it. Windows ARM support can depend on x64 emulation in the upstream recipe.
+`minimum_release_age = "24h"` delays selection of timestamped releases. Grok's HTTP feed has no timestamps, so it is not covered. Already-installed versions are not downgraded.
 
 ```bash
-chezmoi apply              # install if missing
-mise run harness:outdated  # what would bump
-mise run harness:update    # actually bump
+chezmoi apply                              # bootstrap tools when config changes
+mise install                               # restore missing configured tools
+mise outdated claude codex grok opencode rtk # check these five tools
+mise run harness:update                    # upgrade these five, leaving runtimes alone
 ```
 
-On a machine that already had Homebrew, npm, or WinGet copies: apply, then uninstall those so the mise shims are what `which` finds.
+Launch through mise shims or an activated shell so the updater settings are loaded. For scripts, use `mise exec -- <command>`. GUI launchers should use the shim path, rather than a versioned executable path.
+
+On a machine that already had Homebrew, npm, or WinGet copies: apply, then remove those duplicate installations after checking that commands resolve through mise.
 
 ## How it works
 
