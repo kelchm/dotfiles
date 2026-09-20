@@ -74,6 +74,16 @@ Launch through mise shims or an activated shell so the updater settings are load
 
 On a machine that already had Homebrew, npm, or WinGet copies: apply, then remove those duplicate installations after checking that commands resolve through mise.
 
+RTK integration is initialized during bootstrap and when its setup scripts change (for example, when adding a harness). Routine RTK upgrades need no extra step. If RTK documents an integration migration, rerun the relevant command:
+
+```bash
+mise exec -- rtk init -g --auto-patch             # Claude
+mise exec -- rtk init -g --codex
+mise exec -- rtk init -g --opencode --auto-patch
+```
+
+These dotfiles manage Codex's default `~/.codex` directory. Bootstrap targets that directory even when `CODEX_HOME` selects a separate profile; custom profiles are managed separately. For a manual Codex migration with a custom profile active, use `CODEX_HOME="$HOME/.codex" mise exec -- rtk init -g --codex` in Bash/Zsh. In PowerShell, temporarily set `$env:CODEX_HOME = Join-Path $HOME ".codex"` for the command, then restore its previous value.
+
 ## How it works
 
 - Files are stored in chezmoi's source format (`dot_` prefix replaces leading `.`)

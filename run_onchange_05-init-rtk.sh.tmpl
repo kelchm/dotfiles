@@ -1,0 +1,31 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+set -euo pipefail
+
+# Update this setup when adopting a new harness.
+# Routine RTK upgrades do not require reinitialization; rerun manually
+# when RTK documents an integration migration.
+# Chezmoi reruns this script when its rendered contents change.
+#
+# Chezmoi owns the stitch (@RTK.md in templates). RTK owns RTK.md, the Claude
+# hook, and the OpenCode plugin. Unadorned `rtk init -g` is Claude only.
+# --codex cannot be combined with --auto-patch on RTK 0.48.
+#
+# Invoke through mise so this script does not depend on shims already being
+# on PATH (Windows/mac first apply: 02 may have just installed them).
+
+if ! command -v mise >/dev/null 2>&1; then
+  echo "rtk-init: mise not found on PATH." >&2
+  exit 1
+fi
+
+if ! mise which rtk >/dev/null 2>&1; then
+  echo "rtk-init: rtk is configured in mise but not installed." >&2
+  exit 1
+fi
+
+mise exec -- rtk init -g --auto-patch
+# Match chezmoi's managed Codex home even when a custom profile is active.
+CODEX_HOME="$HOME/.codex" mise exec -- rtk init -g --codex
+mise exec -- rtk init -g --opencode --auto-patch
+{{- end }}
