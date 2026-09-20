@@ -25,6 +25,7 @@ if ! mise which rtk >/dev/null 2>&1; then
 fi
 
 mise exec -- rtk init -g --auto-patch
-mise exec -- rtk init -g --codex
+# Match chezmoi's managed Codex home even when a custom profile is active.
+CODEX_HOME="$HOME/.codex" mise exec -- rtk init -g --codex
 mise exec -- rtk init -g --opencode --auto-patch
 {{- end }}

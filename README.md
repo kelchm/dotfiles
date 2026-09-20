@@ -82,6 +82,8 @@ mise exec -- rtk init -g --codex
 mise exec -- rtk init -g --opencode --auto-patch
 ```
 
+These dotfiles manage Codex's default `~/.codex` directory. Bootstrap targets that directory even when `CODEX_HOME` selects a separate profile; custom profiles are managed separately. For a manual Codex migration with a custom profile active, use `CODEX_HOME="$HOME/.codex" mise exec -- rtk init -g --codex` in Bash/Zsh. In PowerShell, temporarily set `$env:CODEX_HOME = Join-Path $HOME ".codex"` for the command, then restore its previous value.
+
 ## How it works
 
 - Files are stored in chezmoi's source format (`dot_` prefix replaces leading `.`)

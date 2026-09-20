@@ -26,8 +26,15 @@ if ($LASTEXITCODE -ne 0) {
 
 mise exec -- rtk init -g --auto-patch
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-mise exec -- rtk init -g --codex
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# Match chezmoi's managed Codex home even when a custom profile is active.
+$previousCodexHome = $env:CODEX_HOME
+try {
+    $env:CODEX_HOME = Join-Path $HOME ".codex"
+    mise exec -- rtk init -g --codex
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    $env:CODEX_HOME = $previousCodexHome
+}
 mise exec -- rtk init -g --opencode --auto-patch
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 {{- end }}
