@@ -5,8 +5,8 @@ set -euo pipefail
 # hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
 
 if ! command -v mise >/dev/null 2>&1; then
-  echo "mise not found on PATH. Skipping tool installation." >&2
-  exit 0
+  echo "mise not found on PATH. Install mise before applying tools." >&2
+  exit 1
 fi
 
 mise install

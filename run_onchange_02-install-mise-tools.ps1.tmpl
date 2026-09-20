@@ -5,8 +5,8 @@
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
 if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
-    Write-Warning "mise not found on PATH. Skipping tool installation."
-    exit 0
+    Write-Error "mise not found on PATH. Install mise before applying tools."
+    exit 1
 }
 
 mise install
