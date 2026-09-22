@@ -1,0 +1,23 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- /* Keep Go available without managing machine-specific providers or defaults.
+     With no allowlist, OpenCode already enables every connected provider.
+     Preserve the original text when no change is needed; otherwise JSONC is
+     normalized to JSON (comments are removed) by chezmoi's built-in parser. */ -}}
+{{- $original := .chezmoi.stdin -}}
+{{- $config := fromJsonc ($original | default "{}") -}}
+{{- $changed := false -}}
+{{- if hasKey $config "enabled_providers" -}}
+  {{- if not (has "opencode-go" $config.enabled_providers) -}}
+    {{- $_ := set $config "enabled_providers" (append $config.enabled_providers "opencode-go") -}}
+    {{- $changed = true -}}
+  {{- end -}}
+{{- end -}}
+{{- if has "opencode-go" (get $config "disabled_providers" | default list) -}}
+  {{- $_ := set $config "disabled_providers" (without $config.disabled_providers "opencode-go") -}}
+  {{- $changed = true -}}
+{{- end -}}
+{{- if or $changed (not $original) -}}
+{{ $config | toPrettyJson }}
+{{ else -}}
+{{ $original }}
+{{- end -}}

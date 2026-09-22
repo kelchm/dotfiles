@@ -72,6 +72,8 @@ mise run harness:update                    # upgrade these five, leaving runtime
 
 Launch through mise shims or an activated shell so the updater settings are loaded. For scripts, use `mise exec -- <command>`. GUI launchers should use the shim path, rather than a versioned executable path.
 
+OpenCode's `opencode.jsonc` merge rule keeps `opencode-go` available: it adds Go to an existing provider allowlist and removes it from any denylist. Other settings, including local providers and default models, stay machine-specific. If there is no allowlist, OpenCode already allows all connected providers. Connect Go once per machine with `/connect`; credentials are not stored in these dotfiles. When the rule changes a config, it normalizes JSONC to JSON and removes comments; an already-compliant config is left byte-for-byte unchanged.
+
 On a machine that already had Homebrew, npm, or WinGet copies: apply, then remove those duplicate installations after checking that commands resolve through mise.
 
 RTK integration is initialized during bootstrap and when its setup scripts change (for example, when adding a harness). Routine RTK upgrades need no extra step. If RTK documents an integration migration, rerun the relevant command:
