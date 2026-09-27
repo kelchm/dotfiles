@@ -86,6 +86,14 @@ mise exec -- rtk init -g --opencode --auto-patch
 
 These dotfiles manage Codex's default `~/.codex` directory. Bootstrap targets that directory even when `CODEX_HOME` selects a separate profile; custom profiles are managed separately. For a manual Codex migration with a custom profile active, use `CODEX_HOME="$HOME/.codex" mise exec -- rtk init -g --codex` in Bash/Zsh. In PowerShell, temporarily set `$env:CODEX_HOME = Join-Path $HOME ".codex"` for the command, then restore its previous value.
 
+### Agent delegation
+
+Global Claude and Codex instructions share a small model-selection policy: work in the current session by default, prefer Opus 5.5 when choosing an implementation delegate, and use independent review for consequential changes. Model and effort remain explicit choices; subscription quota and correction time matter more than API list prices.
+
+`delegate-claude`, `delegate-codex`, and `delegate-grok` each cover implementation and review. They live in `~/.agents/skills`, with Claude discovery links. The old six skill entrypoints are removed on apply; other files in their directories are preserved. Grok's config modifier updates its self-delegation ignore paths while preserving unrelated settings (TOML comments are normalized away only when a change is needed).
+
+The CLI contracts and historical verification limits are documented in [cross-harness delegation](docs/cross-harness-delegation.md). Computer-use verification remains separate. OpenCode Go is optional capacity through the existing OpenCode workflow.
+
 ## How it works
 
 - Files are stored in chezmoi's source format (`dot_` prefix replaces leading `.`)

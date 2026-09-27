@@ -19,7 +19,7 @@ Originally recorded 2026-08-23 on macOS 25.5.0 (darwin), against **claude 2.1.22
 | Review entry point | none — use a review-stance prompt under the guard and disable customizations/MCP discovery | `codex exec review` with `--uncommitted` / `--base <branch>` / `--commit <sha>`, **or** custom instructions on stdin — never both | direct review-stance prompt with `--no-subagents`; do not use bundled `/review` for delegation |
 | Guard failure mode | **fails closed** — an unrecognized allow-list rule leaves writes blocked | fails closed | `--deny` / `--allow` **fail closed loudly** (unknown prefix → exit 1, no model call); `--tools` / `--disallowed-tools` **fail open silently** — never use them as a guard |
 
-### Config discovery
+### Historical config discovery (2026-08-23)
 
 | Reads | Claude | Codex | Grok |
 |---|---|---|---|
@@ -30,7 +30,7 @@ Originally recorded 2026-08-23 on macOS 25.5.0 (darwin), against **claude 2.1.22
 | `~/.codex/AGENTS.md` | no | yes | no |
 | repo-scoped `.grok/config.toml` | no | no | **no — not read; `[skills]` must live in `~/.grok/config.toml`** |
 
-The two asymmetries that drive the whole design: **Grok natively discovers `~/.claude/skills/` and `~/.claude/CLAUDE.md`**, while **Codex reads neither** and only ever loads `$CODEX_HOME/skills`.
+These tests established the vendor-tree asymmetry at the time. Current skills use the shared `~/.agents/skills` tree supported by Codex, with discovery links in `~/.claude/skills` for Claude and Grok. The historical test did not probe the shared tree.
 
 ### Live six-cell matrix
 
@@ -174,23 +174,19 @@ grok inspect   # lists every discovered skill and its source, e.g. "grok-review 
 
 ## Recursion guard
 
-Grok discovers `~/.claude/skills/`, which contains `grok-review` and `grok-implementation` — skills whose entire content is "shell out to grok". Left alone, Grok invoked as a callee can read a skill instructing it to invoke Grok. `grok inspect` confirms the exposure directly: `grok-implementation  user [claude]`.
+Grok discovers the Claude skill tree, so its user-level `[skills].ignore` excludes both the shared `delegate-grok` path and its Claude discovery link. The chezmoi modifier preserves other ignore entries and replaces the two obsolete Grok skill paths. This avoids discovering a skill whose purpose is to invoke Grok again; it is not a security boundary.
 
-Three layers, in decreasing order of strength:
-
-1. **Mechanical, Grok side.** `[skills] ignore` in `~/.grok/config.toml` removes the looping skills from Grok's view entirely. Verified with `grok inspect`: skill count drops 28 → 26 and both `grok-*` entries disappear. Repo-scoped `.grok/config.toml` does **not** work — the key must be user-level. Two known gaps: it lists paths, so a *newly added* `grok-*` skill is not covered until the list is updated, and Grok still loads `~/.claude/CLAUDE.md`, which documents the Grok invocation directly. Layer 3 is what covers both.
-2. **Mechanical, Claude side.** `--disallowed-tools "Bash(claude:*)" "Bash(grok:*)" "Bash(codex:*)"` holds even under `--permission-mode acceptEdits`; the callee reported both delegate commands as permission-denied and did not route around them.
-3. **Prompt-level, every custom-prompt path.** Callers state `You are the callee in a delegated task. Do not delegate any part of this work to another agent CLI.` in the prompt file, and export `XDELEGATE_DEPTH=1`. Codex review target flags cannot be combined with a custom prompt, so those flag-only paths rely on the environment marker plus `~/.codex/AGENTS.md`. The marker propagates into the child process — a Codex callee reads it back as `1` — and the global file carries the standing rule to honour it.
-
-Grok's own `--deny` is **not** sufficient here and must not be relied on: `--deny "Bash(grok:*)"` matches the command string, so a callee reached the binary anyway via `/opt/homebrew/bin/grok`. Layer 1 is what actually carries the guarantee on the Grok side.
+Every skill checks `XDELEGATE_DEPTH` before dispatch, exports `XDELEGATE_DEPTH=1`, and places the no-further-delegation instruction in the child prompt. Grok also uses `--no-subagents`; Claude disables customizations and denies subagent tools. Command-prefix denies are a backstop, not containment against alternate executable paths. The consolidated Codex review path always uses a custom prompt, so its recursion prohibition travels with the task.
 
 ## Architecture
 
-**Two skills per calling harness, parameterized by callee** — one `delegate-review`, one `delegate-implementation`, each with a short section per target CLI.
+One skill per target CLI: `delegate-claude`, `delegate-codex`, and `delegate-grok`, each covering implementation and review. Canonical files live under `~/.agents/skills`; Claude's user tree contains symlinks to them. Codex discovers the shared tree directly, and Grok discovers the Claude links. There are no duplicate vendor-specific copies to keep synchronized.
 
-Grok needs no new skill tree at all: it already inherits `codex-review` and `codex-implementation` from `~/.claude/skills/`, so Grok → Codex works today by discovery. Its only gap was the recursion guard. Codex inherits nothing, so it gets its own tree at `~/.codex/skills/`.
+The shared `model-selection.md` chezmoi template supplies preferences to both global instruction files. Skills own CLI mechanics and accept an explicitly chosen model and effort. Computer-use verification remains a separate skill because it has different tools and execution requirements. OpenCode Go is optional capacity through its existing workflow, not an unverified fourth CLI contract.
 
-The alternatives lose on maintenance cost. A skill per ordered pair is quadratic — six files for three CLIs, twelve for four — and every primitive change has to be chased across every file that names that callee. A single shared source that all three harnesses read is not possible: Codex reads neither `~/.claude/skills/` nor any path outside `$CODEX_HOME`, so "shared" would mean chezmoi materializing the same content into two trees, which yields two copies to drift with no reduction in file count. Callee-as-a-section keeps each primitive documented exactly once per caller, and adding a fourth CLI costs two files plus one appended section.
+On adoption, `.chezmoiremove` deletes only the six superseded managed `SKILL.md` entrypoints. Extra user files in those directories are retained. The Grok modifier preserves unrelated TOML values, normalizes comments only on change, and stops with an error if the existing config cannot be parsed.
+
+The draft consolidation was checked with an isolated chezmoi apply, all three OS template renders, and a live Claude/Opus 5.5 medium review invocation. The new Grok ignore paths still need a `grok inspect` check after adoption; resolving the symlinks alone does not prove ignore matching. The full live six-cell matrix has not been rerun for this consolidation.
 
 ## Platform portability
 

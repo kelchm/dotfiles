@@ -1,0 +1,8 @@
+# Replaced by shared delegate-{claude,codex,grok} skills. Remove only the old
+# managed entrypoints; preserve any other files the user added to these folders.
+.codex/skills/delegate-review/SKILL.md
+.codex/skills/delegate-implementation/SKILL.md
+.claude/skills/codex-review/SKILL.md
+.claude/skills/codex-implementation/SKILL.md
+.claude/skills/grok-review/SKILL.md
+.claude/skills/grok-implementation/SKILL.md

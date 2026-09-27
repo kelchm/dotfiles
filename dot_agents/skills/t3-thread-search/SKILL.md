@@ -110,7 +110,7 @@ It also searches active thread titles, project titles, and branches, which the c
 
 ## Harness notes
 
-Canonical files live in `~/.agents/skills/t3-thread-search/` (Codex user-level, Grok, Cursor, and repo-relative Claude/T3 discovery). Claude Code's user tree does not read `~/.agents`, so a thin wrapper lives at `~/.claude/skills/t3-thread-search/` and points here. Do not put a second copy under `~/.codex/skills/` — Codex's documented user path is `~/.agents/skills` (`$CODEX_HOME/skills` is a deprecated fallback). Harness-specific skills (delegate-review, grok-review) stay in their vendor trees.
+Canonical files live in `~/.agents/skills/t3-thread-search/` (Codex user-level, Grok, Cursor, and repo-relative Claude/T3 discovery). Claude Code's user tree does not read `~/.agents`, so a thin wrapper lives at `~/.claude/skills/t3-thread-search/` and points here. Do not put a second copy under `~/.codex/skills/` — Codex's documented user path is `~/.agents/skills` (`$CODEX_HOME/skills` is a deprecated fallback). CLI delegation skills also live in the shared tree, with Claude discovery links.
 
 Examples:
 
