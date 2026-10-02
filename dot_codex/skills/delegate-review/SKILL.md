@@ -1,13 +1,13 @@
 ---
 name: delegate-review
-description: Ask another agent CLI (Grok, or Claude) for an independent read-only code review of uncommitted changes, a branch diff, a commit, or a GitHub PR. Use when the user wants a second-pass review, or when a change is broad or risky enough that a separate model's perspective is worth it. The delegate reviews only — it never edits.
+description: Ask the Grok CLI for an independent read-only code review of uncommitted changes, a branch diff, a commit, or a GitHub PR. Use when the user wants a second-pass review, or when a change is broad or risky enough that a separate model's perspective is worth it. The delegate reviews only — it never edits.
 ---
 
 # Delegate Review
 
 Reach for a different model when the user wants a second opinion, or when a diff is broad enough that independent eyes help. A model reviewing its own output is a weak check, so prefer a delegate whose vendor differs from whoever wrote the code.
 
-Grok is the default reviewer. Use Claude when the change is taste-sensitive — public API shape, UI, or user-facing copy.
+Grok is the default reviewer. Keep taste-sensitive work in the current session.
 
 ## Workflow
 
@@ -42,7 +42,7 @@ Drive Grok directly with a review prompt and let it collect the target diff. Do 
 
 ```bash
 # Name the target in $PROMPT: uncommitted changes, <base>...HEAD, a commit, or a PR.
-XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$PWD" -m grok-4.5 --output-format json \
+XDELEGATE_DEPTH=1 grok --no-auto-update --no-subagents --cwd "$PWD" -m grok-4.6 --effort medium --output-format json \
   --always-approve --sandbox read-only \
   --deny "Edit($PWD/**)" --deny "Write($PWD/**)" \
   --prompt-file "$PROMPT" > "$REPORT"
@@ -54,39 +54,12 @@ Keep the denies scoped to the repo. Denying `Bash` removes the shell Grok needs 
 
 Grok's `--sandbox read-only` is not equivalent to `codex -s read-only` — it leaves `/tmp`, `/var/tmp`, `/var/folders` and `~/.grok` writable and can go unenforced on unsupported kernels. Treat it as defense-in-depth; the `--deny` rules carry the guarantee.
 
-## Claude
-
-Claude has no review subcommand. Give it a review-stance prompt under an explicit allow-list, which is what makes the run read-only.
-
-```bash
-XDELEGATE_DEPTH=1 claude -p --no-session-persistence --model fable \
-  --safe-mode --strict-mcp-config \
-  --permission-mode manual \
-  --disallowed-tools Edit Write NotebookEdit Task \
-  --allowed-tools "Read" "Grep" "Glob" "Bash(git status:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" \
-  < "$PROMPT" > "$REPORT"
-```
-
-Claude has no target-directory flag — it inherits the process working directory, so run it with the cwd already set to the repo.
-
-`--safe-mode --strict-mcp-config` prevents unrelated user/project hooks, plugins, MCP servers, skills, and settings from entering the delegated run. The callee declaration therefore must remain in the prompt; safe mode deliberately disables discovery of the global recursion rule.
-
-Claude's Bash allow-list matches the command prefix literally. Tell the reviewer to use plain `git status`, `git diff`, `git log`, and `git show` forms, without `git -C` or `git --no-pager` before the verb; those prefixed forms require approval and cannot proceed non-interactively.
-
-`--permission-mode manual` plus the allow-list is the guard: anything outside the list needs an approval that non-interactive mode can never grant, so it fails closed without hanging. Verified: `git` reads succeed while the edit tool, shell redirection, a python interpreter, a subagent, and writes outside the repo are all blocked. Do not substitute `--permission-mode plan` — it restricts writes only behaviorally, leaving the shell in place.
-
-This stops a reviewer from *helpfully* editing what it found, which is the realistic failure. It is not containment: `Bash(git diff:*)` is a prefix match, and `git diff --output=PATH` writes an arbitrary file — confirmed, including outside the repo. `git log` and `git show` take `--output=` too. Don't describe this guard as read-only, and don't rely on it against anything but ordinary helpfulness.
-
-For a machine-readable report add `--output-format json --json-schema '<schema>'`; the validated object comes back at `.structured_output`.
-
 ## Review prompt
 
 ```text
 You are the callee in a delegated task. Do not delegate any part of this work to another agent CLI.
 
 Review <target> for bugs, regressions, missing tests, security issues, and requirement mismatches.
-
-For repository inspection, use only plain git status, git diff, git log, and git show forms. Do not prefix them with git -C or git --no-pager.
 
 Prioritize findings over summary. For each finding include:
 - severity

@@ -1,7 +1,7 @@
 ---
 name: codex-review
 description: >-
-  Ask the Codex CLI (gpt-5.6-sol) for an independent code review of uncommitted
+  Ask the Codex CLI (gpt-6-astra) for an independent code review of uncommitted
   changes, a branch diff, a commit, or a specific implementation. Use Codex as
   an independent reviewer when the user wants a second-pass review, or when a
   change is broad enough that another agent's perspective is useful. Codex
@@ -10,7 +10,7 @@ description: >-
 
 # Codex Review
 
-Codex (gpt-5.6-sol) is an independent reviewer. Reach for it when the user wants a second-pass review, or when a change is broad enough that a separate model's perspective helps.
+Codex (gpt-6-astra) is an independent reviewer. Reach for it when the user wants a second-pass review, or when a change is broad enough that a separate model's perspective helps.
 
 ## Execution placement
 
@@ -31,17 +31,17 @@ REPORT="$ARTIFACT_DIR/report.md"
 PROMPT="$ARTIFACT_DIR/prompt.md"
 
 # Review staged, unstaged, and untracked changes.
-XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-5.6-sol --uncommitted < /dev/null > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-6-astra -c model_reasoning_effort="xhigh" --uncommitted < /dev/null > "$REPORT"
 
 # Review current branch against a base branch.
-XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-5.6-sol --base main < /dev/null > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-6-astra -c model_reasoning_effort="xhigh" --base main < /dev/null > "$REPORT"
 
 # Review a single commit.
-XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-5.6-sol --commit <sha> < /dev/null > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-6-astra -c model_reasoning_effort="xhigh" --commit <sha> < /dev/null > "$REPORT"
 
 # Custom review stance. Name the target in the prompt — target flags and a
 # prompt are mutually exclusive, and passing both exits 2 without running.
-XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-5.6-sol - < "$PROMPT" > "$REPORT"
+XDELEGATE_DEPTH=1 codex -C "$PWD" exec -s read-only review -m gpt-6-astra -c model_reasoning_effort="xhigh" - < "$PROMPT" > "$REPORT"
 ```
 
 A target flag and `[PROMPT]` cannot be combined: `error: the argument '--base <BRANCH>' cannot be used with '[PROMPT]'`. Pick one. With no target flag, `review` defaults to the uncommitted changes, so say which target you mean inside the prompt when you need a stance. Flag-only reviews rely on `XDELEGATE_DEPTH=1` plus the global recursion rule because they cannot also carry a custom callee prompt.
@@ -64,7 +64,7 @@ Prioritize findings over summary. For each finding include:
 Do not edit files. If there are no substantive findings, say so and name any residual test gaps.
 ```
 
-Add task-specific context when useful: requirements, risky areas, expected behavior, relevant tests, or files Claude is unsure about.
+Add task-specific context when useful: requirements, risky areas, expected behavior, relevant tests, or files you are unsure about.
 
 ## Reporting Back
 
