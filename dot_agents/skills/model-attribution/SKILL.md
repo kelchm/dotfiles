@@ -53,7 +53,7 @@ Model quote inside a comment the user wrote or dictated — put the attribution 
 <sub>model: <id> · agent: <harness></sub>
 ```
 
-PR body — the hidden block, plus the two trailers listed inside it for reuse at squash-merge:
+PR body — the hidden block:
 
 ```
 <!-- attribution
@@ -61,9 +61,6 @@ model: <id>
 agent: <harness>
 role: authored
 thread: <uuid>
-trailers:
-Co-Authored-By: <model> <noreply@vendor>
-X-Generated-With: <harness> (<id>)
 -->
 ```
 
