@@ -28,7 +28,7 @@ The child sees only your prompt. It has none of this conversation and none of th
 
 End every brief with the contract. Adapt the wording, keep every point:
 
-> - Work only in this checkout. Put test repositories and scratch files under `/tmp`.
+> - Work only in this checkout, and leave the repository itself alone: no new branches or worktrees. Put test repositories and scratch files under `/tmp`.
 > - Don't ask questions. Choose the most reasonable reading and list your assumptions in the report.
 > - Don't delegate to other agents, and don't commit.
 > - Run commands in the foreground, even slow ones.
@@ -36,7 +36,7 @@ End every brief with the contract. Adapt the wording, keep every point:
 
 Each point is there because leaving it out failed in testing:
 
-- Reviewers testing a script ran it against the real repository by accident.
+- Reviewers testing a script ran it against the real repository by accident, and one created worktrees and branches in it.
 - A child that asks a question stops and waits, and its status still reads "running".
 - Children can delegate too, with no depth limit. And you commit after verifying, so a child's commit would skip that check.
 - A Claude child moved a slow command to the background, after which it could not be cancelled.
@@ -60,7 +60,7 @@ Set the model's effort option explicitly, from the model table. T3's default dif
 
 - Read the result with `task_status`. For an OpenCode child, including local GLM, read the last assistant message in its thread with `t3_thread_read` instead (see Known gaps).
 - Treat the report as a claim. Before you act on it or pass it to the user, check it in proportion to what depends on it: read the diff, rerun the test it says passed, reproduce a finding. The `review-feedback` skill covers weighing findings.
-- After reviewers finish, run `git status` to confirm nothing changed.
+- After reviewers finish, run `git status` to confirm nothing changed. If their testing involved git, check the branch and worktree lists too.
 - To get fixes, send the findings to the implementer's thread with `t3_thread_send`. It still has its context, which a fresh child would lack.
 - Commit yourself, after verifying. Tell the user what was delegated to which model and what you checked.
 
