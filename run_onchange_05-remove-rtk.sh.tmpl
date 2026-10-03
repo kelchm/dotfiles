@@ -1,0 +1,19 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+set -euo pipefail
+
+# One-time cleanup: these dotfiles no longer use RTK. Undo what `rtk init`
+# wrote outside chezmoi's control (hook entries and RTK.md files), then remove
+# the binary. Does nothing on a machine that never had RTK. Delete this script
+# once every machine has applied it.
+
+rtk_dir=$(mise where rtk 2>/dev/null) || exit 0
+rtk="$rtk_dir/rtk"
+
+"$rtk" init -g --uninstall
+# Match chezmoi's managed Codex home even when a custom profile is active.
+CODEX_HOME="$HOME/.codex" "$rtk" init -g --codex --uninstall
+"$rtk" init -g --agent pi --uninstall
+
+mise uninstall --all rtk
+{{- end }}
