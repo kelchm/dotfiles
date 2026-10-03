@@ -4,6 +4,7 @@ Scores are relative; higher is better. Cost reflects the user's actual cost rath
 
 | provider      | model                      | start                     | cost | intelligence | taste |
 |---------------|----------------------------|---------------------------|------|--------------|-------|
+| `claudeAgent` | `claude-fable-5-1`         | `effort: high`            | 2    | 9            | 9     |
 | `claudeAgent` | `claude-opus-5-5`          | `effort: xhigh`           | 4    | 8            | 9     |
 | `codex`       | `gpt-6-astra`              | `reasoningEffort: xhigh`  | 6    | 8            | 6     |
 | `codex`       | `gpt-6.1-sol`              | `reasoningEffort: xhigh`  | 8    | 7            | 5     |
