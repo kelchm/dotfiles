@@ -31,11 +31,9 @@ Do not add an X pass for stable facts, routine documentation lookup, or question
 Honor an explicitly requested provider or method. Otherwise:
 
 1. If the current runtime can search X natively, use that capability directly.
-2. If it cannot, but the Grok CLI is available and `XDELEGATE_DEPTH` is unset, delegate one tightly scoped, read-only research pass to Grok. Set `XDELEGATE_DEPTH=1` for the child and tell it not to delegate further.
-3. If `XDELEGATE_DEPTH` is already set, do not launch another agent CLI. Use the current runtime's native research tools.
+2. If it cannot, and you are running in T3 Code with a Grok provider available, delegate one tightly scoped research pass to Grok with `delegate_task`, following the `t3-delegate` skill. A Grok child keeps its native X search tools.
+3. If you are a delegated child yourself, do not delegate again. Use the current runtime's native research tools.
 4. If no genuine X-search capability is available, do not present ordinary `site:x.com` results as equivalent. Continue with conventional research and disclose the limitation when it affects confidence or coverage.
-
-When a nested CLI cannot run under the current sandbox or approval policy, use an available native research path instead. Do not weaken a read-only guard merely to make delegation work.
 
 ## Scope the X pass
 
