@@ -44,12 +44,15 @@ Each point is there because leaving it out failed in testing:
 
 For a lead, replace the third point with "Commit on your branch. Don't push or open a PR." For a reviewer, add "Don't edit files" and the shape you want back: severity, `file:line`, the defect in one sentence, a concrete failure scenario, and whether they confirmed it by running something.
 
-Set `role`, a `title`, and a `clientRequestId` on every call. The request ID makes a retry return the same task; without one, a retry starts a second child.
+Set `role`, a `title`, and a `clientRequestId` on every call. The request ID makes a retry return the same task; without one, a retry starts a second child. T3 prepends "Act as the <role> sub-agent for this task." to the brief, so don't write a role line of your own.
+
+Set the model's effort option explicitly, from the model table. T3's default differs by model, and for some it is `low`.
 
 ## 3. Run it
 
 - Start children with `mode: async` and end your turn. T3 wakes you when each finishes. Use `mode: wait` only for a single short task you need before you can continue; when several `wait` calls were issued together in testing, one was cut off mid-flight.
-- A lead does not wake you. Wait on it with `t3_thread_wait`, or end its brief with an instruction to `t3_thread_send` its report to your thread ID with `mode: queue`. A callback is a request the lead may forget, so if you rely on one, check the lead with `t3_thread_read` when it is overdue.
+- A lead does not wake you, and a lead that delegates works across several turns. `t3_thread_wait` returns when the lead's current turn ends, which can be long before its work is done. So end a lead's brief with an instruction to `t3_thread_send` its final report to your thread ID with `mode: queue`, and treat that message as the signal. `t3_thread_wait` is enough only for a lead that does all the work itself in one turn. A callback is a request the lead may forget, so check the lead with `t3_thread_read` when it is overdue.
+- Nothing wakes you if a child hangs. When you end your turn with work outstanding, tell the user what you are waiting on and roughly how long it should take, so a stall is visible to them.
 - To change course mid-task, `t3_thread_send` to the child's thread. Its `childThreadId` is in the `delegate_task` result.
 - A child that is running far longer than the task warrants may be waiting on a question. Check `t3_pending_request_list` for its thread and answer with `t3_pending_request_respond`.
 
@@ -66,6 +69,7 @@ Set `role`, a `title`, and a `clientRequestId` on every call. The request ID mak
 These are T3 bugs and limits, verified by experiment. Remove an entry when T3 fixes it.
 
 - **OpenCode results are the first message, not the last.** T3 picks the newest message by timestamp, and the OpenCode 1.x adapter stamps them all alike at the end of the turn. Reading the thread works around it.
+- **Local GLM runs one request at a time.** Two GLM children started together take turns, and each waits on the other. Run one at a time, and expect a review that builds test repositories to take 10 to 30 minutes.
 - **`task_status` does not show a child blocked on a question.** It reads "running".
 - **Background commands can't be cancelled.** `task_cancel` and `t3_thread_interrupt` stop only an active turn. The task still completes correctly when the command ends.
 - **Steering Grok restarts its turn,** which kills the command in flight. Steering Codex does not.
