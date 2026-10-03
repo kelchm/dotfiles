@@ -1,0 +1,27 @@
+{{- if eq .chezmoi.os "windows" -}}
+# One-time cleanup: these dotfiles no longer use RTK.
+# See run_onchange_05-remove-rtk.sh.tmpl.
+
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+$rtkDir = mise where rtk 2>$null
+if ($LASTEXITCODE -ne 0) { exit 0 }
+$rtk = Join-Path $rtkDir "rtk.exe"
+
+& $rtk init -g --uninstall
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# Match chezmoi's managed Codex home even when a custom profile is active.
+$previousCodexHome = $env:CODEX_HOME
+try {
+    $env:CODEX_HOME = Join-Path $HOME ".codex"
+    & $rtk init -g --codex --uninstall
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    $env:CODEX_HOME = $previousCodexHome
+}
+& $rtk init -g --agent pi --uninstall
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+mise uninstall --all rtk
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+{{- end }}

@@ -9,6 +9,3 @@
 - Before handing work to another agent or model, load the `t3-delegate` skill. It covers shaping the work, what every brief must say, and how to check what comes back.
 - If your first message begins "Act as the … sub-agent", you are a delegated child. Do the work yourself, don't delegate further, and make your final message the complete report.
 
-## Shell commands
-
-Prefix supported commands with `rtk` when a harness hook does not already rewrite them. `rtk` is always safe: unknown commands pass through.

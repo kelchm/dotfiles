@@ -6,3 +6,6 @@
 .claude/skills/grok-review
 .codex/skills/delegate-implementation
 .codex/skills/delegate-review
+
+# RTK's OpenCode 1 plugin; OpenCode 2 fails to load it and warns on every start.
+.config/opencode/plugins/rtk.ts

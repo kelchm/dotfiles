@@ -1,4 +1,4 @@
 # Global instructions
 
 {{ template "shared-agent-working-agreements.md" . }}
-{{ template "model-table.md" . }}@{{ if eq .chezmoi.os "windows" }}{{ replace "/" "\\" .chezmoi.homeDir }}\.codex\RTK.md{{ else }}{{ .chezmoi.homeDir }}/.codex/RTK.md{{ end }}
+{{ template "model-table.md" . }}
