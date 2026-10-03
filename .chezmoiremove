@@ -1,0 +1,3 @@
+# RTK's OpenCode 1 plugin; OpenCode 2 fails to load it and warns on every start.
+# Drop this entry when the RTK OpenCode integration is restored (rtk-ai/rtk#3463).
+.config/opencode/plugins/rtk.ts

@@ -35,6 +35,6 @@ try {
 } finally {
     $env:CODEX_HOME = $previousCodexHome
 }
-mise exec -- rtk init -g --opencode --auto-patch
+mise exec -- rtk init -g --agent pi --auto-patch
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 {{- end }}
