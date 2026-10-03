@@ -6,9 +6,11 @@ description: >
 
 # Delegating in T3 Code
 
-T3 runs the mechanics. Three things are left to you.
+T3 runs the mechanics. Four things are left to you.
 
-**Shape.** A `delegate_task` child works in your checkout, so run one writer at a time. Reviewers and researchers can run in parallel. Work that must run in parallel or stay out of your checkout gets its own thread: `t3_thread_launch` with a `worktree` workspace, told to `t3_thread_send` you its report when done. Launch one when the user asked for parallel or isolated work; otherwise ask first.
+**Shape.** A `delegate_task` child works in your checkout, so run one writer at a time. Reviewers and researchers can run in parallel. Writing that must run in parallel, or any work that must stay out of your checkout, gets its own thread: `t3_thread_launch` with a `worktree` workspace, told to `t3_thread_send` you its report when done. Launch one when the user asked for parallel or isolated work; otherwise ask first.
+
+**Model and effort.** Pick the model from the Models table in your instructions and the effort from the task. Set both in the call: an unset model means yours, and an unset effort usually means medium.
 
 **Brief.** The child sees only your prompt. Give it the goal, the exact files or commit, and what done looks like. End with:
 
@@ -19,4 +21,4 @@ T3 runs the mechanics. Three things are left to you.
 
 Tell a reviewer not to edit files.
 
-**Result.** Treat the report as a claim: check the diff or reproduce the finding before you act on it, then commit yourself. For an OpenCode child, including local GLM, read its last message with `t3_thread_read`, because T3 returns its first message as the result (bug seen 2026-10-02).
+**Result.** Treat the report as a claim: check the diff or reproduce the finding before you act on it, then commit yourself.
