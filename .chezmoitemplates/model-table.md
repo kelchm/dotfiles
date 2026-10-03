@@ -1,15 +1,15 @@
 ## Picking models for delegated work
 
-Scores are relative; higher is better. Cost reflects the user's actual cost rather than list price. Intelligence is how hard a problem the model can handle unsupervised. Taste covers code quality, UI/UX, API design, and copy. `start` is the effort to set first.
+Scores are relative; higher is better. Cost reflects the user's actual cost rather than list price. Intelligence is how hard a problem the model can handle unsupervised. Taste covers code quality, UI/UX, API design, and copy.
 
-| provider      | model                      | start                     | cost | intelligence | taste |
-|---------------|----------------------------|---------------------------|------|--------------|-------|
-| `claudeAgent` | `claude-fable-5-1`         | `effort: high`            | 2    | 9            | 9     |
-| `claudeAgent` | `claude-opus-5-5`          | `effort: xhigh`           | 4    | 8            | 9     |
-| `codex`       | `gpt-6-astra`              | `reasoningEffort: xhigh`  | 6    | 8            | 6     |
-| `codex`       | `gpt-6.1-sol`              | `reasoningEffort: xhigh`  | 8    | 7            | 5     |
-| `grok`        | `grok-4.6`                 | `reasoningEffort: medium` | 8    | 7            | 6     |
-| `opencode`    | `spark/GLM-5.3-Flash-EXL3` | `variant: max`            | 10   | 5            | 4     |
+| provider      | model                      | cost | intelligence | taste |
+|---------------|----------------------------|------|--------------|-------|
+| `claudeAgent` | `claude-fable-5-1`         | 2    | 9            | 9     |
+| `claudeAgent` | `claude-opus-5-5`          | 4    | 8            | 9     |
+| `codex`       | `gpt-6-astra`              | 6    | 8            | 6     |
+| `codex`       | `gpt-6.1-sol`              | 8    | 7            | 5     |
+| `grok`        | `grok-4.6`                 | 8    | 7            | 6     |
+| `opencode`    | `spark/GLM-5.3-Flash-EXL3` | 10   | 5            | 4     |
 
 - Pick the cheapest model whose intelligence and taste clear what the task needs. These are defaults, not limits. If the output misses the bar, raise the effort, then redo the work with a smarter model, without asking. Judge the output, not the price tag.
 - Cost is a tie-breaker only; when axes conflict for anything that ships, intelligence > taste > cost.

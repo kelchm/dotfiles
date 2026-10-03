@@ -10,7 +10,7 @@ T3 runs the mechanics. Three things are left to you.
 
 **Shape.** A `delegate_task` child works in your checkout, so run one writer at a time. Reviewers and researchers can run in parallel. Work that must run in parallel or stay out of your checkout gets its own thread: `t3_thread_launch` with a `worktree` workspace, told to `t3_thread_send` you its report when done. Launch one when the user asked for parallel or isolated work; otherwise ask first.
 
-**Brief.** The child sees only your prompt. Give it the goal, the exact files or commit, and what done looks like. Set the effort from the model table. End with:
+**Brief.** The child sees only your prompt. Give it the goal, the exact files or commit, and what done looks like. End with:
 
 > - Work only in this checkout. Don't create branches or worktrees. Scratch files go in `/tmp`.
 > - Don't ask questions; state your assumptions in the report.
