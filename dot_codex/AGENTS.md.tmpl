@@ -1,8 +1,4 @@
 # Global instructions
 
 {{ template "shared-agent-working-agreements.md" . }}
-## Choosing a delegate
-
-Grok is the default delegate for bulk and mechanical work. Keep taste-sensitive work such as public APIs, UI, and copy off the delegation path.
-
-@{{ if eq .chezmoi.os "windows" }}{{ replace "/" "\\" .chezmoi.homeDir }}\.codex\RTK.md{{ else }}{{ .chezmoi.homeDir }}/.codex/RTK.md{{ end }}
+{{ template "model-table.md" . }}@{{ if eq .chezmoi.os "windows" }}{{ replace "/" "\\" .chezmoi.homeDir }}\.codex\RTK.md{{ else }}{{ .chezmoi.homeDir }}/.codex/RTK.md{{ end }}
