@@ -9,7 +9,7 @@ Cross-platform dotfiles managed with [chezmoi](https://www.chezmoi.io/).
 | **Shell** | Fish, Zsh | PowerShell | — |
 | **Prompt** | — | — | Starship |
 | **Terminal** | Ghostty, iTerm2 | Windows Terminal (pwsh default) | — |
-| **Version mgmt** | — | — | mise (harness CLIs, RTK, Python, Node) |
+| **Version mgmt** | — | — | mise (harness CLIs, Python, Node) |
 | **Editor** | — | — | VSCode, EditorConfig |
 | **Git** | 1Password SSH signing | Credential Manager | Common config |
 | **SSH** | 1Password agent (socket) | 1Password agent (named pipe) | — |
@@ -52,22 +52,21 @@ chezmoi cd                              # cd into source directory
 chezmoi add ~/.some/new/file            # start managing a new file
 ```
 
-### Harness CLIs and RTK
+### Harness CLIs
 
 Chezmoi bootstraps the configured tools; mise upgrades them. Harnesses track `latest`, so machines share configuration and an update method, but may have different versions until each is upgraded.
 
 - Harness CLIs: Claude Code, Codex, Grok Build, OpenCode 2, Pi
-- Filter (not an agent): RTK
 - mise selects the installation backends using its registry defaults, except OpenCode 2, which is published only as the npm package `@opencode/cli` (the registry's `opencode` is still 1.x)
 - Background self-updates are disabled through mise's environment settings
 
 `minimum_release_age = "24h"` delays selection of timestamped releases. Grok's HTTP feed has no timestamps, so it is not covered. Already-installed versions are not downgraded.
 
 ```bash
-chezmoi apply                                            # bootstrap tools when config changes
-mise install                                             # restore missing configured tools
-mise outdated claude codex grok npm:@opencode/cli pi rtk # check these six tools
-mise run harness:update                                  # upgrade these six, leaving runtimes alone
+chezmoi apply                                        # bootstrap tools when config changes
+mise install                                         # restore missing configured tools
+mise outdated claude codex grok npm:@opencode/cli pi # check these five tools
+mise run harness:update                              # upgrade these five, leaving runtimes alone
 ```
 
 Launch through mise shims or an activated shell so the updater settings are loaded. For scripts, use `mise exec -- <command>`. GUI launchers should use the shim path, rather than a versioned executable path.
@@ -78,17 +77,7 @@ On a machine that already had Homebrew, npm, or WinGet copies: apply, then remov
 
 OpenCode 2 keeps the `opencode` command (and adds `opencode2`) and reads the same config files, so existing V1 settings carry over. V1 plugins and V1 server API clients do not; see the [migration guide](https://opencode.ai/v2/docs/migrate-v1/).
 
-RTK does not filter OpenCode yet: OpenCode 2 rejects RTK's V1 plugin ([rtk-ai/rtk#3463](https://github.com/rtk-ai/rtk/issues/3463)), so chezmoi removes the stale `~/.config/opencode/plugins/rtk.ts` and skips that integration until RTK supports V2.
-
-RTK integration is initialized during bootstrap and when its setup scripts change (for example, when adding a harness). Routine RTK upgrades need no extra step. If RTK documents an integration migration, rerun the relevant command:
-
-```bash
-mise exec -- rtk init -g --auto-patch             # Claude
-mise exec -- rtk init -g --codex
-mise exec -- rtk init -g --agent pi --auto-patch
-```
-
-These dotfiles manage Codex's default `~/.codex` directory. Bootstrap targets that directory even when `CODEX_HOME` selects a separate profile; custom profiles are managed separately. For a manual Codex migration with a custom profile active, use `CODEX_HOME="$HOME/.codex" mise exec -- rtk init -g --codex` in Bash/Zsh. In PowerShell, temporarily set `$env:CODEX_HOME = Join-Path $HOME ".codex"` for the command, then restore its previous value.
+RTK is no longer used. On a machine that had it, the next `chezmoi apply` removes its Claude, Codex, and Pi hooks, its `RTK.md` files, the stale OpenCode plugin, and the binary. Its history and settings stay in RTK's own data directory (`~/Library/Application Support/rtk` on macOS); delete that by hand if you want it gone.
 
 ## How it works
 

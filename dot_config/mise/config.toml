@@ -1,10 +1,8 @@
 [tools]
-# Harness CLIs (claude, codex, grok, opencode, pi) and RTK (shell-output filter,
-# not an agent) track latest. mise is the install owner on every OS.
+# Harness CLIs (claude, codex, grok, opencode, pi) track latest. mise is the
+# install owner on every OS.
 # `chezmoi apply` runs `mise install` (fills in missing tools). Bump with
 # `mise run harness:update`.
-# When adding a harness, also add its RTK setup command to the init scripts.
-# Installing the CLI alone does not configure its RTK integration.
 claude = "latest"
 codex = "latest"
 grok = "latest"
@@ -14,7 +12,6 @@ node = "lts"
 "npm:@opencode/cli" = { version = "latest", allow_builds = ["@opencode/cli"] }
 pi = "latest"
 python = "3.12"
-rtk = "latest"
 uv = "latest"
 
 [env]
@@ -32,5 +29,5 @@ idiomatic_version_file_enable_tools = ["rust"]
 minimum_release_age = "24h"
 
 [tasks."harness:update"]
-description = "Upgrade harness CLIs and RTK to latest"
-run = "mise upgrade claude codex grok npm:@opencode/cli pi rtk"
+description = "Upgrade harness CLIs to latest"
+run = "mise upgrade claude codex grok npm:@opencode/cli pi"
