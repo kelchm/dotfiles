@@ -31,7 +31,7 @@ Do not add an X pass for stable facts, routine documentation lookup, or question
 Honor an explicitly requested provider or method. Otherwise:
 
 1. If the current runtime can search X natively, use that capability directly.
-2. If it cannot, and you are running in T3 Code with a Grok provider available, delegate one tightly scoped research pass to Grok with `delegate_task`, following the `t3-delegate` skill. A Grok child keeps its native X search tools.
+2. If it cannot, and you are running in T3 Code with a Grok provider available, delegate one tightly scoped research pass to Grok with `delegate_task`. A Grok child keeps its native X search tools.
 3. If you are a delegated child yourself, do not delegate again. Use the current runtime's native research tools.
 4. If no genuine X-search capability is available, do not present ordinary `site:x.com` results as equivalent. Continue with conventional research and disclose the limitation when it affects confidence or coverage.
 

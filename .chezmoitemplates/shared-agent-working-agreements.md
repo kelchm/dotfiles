@@ -7,6 +7,4 @@
 ## Delegation
 
 - Review across labs. For a consequential review, use a model from a different vendor than the one that wrote the work. Same-model review is fine for a quick sanity check.
-- Choose effort from the task, not the model. A clear, bounded task needs little; ambiguous, risky, or verification-heavy work needs more. When in doubt, go higher. If the output misses the bar, raise the effort on the same model first; if it still misses, redo the work with a smarter model. Don't stop to ask.
-- In T3 Code, load the `t3-delegate` skill before handing work to another agent or model.
-- If your first message begins "Act as the … sub-agent", you are a delegated child. Do the work yourself, don't delegate further, and make your final message the complete report.
+- Choose effort from the task, not the model. A clear, bounded task needs little; ambiguous, risky, or verification-heavy work needs more. When in doubt, go higher. Set it explicitly when you delegate: left unset, it falls back to a default, often medium. If the output misses the bar, raise the effort on the same model first; if it still misses, redo the work with a smarter model. Don't stop to ask.

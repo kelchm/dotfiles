@@ -1,4 +1,4 @@
-# CLI delegation skills, replaced by T3 Code orchestration and the t3-delegate skill.
+# CLI delegation skills, replaced by T3 Code orchestration.
 .claude/skills/codex-computer-use
 .claude/skills/codex-implementation
 .claude/skills/codex-review
