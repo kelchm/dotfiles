@@ -59,7 +59,7 @@ Chezmoi bootstraps the configured tools; mise upgrades them. Harnesses track `la
 - Harness CLIs: Claude Code, Codex, Grok Build, OpenCode 2, Pi
 - mise selects the installation backends using its registry defaults, except OpenCode 2, which is published only as the npm package `@opencode/cli` (the registry's `opencode` is still 1.x)
 - Background self-updates are disabled through mise's environment settings
-- Claude, Codex, and Pi share one set of working agreements (`.chezmoitemplates/shared-agent-working-agreements.md`); Claude and Codex also get the model table (`.chezmoitemplates/model-table.md`)
+- Claude, Codex, and Pi share one set of working agreements (`.chezmoitemplates/shared-agent-working-agreements.md`) and one model table (`.chezmoitemplates/model-table.md`)
 - Pi's `models.json` and `settings.json` stay machine-specific, like OpenCode's local providers
 
 `minimum_release_age = "24h"` delays selection of timestamped releases. Grok's HTTP feed has no timestamps, so it is not covered. Already-installed versions are not downgraded.
