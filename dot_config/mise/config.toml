@@ -1,4 +1,5 @@
 [tools]
+"aqua:cli/cli" = "2.101.0"
 # Harness CLIs (claude, codex, grok, opencode, pi) track latest. mise is the
 # install owner on every OS.
 # `chezmoi apply` runs `mise install` (fills in missing tools). Bump with

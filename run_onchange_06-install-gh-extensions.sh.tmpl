@@ -1,0 +1,28 @@
+{{- if ne .chezmoi.os "windows" -}}
+#!/bin/bash
+set -euo pipefail
+
+# Run again when the tool configuration changes, after 02-install-mise-tools.
+# hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
+export PATH="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/shims:$PATH"
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "Skipping github/gh-stack: gh is unavailable. Install configured tools, then retry this script." >&2
+  exit 0
+fi
+
+if ! extensions=$(gh extension list); then
+  echo "Skipping github/gh-stack: cannot list gh extensions. Resolve the gh error, then retry this script." >&2
+  exit 0
+fi
+
+if printf '%s\n' "$extensions" | awk '$3 == "github/gh-stack" { found = 1 } END { exit !found }'; then
+  echo "github/gh-stack is already installed; leaving it unchanged."
+  exit 0
+fi
+
+# Pin new installs; preserve extensions the owner has already installed.
+if ! GH_PROMPT_DISABLED=1 gh extension install github/gh-stack --pin v0.2.0; then
+  echo "Could not install github/gh-stack. Check network access and gh authentication, then retry this script." >&2
+fi
+{{- end }}

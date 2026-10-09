@@ -15,8 +15,7 @@
         { "PackageIdentifier": "Starship.Starship" },
         { "PackageIdentifier": "jdx.mise" },
         { "PackageIdentifier": "DEVCOM.JetBrainsMonoNerdFont" },
-        { "PackageIdentifier": "ImageMagick.ImageMagick" },
-        { "PackageIdentifier": "GitHub.cli" }
+        { "PackageIdentifier": "ImageMagick.ImageMagick" }
       ]
     }
   ]

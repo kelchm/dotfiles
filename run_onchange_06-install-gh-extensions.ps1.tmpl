@@ -1,0 +1,34 @@
+{{- if eq .chezmoi.os "windows" -}}
+# Run again when the tool configuration changes, after 02-install-mise-tools.
+# hash: {{ include "dot_config/mise/config.toml" | sha256sum }}
+$env:Path = (Join-Path $env:LOCALAPPDATA "mise\shims") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    Write-Warning "Skipping github/gh-stack: gh is unavailable. Install configured tools, then retry this script."
+    exit 0
+}
+
+$extensions = gh extension list
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Skipping github/gh-stack: cannot list gh extensions. Resolve the gh error, then retry this script."
+    exit 0
+}
+
+if ($extensions | Where-Object { ($_.Trim() -split '\s+')[2] -eq 'github/gh-stack' }) {
+    Write-Host "github/gh-stack is already installed; leaving it unchanged."
+    exit 0
+}
+
+# Pin new installs; preserve extensions the owner has already installed.
+$previousPromptDisabled = $env:GH_PROMPT_DISABLED
+try {
+    $env:GH_PROMPT_DISABLED = "1"
+    gh extension install github/gh-stack --pin v0.2.0
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Could not install github/gh-stack. Check network access and gh authentication, then retry this script."
+    }
+} finally {
+    $env:GH_PROMPT_DISABLED = $previousPromptDisabled
+}
+exit 0
+{{- end }}
