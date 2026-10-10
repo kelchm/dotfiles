@@ -14,7 +14,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 0
 }
 
-if ($extensions | Where-Object { ($_.Trim() -split '\s+')[2] -eq 'github/gh-stack' }) {
+if ($extensions -and ($extensions | Where-Object { ($_.Trim() -split '\s+')[2] -eq 'github/gh-stack' })) {
     Write-Host "github/gh-stack is already installed; leaving it unchanged."
     exit 0
 }
