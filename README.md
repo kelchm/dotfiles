@@ -81,6 +81,14 @@ OpenCode 2 keeps the `opencode` command (and adds `opencode2`) and reads the sam
 
 RTK is no longer used. On a machine that had it, the next `chezmoi apply` removes its Claude, Codex, and Pi hooks, its `RTK.md` files, the stale OpenCode plugin, and the binary. Its history and settings stay in RTK's own data directory (`~/Library/Application Support/rtk` on macOS); delete that by hand if you want it gone.
 
+### GitHub CLI extensions
+
+GitHub CLI is managed by mise's aqua backend at 2.101.0 on every OS. The Brewfile and WinGet manifest no longer install it. On an existing machine, run `chezmoi apply`, verify gh works through mise, then remove the old Homebrew/WinGet copy manually. On Linux, install mise first; the POSIX tool bootstrap runs `mise install` there too.
+
+After tool installation, chezmoi installs `github/gh-stack` if missing, pinned to v0.2.0 using `gh extension install --pin`. The pin makes new installations reproducible while this young extension changes quickly. Existing installations are left unchanged, including their version and pin status. To update, change the pin in both `run_onchange_06-install-gh-extensions` templates; existing installations need a manual `gh extension install github/gh-stack --force --pin <version>`.
+
+An isolated install of this public binary extension succeeded without authentication. If gh is missing, listing extensions fails, or installation fails (for example, network or authentication problems), the script prints a message and lets apply continue. Because `run_onchange_` records successful runs even when installation is skipped, retry after resolving the error with `chezmoi execute-template -f "$(chezmoi source-path)/run_onchange_06-install-gh-extensions.sh.tmpl" | bash` on macOS/Linux, or render and run the `.ps1.tmpl` with PowerShell on Windows. The script also runs again when the managed mise configuration changes.
+
 ## How it works
 
 - Files are stored in chezmoi's source format (`dot_` prefix replaces leading `.`)
