@@ -1,0 +1,20 @@
+# Repository tooling lives outside home/; ignore only unmanaged targets here.
+.DS_Store
+**/.DS_Store
+**/__pycache__
+**/__pycache__/**
+**/*.pyc
+
+{{ range $module, $paths := .dotfiles.modulePaths -}}
+{{ if not (index $.modules $module) -}}
+{{ range $paths }}{{ . }}
+{{ end -}}
+{{ end -}}
+{{ end -}}
+
+{{ range $platform, $paths := .dotfiles.platformPaths -}}
+{{ if or (and (eq $platform "posix") (eq $.chezmoi.os "windows")) (and (ne $platform "posix") (ne $platform $.chezmoi.os)) -}}
+{{ range $paths }}{{ . }}
+{{ end -}}
+{{ end -}}
+{{ end -}}

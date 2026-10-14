@@ -1,0 +1,23 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- /* Own only declared keys. Preserve unrelated tools, environment and settings.
+     Keep the original bytes (and comments) once the config is compliant. */ -}}
+{{- $original := .chezmoi.stdin -}}
+{{- $config := fromToml ($original | default "") -}}
+{{- $before := $config | toJson -}}
+{{- $managed := fromToml (includeTemplate "mise/config.toml" .) -}}
+{{- /* These aliases are the same managed tools, not independent installs.
+     Normalize only their declarations; never uninstall another backend here. */ -}}
+{{- $tools := get $config "tools" | default dict -}}
+{{- if eq .profile "omarchy" -}}
+  {{- $_ := unset $tools "aqua:cli/cli" -}}
+  {{- $_ := unset $tools "npm:@opencode/cli" -}}
+{{- else -}}
+  {{- $_ := unset $tools "gh" -}}
+  {{- $_ := unset $tools "opencode" -}}
+{{- end -}}
+{{- $config = mergeOverwrite $config $managed -}}
+{{- if eq $before ($config | toJson) -}}
+{{ $original }}
+{{- else -}}
+{{ $config | toToml }}
+{{- end -}}

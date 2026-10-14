@@ -1,6 +1,8 @@
 {
   "files.associations": {
     "*.sh.tmpl": "shellscript",
+    "*.ps1.tmpl": "powershell",
+    "*.lua.tmpl": "lua",
     "*.toml.tmpl": "toml",
     "*.fish.tmpl": "fish",
     "*.yaml.tmpl": "yaml"

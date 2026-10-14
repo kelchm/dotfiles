@@ -1,0 +1,128 @@
+# Profile defaults and target ownership. Local switches live in chezmoi.toml.
+
+[dotfiles.profiles.standalone]
+desktop = false
+git = true
+agents = true
+tools = true
+runtimes = true
+shell = true
+prompt = true
+terminal = true
+editor = true
+packages = true
+
+[dotfiles.profiles.omarchy]
+desktop = false
+git = true
+agents = true
+tools = true
+runtimes = false
+shell = false
+prompt = false
+terminal = false
+editor = false
+packages = false
+
+[dotfiles.desktopDefaults]
+naturalScroll = true
+keyboardOptions = "ctrl:nocaps,shift:both_capslock_cancel,altwin:swap_lalt_lwin"
+borderSize = 1
+
+[dotfiles.modulePaths]
+desktop = [
+    ".config/hypr/input.lua",
+    ".config/hypr/looknfeel.lua",
+]
+git = [
+    ".gitconfig",
+    ".config/git/dotfiles.gitconfig",
+    ".ssh",
+    ".ssh/**",
+]
+agents = [
+    ".agents",
+    ".agents/**",
+    ".claude",
+    ".claude/**",
+    ".codex",
+    ".codex/**",
+    ".pi",
+    ".pi/**",
+    ".config/opencode",
+    ".config/opencode/**",
+]
+tools = [
+    ".config/mise",
+    ".config/mise/**",
+]
+runtimes = [
+    ".default-python-packages",
+    ".local/bin/python3.cmd",
+]
+shell = [
+    ".config/fish",
+    ".config/fish/**",
+    ".config/shell",
+    ".config/shell/**",
+    ".bash_profile",
+    ".bashrc",
+    ".profile",
+    ".zprofile",
+    ".zshenv",
+    ".zshrc",
+    "Documents",
+    "Documents/**",
+]
+prompt = [
+    ".config/starship.toml",
+]
+terminal = [
+    ".config/ghostty",
+    ".config/ghostty/**",
+    ".config/iterm2",
+    ".config/iterm2/**",
+    "AppData",
+    "AppData/**",
+    ".config/t3code",
+    ".config/t3code/**",
+]
+editor = [
+    ".editorconfig",
+    ".vscode",
+    ".vscode/**",
+]
+packages = [
+    ".config/packages",
+    ".config/packages/**",
+]
+
+[dotfiles.platformPaths]
+darwin = [
+    ".config/packages/Brewfile",
+    ".config/iterm2",
+    ".config/iterm2/**",
+    ".config/mise/conf.d/github-public-ro.toml",
+]
+windows = [
+    ".local/bin/python3.cmd",
+    ".config/packages/winget.json",
+    "AppData",
+    "AppData/**",
+    "Documents",
+    "Documents/**",
+]
+posix = [
+    ".config/fish",
+    ".config/fish/**",
+    ".config/shell",
+    ".config/shell/**",
+    ".config/ghostty",
+    ".config/ghostty/**",
+    ".bash_profile",
+    ".bashrc",
+    ".profile",
+    ".zprofile",
+    ".zshenv",
+    ".zshrc",
+]

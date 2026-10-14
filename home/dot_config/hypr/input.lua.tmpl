@@ -1,0 +1,10 @@
+-- Personal overrides, loaded after Omarchy's packaged defaults.
+-- Keyboard mapping is provisional while the Mac-to-Linux setup is evaluated.
+hl.config({
+  input = {
+    kb_options = {{ .desktop.keyboardOptions | quote }},
+    touchpad = {
+      natural_scroll = {{ .desktop.naturalScroll }},
+    },
+  },
+})

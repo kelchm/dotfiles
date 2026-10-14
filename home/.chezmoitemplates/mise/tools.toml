@@ -1,0 +1,27 @@
+[tools]
+{{ if eq .profile "omarchy" -}}
+# Match Omarchy's first-run launchers and its system update command.
+gh = "latest"
+opencode = { version = "latest", allow_builds = ["@opencode/cli"] }
+{{ else -}}
+"aqua:cli/cli" = "2.101.0"
+# Explicit backend also works with older mise registries on other machines.
+"npm:@opencode/cli" = { version = "latest", allow_builds = ["@opencode/cli"] }
+{{ end -}}
+claude = "latest"
+codex = "latest"
+grok = "latest"
+pi = "latest"
+uv = "latest"
+
+[env]
+DISABLE_AUTOUPDATER = "1"
+OPENCODE_DISABLE_AUTOUPDATE = "1"
+GROK_DISABLE_AUTOUPDATER = "1"
+PI_SKIP_VERSION_CHECK = "1"
+
+[tasks."harness:update"]
+description = "Upgrade harness CLIs immediately, leaving runtimes alone"
+# Bypass any machine-specific release delay for harnesses only.
+env = { MISE_MINIMUM_RELEASE_AGE = "0" }
+run = "mise upgrade claude codex grok {{ if eq .profile "omarchy" }}opencode{{ else }}npm:@opencode/cli{{ end }} pi"

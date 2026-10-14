@@ -1,0 +1,30 @@
+name: Validate dotfiles
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  profiles:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install chezmoi
+        env:
+          CHEZMOI_VERSION: '2.73.1'
+        run: |
+          mkdir -p "$RUNNER_TEMP/chezmoi"
+          curl --fail --silent --show-error --location \
+            "https://github.com/twpayne/chezmoi/releases/download/v${CHEZMOI_VERSION}/chezmoi_${CHEZMOI_VERSION}_linux-glibc_amd64.tar.gz" \
+            --output "$RUNNER_TEMP/chezmoi.tar.gz"
+          tar -xzf "$RUNNER_TEMP/chezmoi.tar.gz" -C "$RUNNER_TEMP/chezmoi" chezmoi
+          echo "$RUNNER_TEMP/chezmoi" >> "$GITHUB_PATH"
+      - name: Check isolated profiles and skills
+        run: python3 -m unittest discover -s tests

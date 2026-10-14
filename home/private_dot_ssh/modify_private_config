@@ -1,0 +1,17 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- $original := .chezmoi.stdin -}}
+{{- $pattern := `(?ms)^# BEGIN dotfiles: 1Password SSH agent\n.*?^# END dotfiles: 1Password SSH agent\n?` -}}
+{{- $rest := regexReplaceAll $pattern $original "" -}}
+{{- if and (eq .sshAgent "1password") (ne .chezmoi.os "windows") -}}
+# BEGIN dotfiles: 1Password SSH agent
+Host *
+{{ if eq .chezmoi.os "darwin" -}}
+    IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+{{ else -}}
+    IdentityAgent "~/.1password/agent.sock"
+{{ end -}}
+# END dotfiles: 1Password SSH agent
+{{ $rest }}
+{{- else -}}
+{{ $rest }}
+{{- end -}}
