@@ -1,6 +1,6 @@
 [tools]
 {{ if eq .profile "omarchy" -}}
-# Match Omarchy's first-run launchers and its system update command.
+# Use the stock gh/OpenCode declarations on Omarchy.
 gh = "latest"
 opencode = { version = "latest", allow_builds = ["@opencode/cli"] }
 {{ else -}}
@@ -13,6 +13,9 @@ codex = "latest"
 grok = "latest"
 pi = "latest"
 uv = "latest"
+
+[settings.upgrade]
+auto_prune = false
 
 [env]
 DISABLE_AUTOUPDATER = "1"

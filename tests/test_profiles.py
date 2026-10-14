@@ -10,11 +10,16 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CHEZMOI = os.environ.get("CHEZMOI") or shutil.which("chezmoi")
-MODULES = ("desktop", "git", "agents", "tools", "runtimes", "shell", "prompt", "terminal", "editor", "packages")
+DEFAULTS = tomllib.loads((ROOT / "home/.chezmoidata.toml").read_text())["dotfiles"]["profiles"]
+MODULES = tuple(DEFAULTS["standalone"])
 
 
-@unittest.skipUnless(CHEZMOI, "install chezmoi or set CHEZMOI to its executable")
 class Profiles(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if not CHEZMOI:
+            raise RuntimeError("chezmoi is required; install it or set CHEZMOI to its executable")
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -25,16 +30,14 @@ class Profiles(unittest.TestCase):
         self.platform = "linux"
 
     def configure(self, profile="omarchy", *, bootstrap=False, **overrides):
-        standalone = profile == "standalone"
         data = dict(profile=profile, name="Test User", email="test@example.com",
                     signingMethod="none", signingKey="", sshAgent="system",
                     bootstrap=bootstrap)
-        modules = {m: (standalone or m in {"git", "agents", "tools"}) and m != "desktop" for m in MODULES}
+        modules = dict(DEFAULTS[profile])
         modules.update(overrides.pop("modules", {}))
         data.update(overrides)
         text = "[data]\n" + "".join(f"{k} = {json.dumps(v)}\n" for k, v in data.items())
         text += "[data.modules]\n" + "".join(f"{k} = {str(v).lower()}\n" for k, v in modules.items())
-        text += '[data.desktop]\nnaturalScroll = true\nkeyboardOptions = "ctrl:nocaps,shift:both_capslock_cancel,altwin:swap_lalt_lwin"\nborderSize = 1\n'
         self.config.write_text(text)
 
     def chezmoi(self, *args, check=True):
@@ -107,6 +110,33 @@ run = "echo keep"
         self.assertEqual(mise.read_bytes(), first)
         self.chezmoi("verify", "--exclude", "scripts")
 
+    def test_mise_retains_tool_options_when_updating_versions_and_aliases(self):
+        self.configure(modules={"runtimes": True})
+        p = self.seed(".config/mise/config.toml", '''
+[tools.gh]
+version = "2.80.0"
+os = ["linux"]
+[tools."aqua:cli/cli"]
+version = "2.101.0"
+install_env = { CUSTOM = "keep" }
+[tools.python]
+version = "3.11.9"
+virtualenv = "/custom/venv"
+[tools."npm:@opencode/cli"]
+version = "latest"
+extra_bins = ["opencode2"]
+''')
+        self.apply()
+        tools = tomllib.loads(p.read_text())["tools"]
+        self.assertEqual(tools["gh"]["version"], "latest")
+        self.assertEqual(tools["gh"]["os"], ["linux"])
+        self.assertEqual(tools["gh"]["install_env"], {"CUSTOM": "keep"})
+        self.assertEqual(tools["python"], {"version": "3.12", "virtualenv": "/custom/venv"})
+        self.assertEqual(tools["opencode"]["extra_bins"], ["opencode2"])
+        first = p.read_bytes()
+        self.apply()
+        self.assertEqual(p.read_bytes(), first)
+
     def test_mise_keeps_comments_when_already_compliant(self):
         self.configure()
         self.apply()
@@ -153,16 +183,31 @@ run = "echo keep"
         data = tomllib.loads(self.config.read_text())["data"]
         self.assertTrue(all(v is False for v in data["modules"].values()))
         self.assertFalse(data["bootstrap"])
+        managed = self.chezmoi("managed", "--exclude", "scripts").stdout.splitlines()
+        self.assertEqual(managed, [])
 
     def test_invalid_module_combinations_fail_initialization(self):
         self.configure(modules={"runtimes": True, "tools": False})
         result = self.chezmoi("init", check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("runtimes module requires", result.stderr)
+        result = self.chezmoi("managed", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("runtimes module requires", result.stderr)
         self.configure("standalone", modules={"desktop": True})
         result = self.chezmoi("init", check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("desktop module requires", result.stderr)
+        result = self.chezmoi("managed", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("desktop module requires", result.stderr)
+
+    def test_unknown_module_names_fail_instead_of_silently_ignoring_opt_outs(self):
+        self.configure(modules={"terminals": False})
+        for args in [("init",), ("managed",)]:
+            result = self.chezmoi(*args, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Unknown module "terminals"', result.stderr)
 
     def test_profile_defaults_and_existing_identity_survive_init(self):
         for profile in ["omarchy", "standalone"]:
@@ -179,13 +224,38 @@ signingMethod = "none"
                 self.assertEqual(data["modules"]["runtimes"], profile == "standalone")
                 self.assertTrue(data["modules"]["agents"])
 
+    def test_owned_blocks_survive_external_crlf_rewrites(self):
+        self.configure(sshAgent="1password")
+        self.apply()
+        for target in [".gitconfig", ".ssh/config"]:
+            p = self.home / target
+            p.write_bytes(p.read_bytes().replace(b"\n", b"\r\n"))
+        self.apply()
+        self.assertEqual((self.home / ".gitconfig").read_text().count("# BEGIN dotfiles:"), 1)
+        self.assertEqual((self.home / ".ssh/config").read_text().count("# BEGIN dotfiles:"), 1)
+        self.configure(sshAgent="system")
+        self.apply()
+        ssh_config = self.home / ".ssh/config"
+        self.assertFalse(ssh_config.exists())
+
+    def test_editor_is_selected_from_the_environment(self):
+        self.configure()
+        self.chezmoi("init")
+        self.assertNotIn("edit", tomllib.loads(self.config.read_text()))
+
+    def test_preinit_config_has_an_actionable_error(self):
+        self.config.write_text('[data]\nprofile = "omarchy"\n')
+        result = self.chezmoi("managed", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Run chezmoi init", result.stderr)
+
     def test_ssh_agent_merge_idempotence_and_opt_out(self):
         self.configure(sshAgent="1password")
         original = "Host github.com\n    User git\n    IdentityFile ~/.ssh/custom\n"
         p = self.seed(".ssh/config", original)
         self.apply()
         text = p.read_text()
-        self.assertTrue(text.endswith(original))
+        self.assertTrue(text.startswith(original))
         self.assertIn('IdentityAgent "~/.1password/agent.sock"', text)
         parsed = subprocess.run(["ssh", "-G", "-F", str(p), "github.com"], text=True, capture_output=True)
         self.assertEqual(parsed.returncode, 0, parsed.stderr)
@@ -196,6 +266,76 @@ signingMethod = "none"
         self.configure(sshAgent="system")
         self.apply()
         self.assertEqual(p.read_text(), original)
+
+    def test_opencode_uses_existing_json_without_creating_jsonc(self):
+        self.configure()
+        original = '{"theme":"omarchy","autoupdate":false}\n'
+        p = self.seed(".config/opencode/opencode.json", original)
+        self.apply()
+        self.assertEqual(p.read_text(), original)
+        self.assertFalse((self.home / ".config/opencode/opencode.jsonc").exists())
+        p.write_text('{"enabled_providers":["custom"],"theme":"omarchy"}')
+        self.apply()
+        data = json.loads(p.read_text())
+        self.assertEqual(data["enabled_providers"], ["custom", "opencode-go"])
+        self.assertEqual(data["theme"], "omarchy")
+        self.assertFalse((self.home / ".config/opencode/opencode.jsonc").exists())
+
+    def test_opencode_non_array_provider_fields_do_not_abort_apply(self):
+        self.configure()
+        for value in [None, "custom"]:
+            original = json.dumps({"enabled_providers": value, "disabled_providers": value, "model": "custom/mine"})
+            p = self.seed(".config/opencode/opencode.jsonc", original)
+            self.apply()
+            self.assertEqual(p.read_text(), original)
+            self.assertTrue((self.home / ".gitconfig").exists())
+
+    def test_agent_only_rtk_cleanup_skips_a_missing_mise(self):
+        self.platform = "darwin"
+        self.configure("standalone", bootstrap=True, modules={"tools": False, "runtimes": False})
+        script = ROOT / "home/.chezmoiscripts/run_onchange_05-remove-rtk.sh.tmpl"
+        rendered = self.chezmoi("execute-template", "-f", str(script)).stdout
+        empty_path = self.base / "empty-bin"
+        empty_path.mkdir()
+        env = dict(os.environ, HOME=str(self.home), PATH=str(empty_path))
+        result = subprocess.run([shutil.which("bash")], input=rendered, env=env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+
+    def test_missing_module_choice_requests_reinitialization(self):
+        self.configure()
+        self.config.write_text(self.config.read_text().replace("runtimes = false\n", ""))
+        result = self.chezmoi("managed", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run chezmoi init", result.stderr)
+        self.chezmoi("init")
+        self.assertFalse(tomllib.loads(self.config.read_text())["data"]["modules"]["runtimes"])
+
+    def test_rtk_cleanup_removes_global_request_before_uninstall(self):
+        self.platform = "darwin"
+        self.configure("standalone", bootstrap=True)
+        script = ROOT / "home/.chezmoiscripts/run_onchange_05-remove-rtk.sh.tmpl"
+        rendered = self.chezmoi("execute-template", "-f", str(script)).stdout
+        bins = self.base / "bin"
+        bins.mkdir()
+        trace = self.base / "trace"
+        rtk = bins / "rtk"
+        rtk.write_text('#!/bin/sh\nprintf "rtk %s\\n" "$*" >> "$RTK_TRACE"\n')
+        rtk.chmod(0o755)
+        mise = bins / "mise"
+        mise.write_text('#!/bin/sh\nprintf "mise %s\\n" "$*" >> "$RTK_TRACE"\nif [ "$1" = "where" ]; then\n [ "$RTK_PRESENT" = "yes" ] || exit 1\n printf "%s\\n" "$RTK_DIRECTORY"\nfi\n')
+        mise.chmod(0o755)
+        for present in ["yes", "no"]:
+            with self.subTest(installed=present):
+                trace.write_text("")
+                env = dict(os.environ, HOME=str(self.home), PATH=f"{bins}:{os.environ['PATH']}", RTK_TRACE=str(trace), RTK_PRESENT=present, RTK_DIRECTORY=str(bins))
+                subprocess.run(["bash"], input=rendered, env=env, text=True, capture_output=True, check=True)
+                calls = trace.read_text().splitlines()
+                self.assertIn("mise unuse --global --no-prune rtk", calls)
+                if present == "yes":
+                    self.assertLess(calls.index("mise unuse --global --no-prune rtk"), calls.index("mise uninstall --all rtk"))
+                else:
+                    self.assertNotIn("mise uninstall --all rtk", calls)
 
     def test_opencode_merge_keeps_local_providers_and_defaults(self):
         self.configure()
@@ -232,18 +372,49 @@ signingMethod = "none"
         self.assertNotIn("__pycache__", managed)
         self.assertNotIn(".pyc", managed)
 
-    def test_git_include_preserves_credentials_and_overrides_identity(self):
+    def test_git_include_preserves_credentials(self):
         self.configure()
-        original = '[credential "https://github.com"]\n    helper = !gh auth git-credential\n[user]\n    email = old@example.com\n'
+        original = '[credential "https://github.com"]\n    helper = !gh auth git-credential\n'
         p = self.seed(".gitconfig", original)
         self.apply()
-        self.assertTrue(p.read_text().startswith(original))
+        self.assertTrue(p.read_text().endswith(original))
         config = subprocess.run(["git", "config", "--includes", "--file", str(p), "--get", "user.email"], text=True, capture_output=True)
         self.assertEqual(config.stdout.strip(), "test@example.com")
         first = p.read_bytes()
         self.apply()
         self.assertEqual(p.read_bytes(), first)
         self.assertEqual(p.read_text().count("# BEGIN dotfiles: personal Git configuration"), 1)
+
+    def test_windows_does_not_append_a_duplicate_credential_helper(self):
+        self.platform = "windows"
+        self.configure("standalone")
+        p = self.seed(".gitconfig", '[credential]\n helper = manager\n')
+        self.apply()
+        helpers = subprocess.check_output(["git", "config", "--includes", "--file", str(p), "--get-all", "credential.helper"], text=True)
+        self.assertEqual(helpers.splitlines(), ["manager"])
+
+    def test_machine_git_identity_and_conditional_include_take_precedence(self):
+        self.configure()
+        corporate = self.base / "corporate.gitconfig"
+        corporate.write_text('[user]\n email = work@example.com\n')
+        work = self.base / "work"
+        subprocess.run(["git", "init", str(work)], check=True, capture_output=True)
+        self.seed(".gitconfig", f'[user]\n email = local@example.com\n[includeIf "gitdir:{work}/"]\n path = {corporate}\n')
+        self.apply()
+        env = dict(os.environ, HOME=str(self.home), XDG_CONFIG_HOME=str(self.home / ".config"))
+        identity = subprocess.check_output(["git", "-C", str(work), "config", "user.email"], env=env, text=True)
+        self.assertEqual(identity.strip(), "work@example.com")
+        identity = subprocess.check_output(["git", "config", "--global", "user.email"], env=env, text=True)
+        self.assertEqual(identity.strip(), "local@example.com")
+
+    def test_per_host_ssh_agent_takes_precedence_over_personal_default(self):
+        self.configure(sshAgent="1password")
+        p = self.seed(".ssh/config", 'Host isolated.example\n IdentityAgent none\n')
+        self.apply()
+        parsed = subprocess.check_output(["ssh", "-G", "-F", str(p), "isolated.example"], text=True, stderr=subprocess.DEVNULL)
+        self.assertIn("identityagent none\n", parsed)
+        parsed = subprocess.check_output(["ssh", "-G", "-F", str(p), "other.example"], text=True, stderr=subprocess.DEVNULL)
+        self.assertIn("/.1password/agent.sock\n", parsed)
 
     def test_linux_signing_and_disabled_signing(self):
         self.configure(signingMethod="ssh", signingKey="ssh-ed25519 AAAATEST example")

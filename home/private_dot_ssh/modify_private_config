@@ -1,17 +1,17 @@
 {{- /* chezmoi:modify-template */ -}}
-{{- $original := .chezmoi.stdin -}}
-{{- $pattern := `(?ms)^# BEGIN dotfiles: 1Password SSH agent\n.*?^# END dotfiles: 1Password SSH agent\n?` -}}
-{{- $rest := regexReplaceAll $pattern $original "" -}}
+{{- $pattern := `(?ms)^# BEGIN dotfiles: 1Password SSH agent\r?\n.*?^# END dotfiles: 1Password SSH agent\r?\n?` -}}
+{{- $rest := regexReplaceAll $pattern .chezmoi.stdin "" -}}
 {{- if and (eq .sshAgent "1password") (ne .chezmoi.os "windows") -}}
+{{- $socket := "~/.1password/agent.sock" -}}
+{{- if eq .chezmoi.os "darwin" -}}
+  {{- $socket = "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock" -}}
+{{- end -}}
+{{ $rest }}{{ if and $rest (not (hasSuffix "\n" $rest)) }}
+{{ end -}}
 # BEGIN dotfiles: 1Password SSH agent
 Host *
-{{ if eq .chezmoi.os "darwin" -}}
-    IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
-{{ else -}}
-    IdentityAgent "~/.1password/agent.sock"
-{{ end -}}
+    IdentityAgent {{ $socket | quote }}
 # END dotfiles: 1Password SSH agent
-{{ $rest }}
-{{- else -}}
+{{ else -}}
 {{ $rest }}
 {{- end -}}

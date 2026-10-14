@@ -4,18 +4,9 @@
 {{- if not (has $profile (list "standalone" "omarchy")) -}}
   {{- fail "profile must be standalone or omarchy" -}}
 {{- end -}}
-{{- if and (eq $profile "omarchy") (ne .chezmoi.os "linux") -}}
-  {{- fail "the omarchy profile requires Linux" -}}
-{{- end -}}
 {{- $repo := fromToml (include ".chezmoidata.toml") -}}
 {{- $modules := mergeOverwrite (deepCopy (index $repo.dotfiles.profiles $profile)) (index . "modules" | default dict) -}}
-{{- if and $modules.runtimes (not $modules.tools) -}}
-  {{- fail "the runtimes module requires the tools module" -}}
-{{- end -}}
-{{- if and $modules.desktop (ne $profile "omarchy") -}}
-  {{- fail "the desktop module requires the omarchy profile" -}}
-{{- end -}}
-{{- $desktop := mergeOverwrite (deepCopy $repo.dotfiles.desktopDefaults) (index . "desktop" | default dict) -}}
+{{- includeTemplate "validate-modules.tmpl" (dict "profile" $profile "modules" $modules "os" .chezmoi.os "knownModules" $repo.dotfiles.profiles.standalone) -}}
 {{- $signingMethod := promptChoiceOnce . "signingMethod" "Git signing method" (list "ssh" "gpg" "none") "none" -}}
 {{- $sshAgent := index . "sshAgent" | default (ternary "1password" "system" (eq $signingMethod "ssh")) -}}
 {{- if not (has $sshAgent (list "1password" "system")) -}}
@@ -36,11 +27,3 @@ sourceDir = {{ .chezmoi.workingTree | quote }}
 [data.modules]
 {{ range $key, $value := $modules }}    {{ $key }} = {{ $value }}
 {{ end }}
-[data.desktop]
-    naturalScroll = {{ $desktop.naturalScroll }}
-    keyboardOptions = {{ $desktop.keyboardOptions | quote }}
-    borderSize = {{ $desktop.borderSize }}
-
-[edit]
-    command = "code"
-    args = ["--wait"]

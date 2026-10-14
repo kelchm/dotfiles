@@ -1,11 +1,10 @@
 {{- /* chezmoi:modify-template */ -}}
-{{- /* Keep machine-owned credentials, includes and other preferences intact.
-     Git includes are evaluated in order, so append personal settings last. */ -}}
-{{- $pattern := `(?ms)^# BEGIN dotfiles: personal Git configuration\n.*?^# END dotfiles: personal Git configuration\n?` -}}
+{{- /* Personal defaults load first. Machine settings and conditional includes
+     keep their higher precedence instead of being silently overridden. */ -}}
+{{- $pattern := `(?ms)^# BEGIN dotfiles: personal Git configuration\r?\n.*?^# END dotfiles: personal Git configuration\r?\n?` -}}
 {{- $rest := regexReplaceAll $pattern .chezmoi.stdin "" -}}
-{{ $rest }}{{ if and $rest (not (hasSuffix "\n" $rest)) }}
-{{ end -}}
 # BEGIN dotfiles: personal Git configuration
 [include]
     path = .config/git/dotfiles.gitconfig
 # END dotfiles: personal Git configuration
+{{ $rest -}}

@@ -24,17 +24,14 @@ terminal = false
 editor = false
 packages = false
 
-[dotfiles.desktopDefaults]
-naturalScroll = true
-keyboardOptions = "ctrl:nocaps,shift:both_capslock_cancel,altwin:swap_lalt_lwin"
-borderSize = 1
-
 [dotfiles.modulePaths]
 desktop = [
+    ".config/hypr",
     ".config/hypr/input.lua",
     ".config/hypr/looknfeel.lua",
 ]
 git = [
+    ".config/git",
     ".gitconfig",
     ".config/git/dotfiles.gitconfig",
     ".ssh",
@@ -57,6 +54,8 @@ tools = [
     ".config/mise/**",
 ]
 runtimes = [
+    ".local",
+    ".local/**",
     ".default-python-packages",
     ".local/bin/python3.cmd",
 ]

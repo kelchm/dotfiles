@@ -2,7 +2,4 @@
 {{- if .modules.runtimes -}}
   {{- $config = mergeOverwrite $config (fromToml (includeTemplate "mise/runtimes.toml" .)) -}}
 {{- end -}}
-{{- if eq .profile "omarchy" -}}
-  {{- $config = mergeOverwrite $config (dict "settings" (dict "upgrade" (dict "auto_prune" false))) -}}
-{{- end -}}
 {{ $config | toToml }}

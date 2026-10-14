@@ -1,6 +1,6 @@
 -- Personal appearance overrides; keep all other Omarchy defaults.
 hl.config({
   general = {
-    border_size = {{ .desktop.borderSize }},
+    border_size = 1,
   },
 })

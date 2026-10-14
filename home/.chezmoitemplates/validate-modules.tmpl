@@ -1,0 +1,25 @@
+{{- if not (has .profile (list "standalone" "omarchy")) -}}
+  {{- fail "profile must be standalone or omarchy" -}}
+{{- end -}}
+{{- range $name, $_ := .knownModules -}}
+  {{- if not (hasKey $.modules $name) -}}
+    {{- fail (printf "Module %q is missing; run chezmoi init." $name) -}}
+  {{- end -}}
+{{- end -}}
+{{- range $name, $value := .modules -}}
+  {{- if not (hasKey $.knownModules $name) -}}
+    {{- fail (printf "Unknown module %q; see docs/profiles.md." $name) -}}
+  {{- end -}}
+  {{- if not (kindIs "bool" $value) -}}
+    {{- fail (printf "Module %q must be true or false." $name) -}}
+  {{- end -}}
+{{- end -}}
+{{- if and (eq .profile "omarchy") (ne .os "linux") -}}
+  {{- fail "the omarchy profile requires Linux" -}}
+{{- end -}}
+{{- if and .modules.runtimes (not .modules.tools) -}}
+  {{- fail "the runtimes module requires the tools module" -}}
+{{- end -}}
+{{- if and .modules.desktop (ne .profile "omarchy") -}}
+  {{- fail "the desktop module requires the omarchy profile" -}}
+{{- end -}}

@@ -1,0 +1,18 @@
+{{- $original := .chezmoi.stdin -}}
+{{- $config := fromJsonc ($original | trim | default "{}") -}}
+{{- $changed := false -}}
+{{- if kindIs "slice" (get $config "enabled_providers") -}}
+  {{- if not (has "opencode-go" $config.enabled_providers) -}}
+    {{- $_ := set $config "enabled_providers" (append $config.enabled_providers "opencode-go") -}}
+    {{- $changed = true -}}
+  {{- end -}}
+{{- end -}}
+{{- if and (kindIs "slice" (get $config "disabled_providers")) (has "opencode-go" (get $config "disabled_providers" | default list)) -}}
+  {{- $_ := set $config "disabled_providers" (without $config.disabled_providers "opencode-go") -}}
+  {{- $changed = true -}}
+{{- end -}}
+{{- if $changed -}}
+{{ $config | toPrettyJson }}
+{{ else -}}
+{{ $original }}
+{{- end -}}

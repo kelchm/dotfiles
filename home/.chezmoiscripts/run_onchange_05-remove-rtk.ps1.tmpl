@@ -4,8 +4,13 @@
 
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
+if (-not (Get-Command mise -ErrorAction SilentlyContinue)) { exit 0 }
+
 $rtkDir = mise where rtk 2>$null
-if ($LASTEXITCODE -ne 0) { exit 0 }
+if ($LASTEXITCODE -ne 0) {
+    mise unuse --global --no-prune rtk
+    exit $LASTEXITCODE
+}
 $rtk = Join-Path $rtkDir "rtk.exe"
 
 & $rtk init -g --uninstall
@@ -22,6 +27,8 @@ try {
 & $rtk init -g --agent pi --uninstall
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+mise unuse --global --no-prune rtk
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 mise uninstall --all rtk
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 {{- end }}
