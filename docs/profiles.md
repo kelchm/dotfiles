@@ -79,7 +79,7 @@ On a change, the merge serializes TOML and removes comments. Once compliant, the
 
 OpenCode's merge rule enables `opencode-go` when there is an allowlist and removes it from a denylist. Existing `opencode.json` and `opencode.jsonc` are both supported; missing files are left missing, so apply does not add a second global config. Local providers and default models stay local. A changed JSONC file is normalized to JSON; an already-compliant file keeps its comments. Connect providers once per machine; credentials are never in the repo.
 
-Skills have one copy in `~/.agents/skills` and relative links for Claude, Codex, and Pi. Skill directories are additive: Omarchy's existing skill links and Codex's built-in `.system` directory remain in place. Agent settings, credentials, sessions, Pi model definitions, and OpenCode local providers remain machine-owned.
+Skills have one copy in `~/.agents/skills` and relative links for Claude, Codex, and Pi. Skill directories are additive: Omarchy's existing skill links and Codex's built-in `.system` directory remain in place. Agent settings, credentials, sessions, Pi model definitions, and OpenCode local providers remain machine-owned. The exception is the home-lab Sparks: `~/.pi/agent/extensions/spark.ts` lists whichever model they serve and registers nothing when they are unreachable.
 
 ## Extending the repo
 
