@@ -1,7 +1,7 @@
 {{- if and .bootstrap .modules.tools (eq .chezmoi.os "windows") -}}
 # Run again when the tool configuration changes, after 02-install-mise-tools.
 # hash: {{ includeTemplate "mise/config.toml" . | sha256sum }}
-$env:Path = (Join-Path $env:LOCALAPPDATA "mise\shims") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+$env:Path = (Join-Path $env:LOCALAPPDATA "mise\shims") + ";" + $env:Path + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     Write-Warning "Skipping github/gh-stack: gh is unavailable. Install configured tools, then retry this script."

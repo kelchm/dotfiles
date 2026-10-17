@@ -1,8 +1,8 @@
 {{- if and .bootstrap .modules.tools (eq .chezmoi.os "windows") -}}
 # hash: {{ includeTemplate "mise/config.toml" . | sha256sum }}
 
-# Refresh PATH so mise is available if it was just installed by winget
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+# Pick up PATH entries a fresh winget install added, keeping the session PATH
+$env:Path = $env:Path + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
 if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
     Write-Error "mise not found on PATH. Install mise before applying tools."

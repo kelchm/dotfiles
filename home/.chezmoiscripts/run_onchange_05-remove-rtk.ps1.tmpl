@@ -2,7 +2,7 @@
 # One-time cleanup: these dotfiles no longer use RTK.
 # See run_onchange_05-remove-rtk.sh.tmpl.
 
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+$env:Path = $env:Path + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
 if (-not (Get-Command mise -ErrorAction SilentlyContinue)) { exit 0 }
 
