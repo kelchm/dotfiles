@@ -97,6 +97,8 @@ Most files keep their deployed paths when their sources move into `home/`. Git c
 
 After pulling this branch, run `chezmoi init` once to populate profile/module data, then inspect `chezmoi diff`. Before the first apply, back up `~/.gitconfig` and remove settings previously supplied by this repo (identity, signing, init/push defaults, and Windows core preferences). Keep credential helpers and machine-specific conditional includes. The managed include supplies those personal preferences from now on. Otherwise old settings can remain active after their declarations are removed from the repo or override the new included defaults.
 
+With `sshAgent = "1password"`, the `git` module appends a bounded `Host *` block that sets 1Password's `IdentityAgent`. Remove any hand-written equivalent from `~/.ssh/config` first. A duplicate still works, but it keeps 1Password active after switching to `sshAgent = "system"`.
+
 The moved skill tests and theme generator are no longer deployed. Existing copies may be removed manually after checking for local modifications: `~/.agents/skills/t3-thread-search/tests/test_t3_thread_search.py`, `test_t3_thread_status.py` in the same directory, and `~/.config/t3code/themes/build-onedark-theme.mjs`.
 
 macOS and Windows default to `standalone`, retaining the earlier shell and appearance setup. Bootstrap hashes may change once as the scripts move; installation remains idempotent, and existing gh extensions are preserved.
