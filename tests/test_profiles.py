@@ -40,13 +40,13 @@ class Profiles(unittest.TestCase):
         text += "[data.modules]\n" + "".join(f"{k} = {str(v).lower()}\n" for k, v in modules.items())
         self.config.write_text(text)
 
-    def chezmoi(self, *args, check=True):
+    def chezmoi(self, *args, check=True, env=None):
         override = json.dumps({"chezmoi": {"os": self.platform}})
         result = subprocess.run(
             [CHEZMOI, "-S", str(ROOT), "-D", str(self.home), "-c", str(self.config),
              "--persistent-state", str(self.base / "state.boltdb"),
              "--cache", str(self.base / "cache"), "--no-tty", "--override-data", override, *args],
-            text=True, capture_output=True,
+            text=True, capture_output=True, env=env,
         )
         if check and result.returncode:
             self.fail(f"chezmoi {' '.join(args)} failed:\n{result.stderr}\n{result.stdout}")
@@ -168,7 +168,7 @@ extra_bins = ["opencode2"]
                     result = self.chezmoi("execute-template", "-f", str(script)).stdout
                     syntax = subprocess.run(["bash", "-n"], input=result, text=True, capture_output=True)
                     self.assertEqual(syntax.returncode, 0, syntax.stderr)
-                script = ROOT / "home/.chezmoiscripts/run_onchange_02-install-mise-tools.ps1.tmpl"
+                script = ROOT / "home/.chezmoiscripts/run_onchange_after_02-install-mise-tools.ps1.tmpl"
                 ps1 = self.chezmoi("execute-template", "-f", str(script)).stdout
                 self.assertEqual(bool(ps1.strip()), platform == "windows")
 
@@ -238,7 +238,7 @@ signingMethod = "none"
         ssh_config = self.home / ".ssh/config"
         self.assertFalse(ssh_config.exists())
 
-    def test_editor_is_selected_from_the_environment(self):
+    def test_init_does_not_pin_an_editor(self):
         self.configure()
         self.chezmoi("init")
         self.assertNotIn("edit", tomllib.loads(self.config.read_text()))
@@ -293,7 +293,7 @@ signingMethod = "none"
     def test_agent_only_rtk_cleanup_skips_a_missing_mise(self):
         self.platform = "darwin"
         self.configure("standalone", bootstrap=True, modules={"tools": False, "runtimes": False})
-        script = ROOT / "home/.chezmoiscripts/run_onchange_05-remove-rtk.sh.tmpl"
+        script = ROOT / "home/.chezmoiscripts/run_onchange_after_05-remove-rtk.sh.tmpl"
         rendered = self.chezmoi("execute-template", "-f", str(script)).stdout
         empty_path = self.base / "empty-bin"
         empty_path.mkdir()
@@ -301,6 +301,19 @@ signingMethod = "none"
         result = subprocess.run([shutil.which("bash")], input=rendered, env=env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
+
+    def test_bootstrap_scripts_run_after_their_configuration_is_written(self):
+        self.configure("standalone", bootstrap=True)
+        bins = self.base / "bin"
+        bins.mkdir()
+        trace = self.base / "trace"
+        (bins / "mise").write_text('#!/bin/sh\n[ "$1" = install ] && test -f "$HOME/.config/mise/config.toml" && echo configured >> "$TRACE"\nexit 0\n')
+        (bins / "gh").write_text("#!/bin/sh\nexit 1\n")
+        for stub in bins.iterdir():
+            stub.chmod(0o755)
+        env = dict(os.environ, HOME=str(self.home), PATH=f"{bins}:/usr/bin:/bin", TRACE=str(trace))
+        self.chezmoi("apply", "--force", env=env)
+        self.assertEqual(trace.read_text(), "configured\n")
 
     def test_missing_module_choice_requests_reinitialization(self):
         self.configure()
@@ -314,7 +327,7 @@ signingMethod = "none"
     def test_rtk_cleanup_removes_global_request_before_uninstall(self):
         self.platform = "darwin"
         self.configure("standalone", bootstrap=True)
-        script = ROOT / "home/.chezmoiscripts/run_onchange_05-remove-rtk.sh.tmpl"
+        script = ROOT / "home/.chezmoiscripts/run_onchange_after_05-remove-rtk.sh.tmpl"
         rendered = self.chezmoi("execute-template", "-f", str(script)).stdout
         bins = self.base / "bin"
         bins.mkdir()

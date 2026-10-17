@@ -53,7 +53,7 @@ docs/                       setup and ownership notes
 
 ## Validation
 
-Requires chezmoi and Python 3.11+:
+Requires chezmoi, Python 3.11+, Bash, Git, and an OpenSSH client:
 
 ```bash
 python3 -m unittest discover -s tests

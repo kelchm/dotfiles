@@ -1,6 +1,6 @@
 {{- if and .bootstrap .modules.agents (eq .chezmoi.os "windows") -}}
 # One-time cleanup: these dotfiles no longer use RTK.
-# See run_onchange_05-remove-rtk.sh.tmpl.
+# See run_onchange_after_05-remove-rtk.sh.tmpl.
 
 $env:Path = $env:Path + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 

@@ -102,4 +102,7 @@ jobs:
       - name: Bootstrapped tools are usable
         run: |
           mise ls --global
-          gh extension list | grep -q github/gh-stack
+          test -z "$(mise ls --global --missing)"
+          for tool in claude codex uv node python; do mise exec -- "$tool" --version; done
+          # Use mise's gh, not the runner's preinstalled one.
+          "$(mise which gh)" extension list | grep -q github/gh-stack
