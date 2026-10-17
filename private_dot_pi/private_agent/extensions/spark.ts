@@ -29,8 +29,8 @@ const QWEN = {
 		low: "low",
 		medium: "medium",
 		high: null,
-		xhigh: null,
-		max: "max",
+		xhigh: "xhigh",
+		max: null,
 	},
 } as const;
 
