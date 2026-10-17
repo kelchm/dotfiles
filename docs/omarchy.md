@@ -42,16 +42,15 @@ omarchy update                # normal system update, including mise tools
 
 The dotfiles task leaves runtimes alone. Omarchy's full update may upgrade configured runtimes too. No custom desktop update hooks or packaged launcher replacements are needed.
 
-## Desktop preferences in progress
+## Desktop preferences
 
-An optional `desktop` module records the preferences currently being tested:
+An optional `desktop` module records personal Hyprland overrides:
 
 - Natural touchpad scrolling.
 - Caps Lock as Ctrl, with Left Alt and Left Windows/Super swapped.
+- Three-finger horizontal swipes between workspaces, with a sliding animation that glides to rest and stops at the last workspace.
 - A 1px window border.
 
-The module is disabled by default. The Caps Lock mapping is provisional; review the committed override files against your desired keyboard behavior before enabling it.
-
-Once settled, edit the source `home/dot_config/hypr/input.lua` and `looknfeel.lua`, set `desktop = true` under `[data.modules]`, and review the diff. These are plain source files; updated preferences follow the repo rather than being frozen in local initialization data. This replaces only the two personal override files, loaded after Omarchy's defaults. Preserve any further edits in those files before enabling the module. Monitor scale, output arrangement, and main Hyprland imports remain outside the module.
+The module is off by default; set `desktop = true` under `[data.modules]` and review `chezmoi diff` before applying. It replaces only `input.lua` and `looknfeel.lua`, the two personal override files loaded after Omarchy's defaults, so capture any local edits in those files first. Edit preferences in the source `home/dot_config/hypr/` files; they follow the repo rather than being frozen in local initialization data. Monitor scale, output arrangement, and main Hyprland imports remain outside the module.
 
 While changing desktop settings in another session, leave the module disabled or use `chezmoi re-add`/`chezmoi merge` to capture the final preferences before a full apply. Backups such as `input.lua.bak.*` are not managed.

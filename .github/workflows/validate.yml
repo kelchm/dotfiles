@@ -28,3 +28,78 @@ jobs:
           echo "$RUNNER_TEMP/chezmoi" >> "$GITHUB_PATH"
       - name: Check isolated profiles and skills
         run: python3 -m unittest discover -s tests
+
+  # Run a real standalone apply, scripts included, on each native platform.
+  # Package installs (brew bundle, winget import) stay off: runner images
+  # differ from personal machines and the imports are slow.
+  native:
+    name: native (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            asset: darwin_arm64.tar.gz
+          - os: windows-latest
+            asset: windows_amd64.zip
+    runs-on: ${{ matrix.os }}
+    env:
+      CHEZMOI_VERSION: '2.73.1'
+      GITHUB_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          version: 2026.10.11
+          install: false
+      - name: Install chezmoi
+        run: |
+          mkdir -p "$RUNNER_TEMP/chezmoi"
+          archive="$RUNNER_TEMP/chezmoi-${{ matrix.asset }}"
+          curl --fail --silent --show-error --location \
+            "https://github.com/twpayne/chezmoi/releases/download/v${CHEZMOI_VERSION}/chezmoi_${CHEZMOI_VERSION}_${{ matrix.asset }}" \
+            --output "$archive"
+          case "$archive" in
+            *.zip) unzip -q "$archive" -d "$RUNNER_TEMP/chezmoi" ;;
+            *) tar -xzf "$archive" -C "$RUNNER_TEMP/chezmoi" chezmoi ;;
+          esac
+          echo "$RUNNER_TEMP/chezmoi" >> "$GITHUB_PATH"
+      - name: Configure standalone profile
+        run: |
+          cat > "$RUNNER_TEMP/chezmoi.toml" <<'TOML'
+          [data]
+              profile = "standalone"
+              name = "CI"
+              email = "ci@example.com"
+              signingMethod = "none"
+              signingKey = ""
+              sshAgent = "system"
+              bootstrap = true
+          [data.modules]
+              desktop = false
+              git = true
+              agents = true
+              tools = true
+              runtimes = true
+              shell = true
+              prompt = true
+              terminal = true
+              editor = true
+              packages = false
+          TOML
+          echo "CZ_ARGS=-S $GITHUB_WORKSPACE -c $RUNNER_TEMP/chezmoi.toml --no-tty" >> "$GITHUB_ENV"
+      - name: Apply with scripts
+        run: chezmoi $CZ_ARGS apply --verbose
+      - name: Reapply is clean
+        run: |
+          chezmoi $CZ_ARGS apply
+          test -z "$(chezmoi $CZ_ARGS diff)"
+          chezmoi $CZ_ARGS verify
+      - name: Bootstrapped tools are usable
+        run: |
+          mise ls --global
+          gh extension list | grep -q github/gh-stack

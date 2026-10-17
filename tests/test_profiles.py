@@ -360,7 +360,9 @@ signingMethod = "none"
         self.apply()
         self.assertEqual(main.read_text(), "stock bootstrap\n")
         self.assertEqual(monitor.read_text(), "machine monitor\n")
-        self.assertIn("natural_scroll = true", (self.home / ".config/hypr/input.lua").read_text())
+        input_lua = (self.home / ".config/hypr/input.lua").read_text()
+        self.assertIn("natural_scroll = true", input_lua)
+        self.assertIn('action = "workspace"', input_lua)
         self.assertIn("border_size = 1", (self.home / ".config/hypr/looknfeel.lua").read_text())
         self.configure(modules={"desktop": False})
         managed = self.chezmoi("managed").stdout
