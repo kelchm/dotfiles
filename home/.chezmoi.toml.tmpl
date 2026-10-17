@@ -1,0 +1,29 @@
+{{- $defaultProfile := "standalone" -}}
+{{- if stat "/usr/share/omarchy" -}}{{- $defaultProfile = "omarchy" -}}{{- end -}}
+{{- $profile := promptStringOnce . "profile" "Configuration profile (standalone/omarchy)" $defaultProfile -}}
+{{- if not (has $profile (list "standalone" "omarchy")) -}}
+  {{- fail "profile must be standalone or omarchy" -}}
+{{- end -}}
+{{- $repo := fromToml (include ".chezmoidata.toml") -}}
+{{- $modules := mergeOverwrite (deepCopy (index $repo.dotfiles.profiles $profile)) (index . "modules" | default dict) -}}
+{{- includeTemplate "validate-modules.tmpl" (dict "profile" $profile "modules" $modules "os" .chezmoi.os "knownModules" $repo.dotfiles.profiles.standalone) -}}
+{{- $signingMethod := promptChoiceOnce . "signingMethod" "Git signing method" (list "ssh" "gpg" "none") "none" -}}
+{{- $sshAgent := index . "sshAgent" | default (ternary "1password" "system" (eq $signingMethod "ssh")) -}}
+{{- if not (has $sshAgent (list "1password" "system")) -}}
+  {{- fail "sshAgent must be 1password or system" -}}
+{{- end -}}
+# Keep local checkouts usable after init/re-init.
+sourceDir = {{ .chezmoi.workingTree | quote }}
+
+[data]
+    profile = {{ $profile | quote }}
+    name = {{ index . "name" | default "Matthew Kelch" | quote }}
+    email = {{ promptStringOnce . "email" "Git email" | quote }}
+    signingMethod = {{ $signingMethod | quote }}
+    signingKey = {{ if ne $signingMethod "none" }}{{ promptStringOnce . "signingKey" "Git signing key" | quote }}{{ else }}""{{ end }}
+    sshAgent = {{ $sshAgent | quote }}
+    bootstrap = {{ if hasKey . "bootstrap" }}{{ .bootstrap }}{{ else }}true{{ end }}
+
+[data.modules]
+{{ range $key, $value := $modules }}    {{ $key }} = {{ $value }}
+{{ end }}

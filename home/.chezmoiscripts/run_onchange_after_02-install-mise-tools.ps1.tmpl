@@ -1,0 +1,26 @@
+{{- if and .bootstrap .modules.tools (eq .chezmoi.os "windows") -}}
+# hash: {{ includeTemplate "mise/config.toml" . | sha256sum }}
+
+# Pick up PATH entries a fresh winget install added, keeping the session PATH
+$env:Path = $env:Path + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
+    Write-Error "mise not found on PATH. Install mise before applying tools."
+    exit 1
+}
+
+mise install
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "mise install failed with exit code $LASTEXITCODE"
+    exit $LASTEXITCODE
+}
+
+# Add mise shims to persistent user PATH so non-shell programs (e.g. VS Code) can find tools.
+# This is the Windows equivalent of adding shims to PATH in .zprofile on macOS.
+$shimDir = Join-Path $env:LOCALAPPDATA "mise\shims"
+$userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$shimDir*") {
+    [System.Environment]::SetEnvironmentVariable("Path", "$shimDir;$userPath", "User")
+    Write-Host "Added mise shims to user PATH: $shimDir"
+}
+{{- end }}

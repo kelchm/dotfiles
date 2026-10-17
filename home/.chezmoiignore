@@ -1,0 +1,39 @@
+{{- if not (hasKey . "modules") -}}
+{{- fail "Run chezmoi init to initialize profile and module choices before applying this repo." -}}
+{{- end -}}
+{{- includeTemplate "validate-modules.tmpl" (dict "profile" .profile "modules" .modules "os" .chezmoi.os "knownModules" .dotfiles.profiles.standalone) -}}
+# Repository tooling lives outside home/; ignore only unmanaged targets here.
+.DS_Store
+**/.DS_Store
+**/__pycache__
+**/__pycache__/**
+**/*.pyc
+
+{{ range $module, $paths := .dotfiles.modulePaths -}}
+{{ if not (index $.modules $module) -}}
+{{ range $paths }}{{ . }}
+{{ end -}}
+{{ end -}}
+{{ end -}}
+
+{{ range $platform, $paths := .dotfiles.platformPaths -}}
+{{ if or (and (eq $platform "posix") (eq $.chezmoi.os "windows")) (and (ne $platform "posix") (ne $platform $.chezmoi.os)) -}}
+{{ range $paths }}{{ . }}
+{{ end -}}
+{{ end -}}
+{{ end -}}
+
+# Derive shared-parent ownership from the module paths.
+{{- $hasConfigTargets := false -}}
+{{- range $module, $paths := .dotfiles.modulePaths -}}
+  {{- if index $.modules $module -}}
+    {{- range $paths -}}
+      {{- if or (eq . ".config") (hasPrefix ".config/" .) -}}
+        {{- $hasConfigTargets = true -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end }}
+{{ if not $hasConfigTargets }}
+.config
+{{ end }}

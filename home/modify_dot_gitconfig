@@ -1,0 +1,10 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- /* Personal defaults load first. Machine settings and conditional includes
+     keep their higher precedence instead of being silently overridden. */ -}}
+{{- $pattern := `(?ms)^# BEGIN dotfiles: personal Git configuration\r?\n.*?^# END dotfiles: personal Git configuration\r?\n?` -}}
+{{- $rest := regexReplaceAll $pattern .chezmoi.stdin "" -}}
+# BEGIN dotfiles: personal Git configuration
+[include]
+    path = .config/git/dotfiles.gitconfig
+# END dotfiles: personal Git configuration
+{{ $rest -}}

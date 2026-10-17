@@ -1,0 +1,3 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- /* Keep existing providers/defaults; never create an extra global file. */ -}}
+{{- includeTemplate "opencode-config.json" . -}}

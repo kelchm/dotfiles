@@ -1,0 +1,38 @@
+{{- /* chezmoi:modify-template */ -}}
+{{- /* Own only declared keys. Preserve unrelated tools, environment and settings.
+     Keep the original bytes (and comments) once the config is compliant. */ -}}
+{{- $original := .chezmoi.stdin -}}
+{{- $config := fromToml ($original | default "") -}}
+{{- $before := $config | toJson -}}
+{{- $managed := fromToml (includeTemplate "mise/config.toml" .) -}}
+{{- /* These aliases are the same managed tools, not independent installs.
+     Normalize only their declarations; never uninstall another backend here. */ -}}
+{{- $tools := get $config "tools" | default dict -}}
+{{- $aliases := dict "gh" "aqua:cli/cli" "opencode" "npm:@opencode/cli" -}}
+{{- if eq .profile "omarchy" -}}
+  {{- $aliases = dict "aqua:cli/cli" "gh" "npm:@opencode/cli" "opencode" -}}
+{{- end -}}
+{{- range $oldName, $name := $aliases -}}
+  {{- $old := get $tools $oldName -}}
+  {{- if kindIs "map" $old -}}
+    {{- $current := get $tools $name | default dict -}}
+    {{- if kindIs "string" $current -}}{{- $current = dict "version" $current -}}{{- end -}}
+    {{- if kindIs "map" $current -}}
+      {{- $_ := set $tools $name (mergeOverwrite (deepCopy $old) $current) -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $_ := unset $tools $oldName -}}
+{{- end -}}
+{{- $managedTools := get $managed "tools" -}}
+{{- range $name, $value := $managedTools -}}
+  {{- if and (kindIs "string" $value) (kindIs "map" (get $tools $name)) -}}
+    {{- /* Own the version; retain options such as os, virtualenv and env. */ -}}
+    {{- $_ := set $managedTools $name (dict "version" $value) -}}
+  {{- end -}}
+{{- end -}}
+{{- $config = mergeOverwrite $config $managed -}}
+{{- if eq $before ($config | toJson) -}}
+{{ $original }}
+{{- else -}}
+{{ $config | toToml }}
+{{- end -}}

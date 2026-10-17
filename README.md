@@ -1,98 +1,63 @@
 # dotfiles
 
-Cross-platform dotfiles managed with [chezmoi](https://www.chezmoi.io/).
+Personal development settings managed with [chezmoi](https://www.chezmoi.io/). Profiles choose a starting point; modules decide which configuration this repo owns.
 
-## What's included
+- **`standalone`**: the existing macOS, Windows, or Linux environment, including shell and appearance preferences.
+- **`omarchy`**: Git, agent instructions and skills, and mise-managed development tools. Omarchy owns the shell, prompt, terminals, desktop, and global runtime defaults.
 
-| Category | macOS | Windows | Both |
-|----------|-------|---------|------|
-| **Shell** | Fish, Zsh | PowerShell | — |
-| **Prompt** | — | — | Starship |
-| **Terminal** | Ghostty, iTerm2 | Windows Terminal (pwsh default) | — |
-| **Version mgmt** | — | — | mise (harness CLIs, Python, Node) |
-| **Editor** | — | — | VSCode, EditorConfig |
-| **Git** | 1Password SSH signing | Credential Manager | Common config |
-| **SSH** | 1Password agent (socket) | 1Password agent (named pipe) | — |
+## Setup
 
-## Install
-
-### macOS
+Install chezmoi, then initialize, review, and apply:
 
 ```bash
-brew install chezmoi
-chezmoi init --apply --ssh kelchm
+# macOS: brew install chezmoi
+# Omarchy: omarchy pkg add chezmoi (mise is already installed)
+chezmoi init kelchm
+chezmoi diff
+chezmoi apply
 ```
 
-Or as a one-liner on a fresh machine:
+On Windows, install `twpayne.chezmoi` with WinGet, then use the same chezmoi commands in PowerShell. On ordinary Linux, install chezmoi and mise first; this repo does not provision the distribution.
+
+Initialization suggests `omarchy` when `/usr/share/omarchy` exists; otherwise it suggests `standalone`. Git signing defaults to `none` on a new machine. Existing identity, signing, and module choices survive `chezmoi init`.
+
+Customize this machine with `chezmoi edit-config`. The [profile guide](docs/profiles.md) covers module switches, bootstrap behavior, and configuration ownership; the [Omarchy guide](docs/omarchy.md) covers the local setup and 1Password integration.
+
+## Everyday use
 
 ```bash
-sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply --ssh kelchm
+chezmoi diff                 # review rendered changes
+chezmoi apply                # apply settings; bootstrap missing tools when config changes
+mise install                 # restore missing tools
+mise run harness:update      # update only Claude, Codex, Grok, OpenCode, and Pi
+chezmoi edit ~/.config/git/dotfiles.gitconfig  # edit personal Git settings
 ```
 
-### Windows
+`harness:update` bypasses release delays for those five tools. Runtime versions belong in project `mise.toml` files, or the optional global `runtimes` module. On Omarchy, `omarchy update` also updates mise tools.
 
-```powershell
-winget install twpayne.chezmoi
-chezmoi init --apply --ssh kelchm
+## Repository layout
+
+```text
+home/                       chezmoi source root (.chezmoiroot points here)
+  .chezmoidata.toml          profile defaults and module/OS target ownership
+  .chezmoi.toml.tmpl         machine identity and persisted module choices
+  .chezmoiscripts/           bootstrap and legacy cleanup scripts
+  .chezmoitemplates/         shared agent text and modular mise declarations
+  dot_*/                    deployable configuration and personal skills
+scripts/                    repository tooling (theme generator)
+tests/                      isolated profile checks and skill tests
+docs/                       setup and ownership notes
 ```
 
-Or as a one-liner:
+[Adding configuration](docs/profiles.md#extending-the-repo) starts with assigning it to a module. Files outside `home/` are never deployed. Machine credentials, agent sessions, local model/provider settings, and generated Omarchy state stay outside source control.
 
-```powershell
-irm get.chezmoi.io/ps1 | powershell -c - -- init --apply --ssh kelchm
-```
+## Validation
 
-## Usage
+Requires chezmoi, Python 3.11+, Bash, Git, and an OpenSSH client:
 
 ```bash
-chezmoi edit ~/.config/starship.toml   # edit a managed file
-chezmoi diff                            # preview pending changes
-chezmoi apply                           # apply changes to home directory
-chezmoi cd                              # cd into source directory
-chezmoi add ~/.some/new/file            # start managing a new file
+python3 -m unittest discover -s tests
+# Or set CHEZMOI=/path/to/chezmoi if it isn't on PATH.
 ```
 
-### Harness CLIs
-
-Chezmoi bootstraps the configured tools; mise upgrades them. Harnesses track `latest`, so machines share configuration and an update method, but may have different versions until each is upgraded.
-
-- Harness CLIs: Claude Code, Codex, Grok Build, OpenCode 2, Pi
-- mise selects the installation backends using its registry defaults, except OpenCode 2, which is published only as the npm package `@opencode/cli` (the registry's `opencode` is still 1.x)
-- Background self-updates are disabled through mise's environment settings
-- Claude, Codex, and Pi share one set of working agreements (`.chezmoitemplates/shared-agent-working-agreements.md`) and one model table (`.chezmoitemplates/model-table.md`)
-- Pi's `models.json` and `settings.json` stay machine-specific, like OpenCode's local providers. The home-lab Sparks are the exception: `~/.pi/agent/extensions/spark.ts` lists whichever model they are serving and registers nothing when they are unreachable
-
-`minimum_release_age = "24h"` delays selection of timestamped releases. Grok's HTTP feed has no timestamps, so it is not covered. Already-installed versions are not downgraded.
-
-```bash
-chezmoi apply                                        # bootstrap tools when config changes
-mise install                                         # restore missing configured tools
-mise outdated claude codex grok npm:@opencode/cli pi # check these five tools
-mise run harness:update                              # upgrade these five, leaving runtimes alone
-```
-
-Launch through mise shims or an activated shell so the updater settings are loaded. For scripts, use `mise exec -- <command>`. GUI launchers should use the shim path, rather than a versioned executable path.
-
-OpenCode's `opencode.jsonc` merge rule keeps `opencode-go` available: it adds Go to an existing provider allowlist and removes it from any denylist. Other settings, including local providers and default models, stay machine-specific. If there is no allowlist, OpenCode already allows all connected providers. Connect Go once per machine with `/connect`; credentials are not stored in these dotfiles. When the rule changes a config, it normalizes JSONC to JSON and removes comments; an already-compliant config is left byte-for-byte unchanged.
-
-On a machine that already had Homebrew, npm, or WinGet copies: apply, then remove those duplicate installations after checking that commands resolve through mise. The same applies to the OpenCode 1 copy mise installed earlier: once `opencode --version` reports 2.x, run `mise uninstall --all opencode`.
-
-OpenCode 2 keeps the `opencode` command (and adds `opencode2`) and reads the same config files, so existing V1 settings carry over. V1 plugins and V1 server API clients do not; see the [migration guide](https://opencode.ai/v2/docs/migrate-v1/).
-
-RTK is no longer used. On a machine that had it, the next `chezmoi apply` removes its Claude, Codex, and Pi hooks, its `RTK.md` files, the stale OpenCode plugin, and the binary. Its history and settings stay in RTK's own data directory (`~/Library/Application Support/rtk` on macOS); delete that by hand if you want it gone.
-
-### GitHub CLI extensions
-
-GitHub CLI is managed by mise's aqua backend at 2.101.0 on every OS. The Brewfile and WinGet manifest no longer install it. On an existing machine, run `chezmoi apply`, verify gh works through mise, then remove the old Homebrew/WinGet copy manually. On Linux, install mise first; the POSIX tool bootstrap runs `mise install` there too.
-
-After tool installation, chezmoi installs `github/gh-stack` if missing, pinned to v0.2.0 using `gh extension install --pin`. The pin makes new installations reproducible while this young extension changes quickly. Existing installations are left unchanged, including their version and pin status. To update, change the pin in both `run_onchange_06-install-gh-extensions` templates; existing installations need a manual `gh extension install github/gh-stack --force --pin <version>`.
-
-An isolated install of this public binary extension succeeded without authentication. If gh is missing, listing extensions fails, or installation fails (for example, network or authentication problems), the script prints a message and lets apply continue. Because `run_onchange_` records successful runs even when installation is skipped, retry after resolving the error with `chezmoi execute-template -f "$(chezmoi source-path)/run_onchange_06-install-gh-extensions.sh.tmpl" | bash` on macOS/Linux, or render and run the `.ps1.tmpl` with PowerShell on Windows. The script also runs again when the managed mise configuration changes.
-
-## How it works
-
-- Files are stored in chezmoi's source format (`dot_` prefix replaces leading `.`)
-- Files ending in `.tmpl` are [Go templates](https://www.chezmoi.io/user-guide/templating/) with OS-conditional logic
-- `modify_` templates merge a small invariant into a tool-owned config file without replacing the rest of the file
-- `.chezmoiignore` controls which files deploy on which OS
-- `fish_variables` is intentionally not managed — Fish manages it automatically; important variables are set in `config.fish`
+Profile tests apply into temporary directories. They cover stock Omarchy preservation, module opt-outs, mise and OpenCode merges, SSH integration, and repeat applies. macOS and Windows branches are rendered on Linux; native package installation and PowerShell execution need their respective systems.

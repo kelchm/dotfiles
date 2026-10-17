@@ -1,0 +1,5 @@
+{{- $config := fromToml (includeTemplate "mise/tools.toml" .) -}}
+{{- if .modules.runtimes -}}
+  {{- $config = mergeOverwrite $config (fromToml (includeTemplate "mise/runtimes.toml" .)) -}}
+{{- end -}}
+{{ $config | toToml }}
