@@ -18,7 +18,7 @@ The user's read of each model as of 2026-10-03. Scores run from 0 to 10, and hig
 
 | provider      | model                      | cost | intelligence | taste | notes |
 |---------------|----------------------------|------|--------------|-------|-------|
-| `pi`          | `spark/GLM-5.3-Flash-EXL3` | 10   | 6            | 4     | Runs on the user's own hardware, so nothing it reads leaves the network. Takes security and reverse-engineering work that cloud models refuse. Slow on large tasks. |
+| `pi`          | `default`                  | 10   | 6            | 4     | Whichever model the home-lab Sparks are serving; the scores are GLM-5.3-Flash's. Runs on the user's own hardware, so nothing it reads leaves the network. Takes security and reverse-engineering work that cloud models refuse. Slow on large tasks. |
 | `codex`       | `gpt-6.1-sol`              | 9    | 8            | 5     | Strong reviewer; its code can be less tidy. |
 | `codex`       | `gpt-6-astra`              | 6    | 8            | 6     |       |
 | `grok`        | `grok-4.6`                 | 5    | 7            | 6     | The only one that can search X. |
