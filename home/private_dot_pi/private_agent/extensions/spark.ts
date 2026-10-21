@@ -22,7 +22,9 @@ const LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 type Level = "off" | (typeof LEVELS)[number];
 type LevelMap = Record<Level, string | null>;
 
-type Entry = { name?: string; contextWindow?: number; thinkingLevelMap?: LevelMap };
+// contextWindow and thinkingLevelMap apply only when the server reports none;
+// maxContextWindow caps whatever it reports.
+type Entry = { name?: string; contextWindow?: number; maxContextWindow?: number; thinkingLevelMap?: LevelMap };
 
 // TensorFold reports the window and thinking levels in /v1/models, so only
 // what it cannot know is kept here. A server that reports neither falls back
@@ -38,12 +40,16 @@ const KNOWN: Record<string, Entry> = {
 	},
 	// The Qwen kit serves a 1,048,576 window, but a 999,874-token prompt stalled
 	// both ranks on October 8 where 524,135 completed, so Pi compacts below that.
-	"Qwen3.8-Flash-Next": { name: "Qwen3.8-Flash-Next", contextWindow: 512000 },
-	"Qwen3.8-Flash-Next-INT4-AR": { name: "Qwen3.8-Flash-Next INT4-AR", contextWindow: 512000 },
+	"Qwen3.8-Flash-Next": { name: "Qwen3.8-Flash-Next", maxContextWindow: 512000 },
+	"Qwen3.8-Flash-Next-INT4-AR": { name: "Qwen3.8-Flash-Next INT4-AR", maxContextWindow: 512000 },
 };
 
 // A model whose server reports no window still appears, with one small enough to be safe.
 const FALLBACK_CONTEXT_WINDOW = 128000;
+
+// /v1/models does not say whether images are accepted. A text-only launch
+// refuses the first image with a clear error, so a wrong guess fails loudly.
+const INPUT: ("text" | "image")[] = ["text", "image"];
 
 type Served = {
 	id?: unknown;
@@ -63,8 +69,12 @@ function levelMap(efforts: unknown): LevelMap | undefined {
 
 function describe(served: Served & { id: string }) {
 	const known = KNOWN[served.id] ?? {};
-	const reported = typeof served.context_length === "number" ? served.context_length : Infinity;
-	const contextWindow = Math.min(reported, known.contextWindow ?? Infinity);
+	const reported =
+		typeof served.context_length === "number" && served.context_length > 0 ? served.context_length : undefined;
+	const contextWindow = Math.min(
+		reported ?? known.contextWindow ?? FALLBACK_CONTEXT_WINDOW,
+		known.maxContextWindow ?? Infinity,
+	);
 	const thinkingLevelMap = levelMap(served.reasoning?.supported_efforts) ?? known.thinkingLevelMap;
 	// Pi cannot ask for thinking without naming a level, so a model with no
 	// levels above off gets no thinking control and runs at the server's default.
@@ -74,10 +84,8 @@ function describe(served: Served & { id: string }) {
 		name: known.name ?? served.id,
 		reasoning,
 		...(reasoning && { thinkingLevelMap }),
-		// /v1/models does not say whether images are accepted. A text-only launch
-		// refuses the first image with a clear error, so a wrong guess fails loudly.
-		input: ["text", "image"],
-		contextWindow: Number.isFinite(contextWindow) ? contextWindow : FALLBACK_CONTEXT_WINDOW,
+		input: INPUT,
+		contextWindow,
 		// 0 makes Pi send no output limit, so the server's default applies and is
 		// reduced to fit the room left in the window.
 		maxTokens: 0,
@@ -92,7 +100,7 @@ async function servedModels(signal?: AbortSignal) {
 	});
 	if (!response.ok) throw new Error(`${BASE_URL}/models returned HTTP ${response.status}`);
 	const body = (await response.json()) as { data?: Served[] };
-	return (body.data ?? []).filter((model): model is Served & { id: string } => typeof model.id === "string").map(describe);
+	return (body.data ?? []).filter((model): model is Served & { id: string } => typeof model?.id === "string").map(describe);
 }
 
 export default async function (pi: ExtensionAPI) {
