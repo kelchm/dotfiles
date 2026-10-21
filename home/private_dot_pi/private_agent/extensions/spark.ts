@@ -16,56 +16,83 @@ const DISCOVERY_TIMEOUT_MS = 1500;
 
 const FREE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
-const QWEN = {
-	reasoning: true,
-	input: ["text", "image"],
-	contextWindow: 512000,
-	maxTokens: 32000,
-	// The server has none, low, medium and xhigh. It renders minimal as low, and
-	// high and max as xhigh, so the duplicate Pi levels are hidden.
-	thinkingLevelMap: {
-		off: "none",
-		minimal: null,
-		low: "low",
-		medium: "medium",
-		high: null,
-		xhigh: "xhigh",
-		max: null,
-	},
-} as const;
+// Pi's thinking levels above off. The server names its efforts the same way.
+const LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
-// /v1/models reports only an ID, so limits and thinking controls are kept here.
-const KNOWN = {
+type Level = "off" | (typeof LEVELS)[number];
+type LevelMap = Record<Level, string | null>;
+
+// contextWindow and thinkingLevelMap apply only when the server reports none;
+// maxContextWindow caps whatever it reports.
+type Entry = { name?: string; contextWindow?: number; maxContextWindow?: number; thinkingLevelMap?: LevelMap };
+
+// TensorFold reports the window and thinking levels in /v1/models, so only
+// what it cannot know is kept here.
+const KNOWN: Record<string, Entry> = {
+	// Not served lately, and its Python server may report nothing beyond the ID,
+	// so GLM keeps its window and levels as a fallback.
 	"GLM-5.3-Flash-EXL3": {
 		name: "GLM-5.3-Flash",
-		reasoning: true,
-		input: ["text", "image"],
 		contextWindow: 850000,
-		maxTokens: 32000,
 		// GLM has low, high and max, plus none to disable thinking. The server
 		// renders medium exactly like max, so the other Pi levels are hidden.
-		thinkingLevelMap: {
-			off: "none",
-			minimal: null,
-			low: "low",
-			medium: null,
-			high: "high",
-			xhigh: null,
-			max: "max",
-		},
+		thinkingLevelMap: { off: "none", minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" },
 	},
 	// The Qwen kit serves a 1,048,576 window, but a 999,874-token prompt stalled
 	// both ranks on October 8 where 524,135 completed, so Pi compacts below that.
-	"Qwen3.8-Flash-Next": { name: "Qwen3.8-Flash-Next", ...QWEN },
-	"Qwen3.8-Flash-Next-INT4-AR": { name: "Qwen3.8-Flash-Next INT4-AR", ...QWEN },
-} as const;
+	"Qwen3.8-Flash-Next": { name: "Qwen3.8-Flash-Next", maxContextWindow: 512000 },
+	"Qwen3.8-Flash-Next-INT4-AR": { name: "Qwen3.8-Flash-Next INT4-AR", maxContextWindow: 512000 },
+};
 
-// A served model with no entry above still appears, with limits small enough to be safe.
-const UNKNOWN = { reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 } as const;
+// A model whose server reports no window still appears, with one small enough to be safe.
+const FALLBACK_CONTEXT_WINDOW = 128000;
 
-function describe(id: string) {
-	const known = KNOWN[id as keyof typeof KNOWN];
-	return { id, name: id, ...(known ?? UNKNOWN), cost: FREE };
+// /v1/models does not say whether images are accepted. A text-only launch
+// refuses the first image with a clear error, so a wrong guess fails loudly.
+const INPUT: ("text" | "image")[] = ["text", "image"];
+
+type Served = {
+	id?: unknown;
+	context_length?: unknown;
+	reasoning?: { supported_efforts?: unknown };
+};
+
+// Offers exactly the server's efforts, each as the Pi level of the same name and
+// none as off. Names Pi has no level for are dropped.
+function levelMap(efforts: unknown): LevelMap | undefined {
+	if (!Array.isArray(efforts)) return undefined;
+	const offered = (level: string) => (efforts.includes(level) ? level : null);
+	const map = { off: offered("none") } as LevelMap;
+	for (const level of LEVELS) map[level] = offered(level);
+	return map;
+}
+
+function describe(served: Served & { id: string }) {
+	const known = KNOWN[served.id] ?? {};
+	const reported =
+		typeof served.context_length === "number" && Number.isFinite(served.context_length) && served.context_length > 0
+			? served.context_length
+			: undefined;
+	const contextWindow = Math.min(
+		reported ?? known.contextWindow ?? FALLBACK_CONTEXT_WINDOW,
+		known.maxContextWindow ?? Infinity,
+	);
+	const thinkingLevelMap = levelMap(served.reasoning?.supported_efforts) ?? known.thinkingLevelMap;
+	// Pi cannot ask for thinking without naming a level, so a model with no
+	// levels above off gets no thinking control and runs at the server's default.
+	const reasoning = thinkingLevelMap !== undefined && LEVELS.some((level) => thinkingLevelMap[level] !== null);
+	return {
+		id: served.id,
+		name: known.name ?? served.id,
+		reasoning,
+		...(reasoning && { thinkingLevelMap }),
+		input: INPUT,
+		contextWindow,
+		// 0 makes Pi send no output limit, so the server's default applies and is
+		// reduced to fit the room left in the window.
+		maxTokens: 0,
+		cost: FREE,
+	};
 }
 
 async function servedModels(signal?: AbortSignal) {
@@ -74,9 +101,10 @@ async function servedModels(signal?: AbortSignal) {
 		signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
 	});
 	if (!response.ok) throw new Error(`${BASE_URL}/models returned HTTP ${response.status}`);
-	const body = (await response.json()) as { data?: { id?: unknown }[] };
-	const ids = (body.data ?? []).map((model) => model.id).filter((id): id is string => typeof id === "string");
-	return ids.map(describe);
+	const data = ((await response.json()) as { data?: Served[] } | null)?.data;
+	// An empty list would replace the models on refresh, so a malformed body throws instead.
+	if (!Array.isArray(data)) throw new Error(`${BASE_URL}/models returned no data array`);
+	return data.filter((model): model is Served & { id: string } => typeof model?.id === "string").map(describe);
 }
 
 export default async function (pi: ExtensionAPI) {
