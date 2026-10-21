@@ -70,7 +70,9 @@ function levelMap(efforts: unknown): LevelMap | undefined {
 function describe(served: Served & { id: string }) {
 	const known = KNOWN[served.id] ?? {};
 	const reported =
-		typeof served.context_length === "number" && served.context_length > 0 ? served.context_length : undefined;
+		typeof served.context_length === "number" && Number.isFinite(served.context_length) && served.context_length > 0
+			? served.context_length
+			: undefined;
 	const contextWindow = Math.min(
 		reported ?? known.contextWindow ?? FALLBACK_CONTEXT_WINDOW,
 		known.maxContextWindow ?? Infinity,
@@ -99,8 +101,10 @@ async function servedModels(signal?: AbortSignal) {
 		signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
 	});
 	if (!response.ok) throw new Error(`${BASE_URL}/models returned HTTP ${response.status}`);
-	const body = (await response.json()) as { data?: Served[] };
-	return (body.data ?? []).filter((model): model is Served & { id: string } => typeof model?.id === "string").map(describe);
+	const data = ((await response.json()) as { data?: Served[] } | null)?.data;
+	// An empty list would replace the models on refresh, so a malformed body throws instead.
+	if (!Array.isArray(data)) throw new Error(`${BASE_URL}/models returned no data array`);
+	return data.filter((model): model is Served & { id: string } => typeof model?.id === "string").map(describe);
 }
 
 export default async function (pi: ExtensionAPI) {
