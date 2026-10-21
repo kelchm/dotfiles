@@ -27,10 +27,10 @@ type LevelMap = Record<Level, string | null>;
 type Entry = { name?: string; contextWindow?: number; maxContextWindow?: number; thinkingLevelMap?: LevelMap };
 
 // TensorFold reports the window and thinking levels in /v1/models, so only
-// what it cannot know is kept here. A server that reports neither falls back
-// to these values.
+// what it cannot know is kept here.
 const KNOWN: Record<string, Entry> = {
-	// Not served lately, and its Python server may report nothing beyond the ID.
+	// Not served lately, and its Python server may report nothing beyond the ID,
+	// so GLM keeps its window and levels as a fallback.
 	"GLM-5.3-Flash-EXL3": {
 		name: "GLM-5.3-Flash",
 		contextWindow: 850000,
