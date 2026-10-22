@@ -9,7 +9,8 @@
 - Review across labs. For a consequential review, use a model from a different vendor than the one that wrote the work. Same-model review is fine for a quick sanity check.
 - Choose effort from the task, not the model. A clear, bounded task needs little; ambiguous, risky, or verification-heavy work needs more. When in doubt, go higher. Set it explicitly when you delegate: left unset, it falls back to a default, often medium. If the output misses the bar, raise the effort on the same model first; if it still misses, redo the work with a smarter model. Don't stop to ask.
 
-## Stacked pull requests
+## Pull requests
 
 - Make dependent PRs a GitHub stack with `gh stack` (the `gh-stack` skill covers its use) rather than chaining PR bases by hand, merging the trunk into a layer, or merging layers one at a time.
 - PRs that build on the same layer and edit the same files go in one stack, in landing order. Agents sharing a stack agree before rewriting a layer another agent owns.
+- Reply to an inline review comment in its own thread, not with a top-level comment. Don't post comments summarizing a local or delegated review; fixes land as commits, and the description can say what was verified.
