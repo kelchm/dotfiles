@@ -23,7 +23,7 @@ if ($extensions -and ($extensions | Where-Object { ($_.Trim() -split '\s+')[2] -
 $previousPromptDisabled = $env:GH_PROMPT_DISABLED
 try {
     $env:GH_PROMPT_DISABLED = "1"
-    gh extension install github/gh-stack --pin v0.2.0
+    gh extension install github/gh-stack --pin {{ .dotfiles.pins.ghStack }}
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "Could not install github/gh-stack. Check network access and gh authentication, then retry this script."
     }

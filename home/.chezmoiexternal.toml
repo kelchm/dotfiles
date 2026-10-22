@@ -1,0 +1,7 @@
+# GitHub's agent skill for the gh-stack extension, at the commit of the release the bootstrap installs.
+# A commit, unlike a tag, always yields the same archive contents.
+[".agents/skills/gh-stack"]
+type = "archive"
+url = "https://github.com/github/gh-stack/archive/{{ .dotfiles.pins.ghStackCommit }}.tar.gz"
+stripComponents = 3
+include = ["*/skills/gh-stack/**"]

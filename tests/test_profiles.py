@@ -19,6 +19,9 @@ class Profiles(unittest.TestCase):
     def setUpClass(cls):
         if not CHEZMOI:
             raise RuntimeError("chezmoi is required; install it or set CHEZMOI to its executable")
+        # Share downloaded externals across tests.
+        cls.cache = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.cache.cleanup)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -45,7 +48,7 @@ class Profiles(unittest.TestCase):
         result = subprocess.run(
             [CHEZMOI, "-S", str(ROOT), "-D", str(self.home), "-c", str(self.config),
              "--persistent-state", str(self.base / "state.boltdb"),
-             "--cache", str(self.base / "cache"), "--no-tty", "--override-data", override, *args],
+             "--cache", self.cache.name, "--no-tty", "--override-data", override, *args],
             text=True, capture_output=True, env=env,
         )
         if check and result.returncode:
@@ -103,8 +106,10 @@ run = "echo keep"
         self.assertEqual(config["tasks"]["harness:update"]["env"]["MISE_MINIMUM_RELEASE_AGE"], "0")
         for harness in [".claude/skills", ".codex/skills", ".pi/agent/skills"]:
             self.assertTrue((self.home / harness / "omarchy").is_symlink())
-            self.assertEqual((self.home / harness / "pr-monitor").resolve(),
-                             self.home / ".agents/skills/pr-monitor")
+            for skill in ["pr-monitor", "gh-stack"]:
+                self.assertEqual((self.home / harness / skill).resolve(),
+                                 self.home / ".agents/skills" / skill)
+        self.assertTrue((self.home / ".agents/skills/gh-stack/SKILL.md").is_file())
         first = mise.read_bytes()
         self.apply()
         self.assertEqual(mise.read_bytes(), first)

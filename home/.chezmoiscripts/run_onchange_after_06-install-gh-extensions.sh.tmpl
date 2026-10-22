@@ -22,7 +22,7 @@ if printf '%s\n' "$extensions" | awk '$3 == "github/gh-stack" { found = 1 } END 
 fi
 
 # Pin new installs; preserve extensions the owner has already installed.
-if ! GH_PROMPT_DISABLED=1 gh extension install github/gh-stack --pin v0.2.0; then
+if ! GH_PROMPT_DISABLED=1 gh extension install github/gh-stack --pin {{ .dotfiles.pins.ghStack }}; then
   echo "Could not install github/gh-stack. Check network access and gh authentication, then retry this script." >&2
 fi
 {{- end }}
