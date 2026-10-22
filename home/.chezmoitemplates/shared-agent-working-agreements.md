@@ -8,3 +8,11 @@
 
 - Review across labs. For a consequential review, use a model from a different vendor than the one that wrote the work. Same-model review is fine for a quick sanity check.
 - Choose effort from the task, not the model. A clear, bounded task needs little; ambiguous, risky, or verification-heavy work needs more. When in doubt, go higher. Set it explicitly when you delegate: left unset, it falls back to a default, often medium. If the output misses the bar, raise the effort on the same model first; if it still misses, redo the work with a smarter model. Don't stop to ask.
+
+## Stacked pull requests
+
+- When work splits into dependent PRs, make them a GitHub stack with `gh stack` instead of pointing each PR's base at another PR's branch. `gh stack init` creates the stack or adopts existing branches, bottom to top, and `gh stack submit` opens or updates the PRs.
+- Keep layers current with `gh stack sync`, or `gh stack rebase` when sync hits conflicts. Never merge the trunk or a lower layer into a layer by hand: after a squash merge, that can cause false conflicts in the layers above.
+- Merge with `gh stack merge <pr>`, which merges every layer up to and including that PR, never layer by layer.
+- A stack is linear. PRs that build on the same layer and edit the same files go in one stack, in the order they should land, rather than side by side.
+- When agents share a stack, agree before rebasing or force-pushing a layer another agent owns.
