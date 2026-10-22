@@ -11,5 +11,5 @@
 
 ## Stacked pull requests
 
-- Make dependent PRs a GitHub stack with `gh stack` (the `gh-stack` skill covers its use) rather than chaining PR bases, merging the trunk into a layer, or merging layers one at a time.
+- Make dependent PRs a GitHub stack with `gh stack` (the `gh-stack` skill covers its use) rather than chaining PR bases by hand, merging the trunk into a layer, or merging layers one at a time.
 - PRs that build on the same layer and edit the same files go in one stack, in landing order. Agents sharing a stack agree before rewriting a layer another agent owns.
