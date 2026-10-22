@@ -125,3 +125,7 @@ posix = [
     ".zshenv",
     ".zshrc",
 ]
+
+[dotfiles.pins]
+# github/gh-stack release for both the gh extension and its agent skill.
+ghStack = "v0.2.0"

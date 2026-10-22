@@ -1,0 +1,6 @@
+# GitHub's agent skill for the gh-stack extension, from the same release the bootstrap installs.
+[".agents/skills/gh-stack"]
+type = "archive"
+url = "https://github.com/github/gh-stack/archive/refs/tags/{{ .dotfiles.pins.ghStack }}.tar.gz"
+stripComponents = 3
+include = ["*/skills/gh-stack/**"]
