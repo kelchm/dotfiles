@@ -255,7 +255,10 @@ def inspect_v2(conn: Any, schema: Any, candidate: Any, thread_id: str,
     latest_user_message = None
     if schema.has_table('orchestration_v2_projection_messages'):
         user = conn.execute("""SELECT updated_at FROM orchestration_v2_projection_messages
-            WHERE thread_id = ? AND role = 'user' ORDER BY updated_at DESC LIMIT 1""", (thread_id,)).fetchone()
+            WHERE thread_id = ? AND role = 'user' AND streaming = 0
+              AND json_extract(payload_json, '$.notification') IS NULL
+              AND json_extract(payload_json, '$.delegatedCompletion') IS NULL
+            ORDER BY updated_at DESC LIMIT 1""", (thread_id,)).fetchone()
         latest_user_message = user[0] if user else None
         if run_id:
             message = conn.execute("""SELECT updated_at FROM orchestration_v2_projection_messages
@@ -585,20 +588,23 @@ def run(args: argparse.Namespace) -> int:
         candidates, thread_id = resolve_candidates(args)
         statuses: list[ThreadStatus] = []
         matched_candidates: list[Any] = []
+        discovery_warnings: list[str] = []
         for candidate in candidates:
             if not candidate.path.is_file():
                 continue
             try:
                 item = inspect_thread(candidate, thread_id, stale_after)
-            except StatusError as error:
-                if args.db or "was not found in" not in str(error):
+            except (StatusError, store.SearchError) as error:
+                if args.db or args.base_dir:
                     raise
-                # A missing thread in one discovered DB is not a global miss.
+                if "was not found in" not in str(error):
+                    discovery_warnings.append(f"Skipped database {candidate.path}: {error}")
                 continue
             statuses.append(item)
             matched_candidates.append(candidate)
         if not statuses:
-            raise StatusError(f"thread {thread_id} was not found in the local databases searched")
+            detail = "; " + "; ".join(discovery_warnings) if discovery_warnings else ""
+            raise StatusError(f"thread {thread_id} was not found in the local databases searched{detail}")
 
         watch_for = parse_duration(args.watch_for) if args.watch_for else None
         interval = parse_duration(args.interval)
@@ -610,6 +616,8 @@ def run(args: argparse.Namespace) -> int:
         deadline = time.monotonic() + watch_for.total_seconds() if watch_for else None
         previous_signature: tuple[Any, ...] | None = None
         while True:
+            for item in statuses:
+                item.warnings.extend(discovery_warnings)
             signature = tuple(
                 (
                     item.scoped_id,

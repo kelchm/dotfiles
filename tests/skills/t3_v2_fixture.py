@@ -8,6 +8,11 @@ ENVIRONMENT = '085bbae7-4da9-4bfa-86ed-ac1a17ad3763'
 TIME = '2026-10-25T13:40:31Z'
 NATIVE_ID = '2826bc79-f2cb-4db6-b9d7-da1cf3a44d2d'
 DELEGATED_ID = 'thread:delegated-task:command%3Afixture:delegate-task%3Achild'
+LIVE_FTS_SCHEMA = """
+CREATE VIRTUAL TABLE orchestration_v2_message_search USING fts5(
+    text, content='', contentless_delete=1, tokenize='trigram remove_diacritics 1'
+);
+"""
 
 SCHEMA = """
 CREATE TABLE projection_projects (
@@ -63,10 +68,16 @@ CREATE TABLE projection_thread_messages (message_id TEXT, thread_id TEXT, role T
 """
 
 
-def fixture(path: Path) -> None:
+def fixture(path: Path, *, live_tokenizer: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
-    conn.executescript(SCHEMA)
+    schema = SCHEMA
+    if live_tokenizer:
+        schema = schema.replace(
+            "CREATE VIRTUAL TABLE orchestration_v2_message_search USING fts5(text, content='', tokenize='trigram');",
+            LIVE_FTS_SCHEMA,
+        )
+    conn.executescript(schema)
     conn.execute('INSERT INTO projection_projects VALUES (?,?,?,NULL)', ('p', 'home-lab', '/repo/home-lab'))
     for thread, title, archived, deleted in (
         (THREAD, 'Update Spark OS and Check BIOS', None, None),
@@ -88,14 +99,18 @@ def fixture(path: Path) -> None:
         ('user', THREAD, 'user', 'Please update the Spark BIOS safely.', 0, 'user'),
         ('assistant', THREAD, 'assistant', 'Completed a literal 100% fix with "quoted" _value_.', 0, 'agent'),
         ('streaming', THREAD, 'assistant', 'streaming needle', 1, 'agent'),
-        ('generated', THREAD, 'user', 'generated notification needle', 0, 'system'),
+        ('generated', THREAD, 'user', 'generated notification needle', 0, 'agent'),
         ('archive', 'thread-archived', 'user', 'archived message needle', 0, 'user'),
         ('deleted', 'thread-deleted', 'user', 'deleted message needle', 0, 'user'),
     ]
     for mid, thread, role, text, streaming, created_by in messages:
+        payload = {'text': text, 'createdBy': created_by}
+        if mid == 'generated':
+            payload['notification'] = {'source': {'kind': 'command'},
+                                       'outcome': 'completed', 'summary': 'background command completed'}
         conn.execute('INSERT INTO orchestration_v2_projection_messages VALUES (?,?,?,?,?,?,?,?,?)',
                      (mid, thread, 'run-1', 'node-1', role, streaming, TIME, TIME,
-                      json.dumps({'text': text, 'createdBy': created_by})))
+                      json.dumps(payload)))
     conn.execute('INSERT INTO orchestration_v2_projection_runs VALUES (?,?,?,?,?,?,?,?,?)',
                  ('run-1', THREAD, 1, 'claudeAgent', 'provider-' + THREAD, 'completed', TIME, TIME,
                   json.dumps({'startedAt': TIME})))

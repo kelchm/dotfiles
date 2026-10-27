@@ -363,6 +363,67 @@ class V2StatusTests(unittest.TestCase):
         self.assertEqual(self.inspect().turn_id, 'run-1')
         self.assertEqual(self.inspect().state, 'running/recent')
 
+    def test_latest_user_message_excludes_generated_and_streaming_rows(self) -> None:
+        from .t3_v2_fixture import TIME
+        self.execute("""UPDATE orchestration_v2_projection_messages
+            SET updated_at='2026-10-25T13:55:00Z' WHERE message_id='generated'""")
+        self.execute("""INSERT INTO orchestration_v2_projection_messages
+            VALUES ('streaming-user', ?, 'run-1', 'node-1', 'user', 1,
+                    '2026-10-25T13:56:00Z', '2026-10-25T13:56:00Z', ?)""",
+                     (self.thread, json.dumps({'text': 'unfinished user row', 'createdBy': 'user'})))
+        self.execute("""INSERT INTO orchestration_v2_projection_messages
+            VALUES ('completion', ?, 'run-1', 'node-1', 'user', 0,
+                    '2026-10-25T13:56:30Z', '2026-10-25T13:56:30Z', ?)""",
+                     (self.thread, json.dumps({'text': 'delegate finished', 'createdBy': 'agent',
+                                              'delegatedCompletion': {'taskIds': ['task-1']}})))
+        result = self.inspect()
+        self.assertEqual(result.latest_user_message_at, TIME)
+        self.assertEqual(result.state, 'completed')
+        self.execute("""INSERT INTO orchestration_v2_projection_messages
+            VALUES ('new-user', ?, 'run-1', 'node-1', 'user', 0,
+                    '2026-10-25T13:57:00Z', '2026-10-25T13:57:00Z', ?)""",
+                     (self.thread, json.dumps({'text': 'a user-authored message', 'createdBy': 'user'})))
+        self.assertEqual(self.inspect().latest_user_message_at, '2026-10-25T13:57:00Z')
+        self.execute("""INSERT INTO orchestration_v2_projection_messages
+            VALUES ('agent-prompt', ?, 'run-1', 'node-1', 'user', 0,
+                    '2026-10-25T13:58:00Z', '2026-10-25T13:58:00Z', ?)""",
+                     (self.thread, json.dumps({'text': 'review the requested change', 'createdBy': 'agent'})))
+        self.assertEqual(self.inspect().latest_user_message_at, '2026-10-25T13:58:00Z')
+
+    def test_bad_implicit_databases_warn_and_do_not_hide_a_valid_thread(self) -> None:
+        invalid = Path(self.tmp.name) / 'invalid.sqlite'
+        invalid.write_text('not a SQLite database')
+        unsupported = Path(self.tmp.name) / 'unsupported.sqlite'
+        sqlite3.connect(unsupported).close()
+        candidates = [status.store.Candidate(p, 'implicit', 'test') for p in (invalid, unsupported)]
+        with patch.object(status, 'resolve_candidates', return_value=(candidates + [self.candidate], self.thread)), \
+             redirect_stdout(io.StringIO()) as stdout:
+            result = status.main(['--thread', self.thread, '--json'])
+        self.assertEqual(result, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload['database'], str(self.db))
+        self.assertEqual(payload['state'], 'completed')
+        self.assertIn(str(invalid), ' '.join(payload['warnings']))
+        self.assertIn(str(unsupported), ' '.join(payload['warnings']))
+        # If every candidate fails, the command still returns an error with the skipped-path diagnostics.
+        with patch.object(status, 'resolve_candidates', return_value=(candidates, self.thread)), \
+             redirect_stdout(io.StringIO()) as stdout:
+            result = status.main(['--thread', self.thread, '--json'])
+        self.assertEqual(result, 2)
+        self.assertIn('Skipped database', json.loads(stdout.getvalue())['error'])
+
+    def test_bad_explicit_database_still_fails(self) -> None:
+        invalid = Path(self.tmp.name) / 'invalid.sqlite'
+        invalid.write_text('not a SQLite database')
+        candidate = status.store.Candidate(invalid, 'explicit', 'test')
+        for selection in (['--db', str(invalid)], ['--base-dir', str(invalid.parent)]):
+            with self.subTest(selection=selection), \
+                 patch.object(status, 'resolve_candidates', return_value=([candidate, self.candidate], self.thread)), \
+                 redirect_stdout(io.StringIO()) as stdout:
+                result = status.main(['--thread', self.thread, '--json', *selection])
+                self.assertEqual(result, 2)
+                self.assertIn('SQLite status query failed', json.loads(stdout.getvalue())['error'])
+
 
 if __name__ == "__main__":
     unittest.main()

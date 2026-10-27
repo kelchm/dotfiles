@@ -419,15 +419,16 @@ def candidate_metadata(candidate: Candidate) -> dict[str, Any]:
 def sqlite_uri(path: Path) -> str:
     """Read-only URI.
 
-    `mode=ro` blocks writes to the main file. If no WAL sibling exists the
+    `mode=ro` blocks writes to the main file. If no WAL or rollback journal exists the
     database is treated as `immutable=1` so SQLite will not create `-wal`/`-shm`.
     A live WAL database cannot use immutable mode (that would hide uncheckpointed
     writes); SQLite may then update `-shm` to *read* the WAL. That is not a
     projection mutation, but it is why idle/checkpointed files take the immutable path.
     """
 
-    uri = path.resolve().as_uri() + "?mode=ro"
-    if not path.with_name(path.name + "-wal").is_file():
+    resolved = path.resolve()
+    uri = resolved.as_uri() + "?mode=ro"
+    if not any(resolved.with_name(resolved.name + suffix).is_file() for suffix in ("-wal", "-journal")):
         uri += "&immutable=1"
     return uri
 

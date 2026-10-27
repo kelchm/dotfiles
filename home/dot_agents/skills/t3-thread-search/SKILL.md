@@ -38,14 +38,14 @@ The other subcommand is `status --thread <id>` (see below). Flags go after the s
 
 `--ssh` sends the search program to `python3 -I -` on the remote host, so that host needs only `python3`, not this skill. No code files or database copies are written there; the search reads the host's own database.
 
-If `python3` is missing, retry with `python`, then `mise -C "$HOME/.agents/skills/t3-thread-search" exec -- python3 scripts/t3-thread search ...` so the skill's `mise.toml` is used. Do not interpolate the query into SQL. Do not start a T3 server against an existing database. Do not copy a live database (`statev2.sqlite` or legacy `state.sqlite`). Do not `VACUUM`, migrate, index, or otherwise mutate the source. Checkpointed files are opened with `immutable=1` so `-wal`/`-shm` are not created; a live WAL file cannot be immutable (that would hide uncheckpointed writes), and SQLite may then update `-shm` in order to read the WAL.
+If `python3` is missing, retry with `python`, then `mise -C "$HOME/.agents/skills/t3-thread-search" exec -- python3 scripts/t3-thread search ...` so the skill's `mise.toml` is used. Do not interpolate the query into SQL. Do not start a T3 server against an existing database. Do not copy a live database (`statev2.sqlite` or legacy `state.sqlite`). Do not `VACUUM`, migrate, index, or otherwise mutate the source. When neither a WAL nor rollback journal exists beside the resolved database path, files are opened with `immutable=1` so `-wal`/`-shm` are not created; a live WAL file cannot be immutable (that would hide uncheckpointed writes), and SQLite may then update `-shm` in order to read the WAL.
 
 | Flag | Purpose |
 |---|---|
 | `--db PATH` | Exact SQLite file, a `userdata` dir, or a T3 base dir (prefers `statev2.sqlite`) |
 | `--base-dir PATH` / `--home-dir PATH` | `<path>/userdata/statev2.sqlite`, with legacy fallback (explicit-home rule) |
 | `--project TEXT` | Restrict by project title or workspace path |
-| `--since` / `--until` | ISO date/time or relative `7d` / `24h` / `30m`. Date-only `--until` is end of that day. |
+| `--since` / `--until` | ISO date/time or relative `7d` / `24h` / `30m`. Offsets are normalized to UTC; timezone-free values use UTC. Date-only `--until` is end of that day. |
 | `--active-only` | Exclude archived/deleted threads and deleted projects |
 | `--include-deleted` | Opt in to deleted threads (labeled) |
 | `--thread ID` | Thread ID, `environmentId/threadId`, or a full T3 thread URL |
@@ -70,9 +70,9 @@ python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread" status \
   --thread "<environmentId>/<threadId>"
 ```
 
-On v2 it reads `orchestration_v2_projection_threads`, `orchestration_v2_projection_provider_threads`, `orchestration_v2_projection_runs`, `orchestration_v2_projection_turn_items`, messages, and pending runtime requests joined to their run through nodes. Project names still come from `projection_projects`. It never uses the stale legacy thread/session tables when v2 exists. The JSON output retains `turn_id` / `turn_state` for compatibility; on v2 they identify the selected run and its status.
+On v2 it reads `orchestration_v2_projection_threads`, `orchestration_v2_projection_provider_threads`, `orchestration_v2_projection_runs`, `orchestration_v2_projection_turn_items`, messages, and pending runtime requests joined to their run through nodes. Project names still come from `projection_projects`. It never uses the stale legacy thread/session tables when v2 exists. The JSON output retains `turn_id` / `turn_state` for compatibility; on v2 they identify the selected run and its status. `latest_user_message_at` includes non-streaming prompts sent by a user or another agent, and excludes notification and delegate-completion records.
 
-It reports `running/recent`, `awaiting-approval`, `awaiting-input`, `queued`, `completed`, `error`, `interrupted`, `idle/ready`, `idle/stopped`, `stale-suspect`, or `unknown`. Pending requests from older runs do not override a terminal run. Message/tool timestamps are stronger liveness evidence than provider timestamps; missing tables produce warnings. Activity summaries are sanitized and full payload JSON/messages are never printed. The default stale threshold is five minutes; `stale-suspect` does **not** prove that a provider is hung.
+It reports `running/recent`, `awaiting-approval`, `awaiting-input`, `queued`, `completed`, `error`, `interrupted`, `idle/ready`, `idle/stopped`, `stale-suspect`, or `unknown`. Pending requests from older runs do not override a terminal run. Message/tool timestamps are stronger liveness evidence than provider timestamps; missing tables produce warnings. Malformed databases found by implicit discovery are skipped with a warning; an explicit database selection still fails on an invalid store. Activity summaries are sanitized and full payload JSON/messages are never printed. The default stale threshold is five minutes; `stale-suspect` does **not** prove that a provider is hung.
 
 Use `--watch-for 10m --interval 15s` only when the user explicitly requests finite local monitoring and the harness has no applicable integrated monitoring/completion mechanism. Maximum 30 minutes; stop on terminal state or an explicit approval/input blocker. Never auto-approve, retry, kill, restart, or send input. Harness restrictions on polling delegates and PRs take precedence.
 

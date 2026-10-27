@@ -274,11 +274,18 @@ def parse_when(value: str, *, now: datetime | None = None, end_of_day: bool = Fa
             unit
         ]
         origin = now or datetime.now(timezone.utc)
+        origin = origin.replace(tzinfo=origin.tzinfo or timezone.utc).astimezone(timezone.utc)
         return (origin - delta).strftime("%Y-%m-%dT%H:%M:%S")
     if ISO_DATE_RE.fullmatch(raw):
         return f"{raw}T23:59:59.999" if end_of_day else f"{raw}T00:00:00"
     if ISO_DT_RE.fullmatch(raw):
-        return raw.replace(" ", "T").replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        else:
+            parsed = parsed.replace(tzinfo=parsed.tzinfo or timezone.utc).astimezone(timezone.utc)
+            return parsed.isoformat().replace("+00:00", "Z")
     raise UsageError(
         f"Invalid date {value!r}. Use ISO-8601 (`2026-05-01` or `2026-05-01T12:00:00`) or a relative value like `7d`, `24h`, `30m`."
     )
@@ -337,10 +344,10 @@ def recency_filter_sql(
     if column is None:
         return "", []
     if since:
-        clauses.append(f"{column} >= ?")
+        clauses.append(f"julianday({column}) >= julianday(?)")
         params.append(since)
     if until:
-        clauses.append(f"{column} <= ?")
+        clauses.append(f"julianday({column}) <= julianday(?)")
         params.append(until)
     if not clauses:
         return "", []
@@ -886,7 +893,8 @@ def v2_filters(*, active_only: bool, include_deleted: bool, project: str | None,
     if project:
         clauses.append(f"(p.title LIKE ? ESCAPE '{LIKE_ESCAPE}' OR p.workspace_root LIKE ? ESCAPE '{LIKE_ESCAPE}')")
         params.extend([like_contains(project)] * 2)
-    for value, expression in ((since, "t.updated_at >= ?"), (until, "t.updated_at <= ?"),
+    for value, expression in ((since, "julianday(t.updated_at) >= julianday(?)"),
+                              (until, "julianday(t.updated_at) <= julianday(?)"),
                               (thread_id, "t.thread_id = ?")):
         if value:
             clauses.append(expression)
@@ -1549,6 +1557,9 @@ def run_search(
         if query is not None and query.strip() == thread_ref.raw:
             query = None
 
+    if not list_dbs and not (thread_id or pr or (query and query.strip())):
+        raise UsageError("Provide a search query, or use --list-dbs / --thread / --pr.")
+
     since_value = parse_when(since, now=now) if since else None
     until_value = parse_when(until, now=now, end_of_day=True) if until else None
     candidates = [bind_candidate(candidate) for candidate in discover_candidates(cwd=cwd, home=home, env=env, db=db, base_dir=base_dir)]
@@ -1836,9 +1847,6 @@ def run_search(
             not_found_kind = "not_queried"
             warnings.append(NOT_QUERIED_REMOTE_MESSAGE)
             warnings.append(REMOTE_REQUEST_HINT)
-
-    if not lookup_only and query is None and not thread_id and not pr:
-        raise UsageError("Provide a search query, or use --list-dbs / --thread.")
 
     return SearchReport(
         mode=mode,

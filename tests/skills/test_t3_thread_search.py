@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from urllib.parse import quote
+from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
 
 ROOT = Path(__file__).resolve().parents[2] / "home/dot_agents/skills/t3-thread-search"
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -1049,6 +1051,94 @@ class V2SearchTests(unittest.TestCase):
         self.assertEqual(detail.results[0]['message_counts'], {})
         self.assertIsNone(detail.results[0]['provider_name'])
         self.assertFalse(search(self.db, None, pr='999').results)
+
+    def test_live_wal_is_visible_through_symlink(self) -> None:
+        alias = self.db.parent / 'alias.sqlite'
+        alias.symlink_to(self.db)
+        writer = sqlite3.connect(self.db)
+        try:
+            writer.execute('PRAGMA journal_mode=WAL')
+            writer.execute('UPDATE orchestration_v2_projection_threads SET title=? WHERE thread_id=?',
+                           ('Visible through alias', self.thread))
+            writer.commit()
+            self.assertNotIn('immutable=1', store.sqlite_uri(alias))
+            self.assertEqual(search(alias, 'Visible through alias').results[0]['thread_id'], self.thread)
+        finally:
+            writer.close()
+
+    def test_rollback_journal_uses_normal_readonly_locking(self) -> None:
+        writer = sqlite3.connect(self.db)
+        try:
+            writer.execute('BEGIN IMMEDIATE')
+            writer.execute('UPDATE orchestration_v2_projection_threads SET title=? WHERE thread_id=?',
+                           ('Uncommitted title', self.thread))
+            self.assertTrue(self.db.with_name(self.db.name + '-journal').is_file())
+            self.assertNotIn('immutable=1', store.sqlite_uri(self.db))
+            result = search(self.db, None, thread_id=self.thread)
+            self.assertEqual(result.results[0]['title'], 'Update Spark OS and Check BIOS')
+        finally:
+            writer.rollback()
+            writer.close()
+
+    def test_live_fts_tokenizer_matches_accents(self) -> None:
+        from .t3_v2_fixture import fixture, LIVE_FTS_SCHEMA
+        probe = sqlite3.connect(':memory:')
+        try:
+            try:
+                probe.executescript(LIVE_FTS_SCHEMA)
+            except sqlite3.OperationalError as error:
+                self.skipTest(f'live FTS tokenizer requires a newer SQLite runtime: {error}')
+        finally:
+            probe.close()
+        live_db = self.db.with_name('live-tokenizer.sqlite')
+        fixture(live_db, live_tokenizer=True)
+        writer = sqlite3.connect(live_db)
+        writer.execute('INSERT INTO orchestration_v2_projection_messages VALUES (?,?,?,?,?,?,?,?,?)',
+                       ('accent', self.thread, 'run-1', 'node-1', 'user', 0,
+                        '2026-10-25T13:40:32Z', '2026-10-25T13:40:32Z',
+                        json.dumps({'text': 'Inspect the café résumé', 'createdBy': 'user'})))
+        writer.commit()
+        writer.close()
+        report = search(live_db, 'cafe resume')
+        self.assertEqual(report.results[0]['thread_id'], self.thread)
+        self.assertEqual(report.results[0]['source'], 'user')
+        self.assertIn('café résumé', report.results[0]['snippet'])
+
+
+class DateFilterTests(unittest.TestCase):
+    def test_equivalent_offset_bounds_preserve_equality_and_milliseconds(self) -> None:
+        from .t3_v2_fixture import fixture, THREAD
+        with tempfile.TemporaryDirectory() as directory:
+            for name, factory, thread, query in (
+                ('legacy', full_fixture, 'thread-active', 'rebuild'),
+                ('v2', fixture, THREAD, 'Spark BIOS'),
+            ):
+                with self.subTest(schema=name):
+                    db = Path(directory) / name / 'state.sqlite'
+                    factory(db)
+                    table = 'projection_threads' if name == 'legacy' else 'orchestration_v2_projection_threads'
+                    for fraction in ('', '.123'):
+                        timestamp = '2026-10-25T13:40:31' + fraction + 'Z'
+                        writer = sqlite3.connect(db)
+                        writer.execute(f'UPDATE {table} SET updated_at=? WHERE thread_id=?', (timestamp, thread))
+                        writer.commit()
+                        writer.close()
+                        for bound in (timestamp, '2026-10-25T15:40:31' + fraction + '+02:00',
+                                      '2026-10-25T11:40:31' + fraction + '-02:00'):
+                            report = search(db, query, since=bound, until=bound)
+                            self.assertIn(thread, [r['thread_id'] for r in report.results], bound)
+                        self.assertFalse(search(db, query, since='2026-10-25T15:40:31.124+02:00').results)
+                        self.assertFalse(search(db, query, until='2026-10-25T11:40:30.999-02:00').results)
+                    # A relative bound uses UTC even when a caller supplies an offset-aware clock.
+                    now = datetime(2026, 10, 25, 16, 40, 31, tzinfo=timezone(timedelta(hours=2)))
+                    self.assertTrue(search(db, query, since='1h', now=now).results)
+
+    def test_empty_search_is_rejected_before_database_discovery(self) -> None:
+        for query in (None, '', '   '):
+            with self.subTest(query=query), patch.object(tts, 'discover_candidates') as discover:
+                with self.assertRaises(store.UsageError):
+                    tts.run_search(query=query, cwd=Path('/unused'), home=Path('/unused'), env={})
+                discover.assert_not_called()
 
 
 if __name__ == "__main__":
