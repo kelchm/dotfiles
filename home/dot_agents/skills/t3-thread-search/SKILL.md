@@ -24,17 +24,21 @@ Check the tools available in the current harness before choosing a path. As of 2
 - **Approval or user-input details:** use integrated reads when connected. `t3_pending_request` lists/reads user questions; it does not list permission approvals. A status result is never authorization to answer, approve, retry, interrupt, or send a message.
 - **A delegate this thread started:** follow `delegate_task`'s returned `next` and the harness's completion notifications. Do not poll a running delegate with this helper, `task_status`, or another monitor. Use integrated PR watching for PR monitoring, not SQLite status loops.
 
-`t3-thread-status` is an offline/read-only diagnostic fallback. Its state is an interpretation of stored projections, while `t3_thread_read` supplies T3's application-level view. If they disagree, check environment identity, database path, timestamps, and current run before drawing conclusions. Neither a stale projection nor a tool's `waiting` status proves a hang. Do not use the skill to bypass integrated-tool limits or assume that an authenticated connection covers every environment.
+`t3-thread status` is an offline/read-only diagnostic fallback. Its state is an interpretation of stored projections, while `t3_thread_read` supplies T3's application-level view. If they disagree, check environment identity, database path, timestamps, and current run before drawing conclusions. Neither a stale projection nor a tool's `waiting` status proves a hang. Do not use the skill to bypass integrated-tool limits or assume that an authenticated connection covers every environment.
 
 ## Command
 
 For local recovery and diagnostics, prefer the helper over ad hoc SQL. It is read-only (`sqlite3` URI `mode=ro` plus `PRAGMA query_only=ON`), parameterizes every user value, inspects `sqlite_schema` / `PRAGMA table_info`, and prints the database it used.
 
 ```bash
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" [query] [flags]
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread" search [query] [flags]
 ```
 
-If `python3` is missing, retry with `python`, then `mise -C "$HOME/.agents/skills/t3-thread-search" exec -- python3 scripts/t3-thread-search ...` so the skill's `mise.toml` is used. Do not interpolate the query into SQL. Do not start a T3 server against an existing database. Do not copy a live database (`statev2.sqlite` or legacy `state.sqlite`). Do not `VACUUM`, migrate, index, or otherwise mutate the source. Checkpointed files are opened with `immutable=1` so `-wal`/`-shm` are not created; a live WAL file cannot be immutable (that would hide uncheckpointed writes), and SQLite may then update `-shm` in order to read the WAL.
+The other subcommand is `status --thread <id>` (see below). Flags go after the subcommand, and each subcommand has `--help`. The older `scripts/t3-thread-search` and `scripts/t3-thread-status` paths still work with the same arguments.
+
+`--ssh` sends the search program to `python3 -I -` on the remote host, so that host needs only `python3`, not this skill. No code files or database copies are written there; the search reads the host's own database.
+
+If `python3` is missing, retry with `python`, then `mise -C "$HOME/.agents/skills/t3-thread-search" exec -- python3 scripts/t3-thread search ...` so the skill's `mise.toml` is used. Do not interpolate the query into SQL. Do not start a T3 server against an existing database. Do not copy a live database (`statev2.sqlite` or legacy `state.sqlite`). Do not `VACUUM`, migrate, index, or otherwise mutate the source. Checkpointed files are opened with `immutable=1` so `-wal`/`-shm` are not created; a live WAL file cannot be immutable (that would hide uncheckpointed writes), and SQLite may then update `-shm` in order to read the WAL.
 
 | Flag | Purpose |
 |---|---|
@@ -59,10 +63,10 @@ Default search is **recovery**: active + archived, non-deleted, titles, projects
 
 ## Thread status and monitoring
 
-Prefer `t3_thread_read` for a connected thread. When it is unavailable, or when investigating local projection state, use the companion helper:
+Prefer `t3_thread_read` for a connected thread. When it is unavailable, or when investigating local projection state, use the status subcommand:
 
 ```bash
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-status" \
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread" status \
   --thread "<environmentId>/<threadId>"
 ```
 
@@ -133,14 +137,14 @@ Canonical files live in `~/.agents/skills/t3-thread-search/` (Codex user-level, 
 Examples:
 
 ```bash
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" "projection rebuild performance"
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --pr "https://github.com/owner/repository/pull/1046"
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --json --thread "https://app.t3.codes/<environmentId>/<threadId>"
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --environment "<environmentId>" --thread "<threadId>"
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --remote-json /tmp/t3-search-rpc.json --active-only "reconnect"
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --ssh user@host --ssh-base-dir '~/.t3' --thread "<threadId>"
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread" search "projection rebuild performance"
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread" search --pr "https://github.com/owner/repository/pull/1046"
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread" search --json --thread "https://app.t3.codes/<environmentId>/<threadId>"
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread" search --environment "<environmentId>" --thread "<threadId>"
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread" search --remote-json /tmp/t3-search-rpc.json --active-only "reconnect"
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread" search --ssh user@host --ssh-base-dir '~/.t3' --thread "<threadId>"
 ```
 
-On Windows, invoke `python` on the same script path under `%USERPROFILE%\.agents\skills\t3-thread-search\scripts\t3-thread-search`.
+On Windows, invoke `python` on the same script path under `%USERPROFILE%\.agents\skills\t3-thread-search\scripts\t3-thread` followed by `search` or `status`.
 
 If the helper cannot run, use `sqlite3 -readonly "file:<abs>/statev2.sqlite?mode=ro"` with `.parameter init` / `.parameter set` and `PRAGMA query_only=ON`. Never build SQL by concatenating the user's text.

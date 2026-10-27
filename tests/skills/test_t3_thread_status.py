@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import importlib.machinery
-import importlib.util
 import io
 import json
 import sqlite3
@@ -16,13 +14,9 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2] / "home/dot_agents/skills/t3-thread-search"
-SCRIPT = ROOT / "scripts" / "t3-thread-status"
-LOADER = importlib.machinery.SourceFileLoader("t3_thread_status", str(SCRIPT))
-SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
-assert SPEC is not None and SPEC.loader is not None
-status = importlib.util.module_from_spec(SPEC)
-sys.modules[LOADER.name] = status
-SPEC.loader.exec_module(status)
+sys.path.insert(0, str(ROOT / "scripts"))
+from t3_thread import status
+
 
 
 SCHEMA = """
@@ -73,7 +67,7 @@ class StatusTests(unittest.TestCase):
                      ("t", "p", "Status test", "turn", "2026-08-29T00:00:00Z", "2026-08-29T00:00:00Z"))
         conn.commit()
         conn.close()
-        self.candidate = status.search.Candidate(path=self.db, kind="explicit", source="test", environment_id="env")
+        self.candidate = status.store.Candidate(path=self.db, kind="explicit", source="test", environment_id="env")
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -187,7 +181,7 @@ class StatusTests(unittest.TestCase):
         )
         conn.commit()
         conn.close()
-        missing_candidate = status.search.Candidate(path=missing_db, kind="implicit", source="test", environment_id="other-env")
+        missing_candidate = status.store.Candidate(path=missing_db, kind="implicit", source="test", environment_id="other-env")
 
         with (
             patch.object(status, "resolve_candidates", return_value=([missing_candidate, self.candidate], "t")),
@@ -246,7 +240,7 @@ class V2StatusTests(unittest.TestCase):
         fixture(self.db)
         self.thread = THREAD
         self.environment = ENVIRONMENT
-        self.candidate = status.search.Candidate(self.db, 'test', 'test', environment_id=ENVIRONMENT)
+        self.candidate = status.store.Candidate(self.db, 'test', 'test', environment_id=ENVIRONMENT)
         self.now = datetime(2026, 10, 25, 13, 40, 40, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:

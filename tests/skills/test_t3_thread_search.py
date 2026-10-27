@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.machinery
-import importlib.util
 import json
 import shlex
 import sqlite3
@@ -14,13 +12,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[2] / "home/dot_agents/skills/t3-thread-search"
-SCRIPT = ROOT / "scripts" / "t3-thread-search"
-LOADER = importlib.machinery.SourceFileLoader("t3_thread_search", str(SCRIPT))
-SPEC = importlib.util.spec_from_loader("t3_thread_search", LOADER)
-assert SPEC is not None and SPEC.loader is not None
-tts = importlib.util.module_from_spec(SPEC)
-sys.modules["t3_thread_search"] = tts
-SPEC.loader.exec_module(tts)
+sys.path.insert(0, str(ROOT / "scripts"))
+from t3_thread import search as tts, store
+
 
 
 def sha256(path: Path) -> str:
@@ -188,8 +182,8 @@ def search(db: Path, query: str, **kwargs):
 
 class DiscoveryTests(unittest.TestCase):
     def test_explicit_db_and_base_dir_are_mutually_exclusive(self) -> None:
-        with self.assertRaises(tts.UsageError):
-            tts.discover_candidates(
+        with self.assertRaises(store.UsageError):
+            store.discover_candidates(
                 cwd=Path("/tmp"),
                 home=Path("/tmp"),
                 env={},
@@ -204,7 +198,7 @@ class DiscoveryTests(unittest.TestCase):
             full_fixture(nested / "state.sqlite")
             production = home / ".t3" / "userdata" / "state.sqlite"
             full_fixture(production)
-            candidates = tts.discover_candidates(cwd=home, home=home, env={})
+            candidates = store.discover_candidates(cwd=home, home=home, env={})
             paths = {candidate.path.resolve() for candidate in candidates if candidate.path.is_file()}
             self.assertIn(production.resolve(), paths)
             self.assertNotIn((nested / "state.sqlite").resolve(), paths)
@@ -224,7 +218,7 @@ class DiscoveryTests(unittest.TestCase):
             full_fixture(env_db)
             home = root / "home"
             home.mkdir()
-            candidates = tts.discover_candidates(
+            candidates = store.discover_candidates(
                 cwd=worktree,
                 home=home,
                 env={"T3CODE_HOME": str(env_base)},
@@ -239,7 +233,7 @@ class DiscoveryTests(unittest.TestCase):
             (repo / ".git").mkdir()
             (repo / ".t3" / "userdata").mkdir(parents=True)
             full_fixture(repo / ".t3" / "userdata" / "state.sqlite")
-            self.assertIsNone(tts.is_linked_worktree(repo))
+            self.assertIsNone(store.is_linked_worktree(repo))
 
     def test_explicit_base_dir_uses_userdata_not_dev(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -248,7 +242,7 @@ class DiscoveryTests(unittest.TestCase):
             dev = base / "dev" / "state.sqlite"
             full_fixture(userdata)
             full_fixture(dev)
-            candidates = tts.discover_candidates(cwd=base, home=base, env={}, base_dir=str(base))
+            candidates = store.discover_candidates(cwd=base, home=base, env={}, base_dir=str(base))
             self.assertEqual(candidates[0].path, userdata)
 
 
@@ -366,7 +360,7 @@ class SearchTests(unittest.TestCase):
         after = sha256(self.db)
         self.assertEqual(before, after)
 
-        conn = tts.connect_readonly(self.db)
+        conn = store.connect_readonly(self.db)
         try:
             pragma = conn.execute("PRAGMA query_only").fetchone()
             self.assertEqual(int(pragma[0]), 1)
@@ -380,14 +374,14 @@ class SearchTests(unittest.TestCase):
 
     def test_missing_database(self) -> None:
         missing = Path(self.tmp.name) / "nope.sqlite"
-        with self.assertRaises(tts.SearchError) as raised:
+        with self.assertRaises(store.SearchError) as raised:
             search(missing, "needle")
         self.assertIn("does not exist", str(raised.exception))
 
     def test_schema_drift_missing_required_table(self) -> None:
         broken = Path(self.tmp.name) / "broken.sqlite"
         write_db(broken, ["CREATE TABLE unrelated (id INTEGER);"])
-        with self.assertRaises(tts.SearchError) as raised:
+        with self.assertRaises(store.SearchError) as raised:
             search(broken, "needle")
         self.assertIn("Missing required table", str(raised.exception))
 
@@ -467,7 +461,7 @@ class MultipleDatabaseTests(unittest.TestCase):
             dev = env_base / "dev" / "state.sqlite"
             full_fixture(userdata)
             full_fixture(dev)
-            candidates = tts.discover_candidates(
+            candidates = store.discover_candidates(
                 cwd=home, home=home, env={"T3CODE_HOME": str(env_base)}
             )
             env_paths = [candidate.path for candidate in candidates if candidate.kind == "env"]
@@ -480,7 +474,7 @@ class MultipleDatabaseTests(unittest.TestCase):
             userdata = base / "userdata" / "state.sqlite"
             write_db(decoy, ["CREATE TABLE unrelated (id INTEGER);"])
             full_fixture(userdata)
-            candidates = tts.discover_candidates(cwd=base, home=base, env={}, db=str(base))
+            candidates = store.discover_candidates(cwd=base, home=base, env={}, db=str(base))
             self.assertEqual(candidates[0].path, userdata)
 
     def test_one_bad_database_does_not_abort_the_rest(self) -> None:
@@ -548,7 +542,7 @@ class ReviewFixTests(unittest.TestCase):
             shm = Path(str(db) + "-shm")
             self.assertFalse(wal.exists())
             self.assertFalse(shm.exists())
-            conn = tts.connect_readonly(db)
+            conn = store.connect_readonly(db)
             try:
                 conn.execute("SELECT COUNT(*) FROM projection_threads").fetchone()
             finally:
@@ -635,12 +629,12 @@ class RemoteEnvironmentTests(unittest.TestCase):
 
     def test_parse_full_t3_thread_url(self) -> None:
         url = f"https://app.t3.codes/{self.ENV_A}/{self.THREAD}"
-        parsed = tts.parse_thread_ref(url)
+        parsed = store.parse_thread_ref(url)
         self.assertIsNotNone(parsed)
         self.assertEqual(parsed.environment_id, self.ENV_A)
         self.assertEqual(parsed.thread_id, self.THREAD)
         self.assertEqual(parsed.host, "app.t3.codes")
-        self.assertIsNone(tts.parse_thread_ref("https://app.t3.codes/pair?host=https://backend.example"))
+        self.assertIsNone(store.parse_thread_ref("https://app.t3.codes/pair?host=https://backend.example"))
 
     def test_url_lookup_uses_both_identifiers(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -883,7 +877,7 @@ class RemoteEnvironmentTests(unittest.TestCase):
             self.assertEqual(argv[-2], "user@remote.example")
             remote_command = argv[-1]
             expected = " ".join(
-                ["python3", "-", "--json", shlex.quote(evil), "--base-dir", shlex.quote("~/.t3")]
+                ["python3", "-I", "-", "--json", shlex.quote(evil), "--base-dir", shlex.quote("~/.t3")]
             )
             self.assertEqual(remote_command, expected)
 
@@ -914,7 +908,7 @@ class V2SearchTests(unittest.TestCase):
         report = tts.run_search(query='rebuild performance', cwd=home, home=home, env={})
         self.assertEqual(report.results, [])  # Only in the superseded database.
         for flag in ('db', 'base_dir'):
-            candidate = tts.discover_candidates(cwd=home, home=home, env={}, **{flag: str(self.db.parent if flag == 'db' else self.db.parent.parent)})
+            candidate = store.discover_candidates(cwd=home, home=home, env={}, **{flag: str(self.db.parent if flag == 'db' else self.db.parent.parent)})
             self.assertEqual(candidate[0].path, self.db)
         explicit = search(old, 'rebuild performance')
         self.assertTrue(explicit.results)
@@ -929,7 +923,7 @@ class V2SearchTests(unittest.TestCase):
                 self.assertEqual(report.results[0]['title'], 'Update Spark OS and Check BIOS')
                 self.assertEqual(report.results[0]['scoped_id'], f'{ENVIRONMENT}/{self.thread}')
                 self.assertEqual(report.results[0]['message_counts'], {'user': 2, 'assistant': 2})
-        with self.assertRaises(tts.UsageError):
+        with self.assertRaises(store.UsageError):
             search(self.db, None, thread_id=f'{ENVIRONMENT}/{self.thread}', environment_id='wrong')
 
     def test_metadata_provider_and_message_search(self) -> None:
@@ -957,12 +951,12 @@ class V2SearchTests(unittest.TestCase):
         self.assertFalse(search(self.db, 'Spark BIOS', active_only=True).results)
 
     def test_fts_query_plan_and_readonly_safety(self) -> None:
-        conn = tts.connect_readonly(self.db)
+        conn = store.connect_readonly(self.db)
         before = sha256(self.db)
-        schema = tts.inspect_schema(conn, self.db)
+        schema = store.inspect_schema(conn, self.db)
         statements = []
         conn.set_trace_callback(statements.append)
-        matches, _ = tts.search_v2(conn, schema, tts.Candidate(self.db, 'test', 'test'), 'Spark BIOS',
+        matches, _ = tts.search_v2(conn, schema, store.Candidate(self.db, 'test', 'test'), 'Spark BIOS',
             active_only=False, include_deleted=False, project=None, since=None, until=None, thread_id=None, limit=20)
         self.assertTrue(matches)
         query = next(sql for sql in statements if ' MATCH ' in sql)
@@ -1001,7 +995,7 @@ class V2SearchTests(unittest.TestCase):
         missing = search(self.db, None, pr='1046')
         self.assertIn('attribution thread:', ' '.join(missing.warnings))
         for invalid in ('0', '-2', "123 OR 1=1", 'https://github.com/owner/home-lab/issues/123'):
-            with self.subTest(invalid=invalid), self.assertRaises(tts.UsageError):
+            with self.subTest(invalid=invalid), self.assertRaises(store.UsageError):
                 search(self.db, None, pr=invalid)
 
     def test_live_wal_is_visible(self) -> None:
@@ -1013,7 +1007,7 @@ class V2SearchTests(unittest.TestCase):
             writer.commit()
             result = search(self.db, 'Fresh uncheckpointed title')
             self.assertEqual(result.results[0]['thread_id'], self.thread)
-            self.assertNotIn('immutable=1', tts.sqlite_uri(self.db))
+            self.assertNotIn('immutable=1', store.sqlite_uri(self.db))
         finally:
             writer.close()
 
