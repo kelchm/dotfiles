@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[2] / "home/dot_agents/skills/t3-thread-search"
 SCRIPT = ROOT / "scripts" / "t3-thread-search"
@@ -885,6 +886,175 @@ class RemoteEnvironmentTests(unittest.TestCase):
                 ["python3", "-", "--json", shlex.quote(evil), "--base-dir", shlex.quote("~/.t3")]
             )
             self.assertEqual(remote_command, expected)
+
+
+
+
+class V2SearchTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from .t3_v2_fixture import fixture, THREAD
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / '.t3/userdata/statev2.sqlite'
+        fixture(self.db)
+        self.thread = THREAD
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_discovery_prefers_v2_and_lists_superseded_legacy(self) -> None:
+        old = self.db.with_name('state.sqlite')
+        full_fixture(old)
+        home = Path(self.tmp.name)
+        report = tts.run_search(query=None, cwd=home, home=home, env={}, list_dbs=True)
+        live, legacy = [item for item in report.databases if item['exists']]
+        self.assertEqual(live['role'], 'live')
+        self.assertTrue(live['searchable'])
+        self.assertIn('legacy/stale', legacy['role'])
+        self.assertFalse(legacy['searchable'])
+        report = tts.run_search(query='rebuild performance', cwd=home, home=home, env={})
+        self.assertEqual(report.results, [])  # Only in the superseded database.
+        for flag in ('db', 'base_dir'):
+            candidate = tts.discover_candidates(cwd=home, home=home, env={}, **{flag: str(self.db.parent if flag == 'db' else self.db.parent.parent)})
+            self.assertEqual(candidate[0].path, self.db)
+        explicit = search(old, 'rebuild performance')
+        self.assertTrue(explicit.results)
+
+    def test_exact_identity_forms_and_fresh_title(self) -> None:
+        from .t3_v2_fixture import ENVIRONMENT
+        for ref in (self.thread, f'{ENVIRONMENT}/{self.thread}',
+                    f'https://app.t3.codes/{ENVIRONMENT}/{self.thread}',
+                    f't3-thread://v1/{self.thread}'):
+            with self.subTest(ref=ref):
+                report = search(self.db, None, thread_id=ref)
+                self.assertEqual(report.results[0]['title'], 'Update Spark OS and Check BIOS')
+                self.assertEqual(report.results[0]['scoped_id'], f'{ENVIRONMENT}/{self.thread}')
+                self.assertEqual(report.results[0]['message_counts'], {'user': 2, 'assistant': 2})
+        with self.assertRaises(tts.UsageError):
+            search(self.db, None, thread_id=f'{ENVIRONMENT}/{self.thread}', environment_id='wrong')
+
+    def test_metadata_provider_and_message_search(self) -> None:
+        for query in ('Update Spark OS', 'home-lab', '/repo/home-lab', 'fix/spark',
+                      'provider-' + self.thread, 'session-' + self.thread, 'claude-work',
+                      'update the Spark BIOS', '100% fix', '"quoted" _value_'):
+            with self.subTest(query=query):
+                self.assertIn(self.thread, [r['thread_id'] for r in search(self.db, query).results])
+        for query in ('streaming needle', 'generated notification needle', '100x fix', '" OR "', "' OR 1=1 --"):
+            with self.subTest(query=query):
+                self.assertEqual(search(self.db, query).results, [])
+
+    def test_message_filters(self) -> None:
+        self.assertTrue(search(self.db, 'archived message').results)
+        self.assertFalse(search(self.db, 'archived message', active_only=True).results)
+        self.assertFalse(search(self.db, 'deleted message').results)
+        self.assertTrue(search(self.db, 'deleted message', include_deleted=True).results)
+        self.assertFalse(search(self.db, 'Spark BIOS', project='other').results)
+        self.assertFalse(search(self.db, 'Spark BIOS', since='2026-10-26').results)
+        self.assertTrue(search(self.db, 'Spark BIOS', project='/repo/home-lab', until='2026-10-25').results)
+        conn = sqlite3.connect(self.db)
+        conn.execute('UPDATE projection_projects SET deleted_at=?', ('2026-10-26',))
+        conn.commit()
+        conn.close()
+        self.assertFalse(search(self.db, 'Spark BIOS', active_only=True).results)
+
+    def test_fts_query_plan_and_readonly_safety(self) -> None:
+        conn = tts.connect_readonly(self.db)
+        before = sha256(self.db)
+        schema = tts.inspect_schema(conn, self.db)
+        statements = []
+        conn.set_trace_callback(statements.append)
+        matches, _ = tts.search_v2(conn, schema, tts.Candidate(self.db, 'test', 'test'), 'Spark BIOS',
+            active_only=False, include_deleted=False, project=None, since=None, until=None, thread_id=None, limit=20)
+        self.assertTrue(matches)
+        query = next(sql for sql in statements if ' MATCH ' in sql)
+        plan = conn.execute('EXPLAIN QUERY PLAN ' + query).fetchall()
+        details = '\n'.join(row['detail'] for row in plan)
+        self.assertIn('VIRTUAL TABLE INDEX', details)
+        self.assertIn('INTEGER PRIMARY KEY', details)
+        self.assertNotIn('SCAN m', details)
+        with self.assertRaises(sqlite3.OperationalError):
+            conn.execute("DELETE FROM orchestration_v2_projection_threads")
+        conn.close()
+        self.assertEqual(before, sha256(self.db))
+        self.assertFalse(self.db.with_name(self.db.name + '-wal').exists())
+        self.assertFalse(self.db.with_name(self.db.name + '-shm').exists())
+
+    def test_short_query_and_missing_fts_do_not_scan_messages(self) -> None:
+        short = search(self.db, 'OS')
+        self.assertTrue(short.results)
+        self.assertIn('metadata only', ' '.join(short.warnings))
+        conn = sqlite3.connect(self.db)
+        conn.execute('DROP TABLE orchestration_v2_message_search')
+        conn.commit()
+        conn.close()
+        missing = search(self.db, 'Spark BIOS')
+        self.assertEqual(missing.results, [])
+        self.assertIn('metadata only', ' '.join(missing.warnings))
+
+    def test_pr_number_url_and_attribution_fallback(self) -> None:
+        number = search(self.db, None, pr='123')
+        self.assertEqual(len(number.results), 2)
+        url = search(self.db, None, pr='https://github.com/owner/home-lab/pull/123')
+        self.assertEqual([r['thread_id'] for r in url.results], [self.thread])
+        self.assertEqual(url.results[0]['source'], 'pr')
+        self.assertEqual(len(search(self.db, None, pr='123', active_only=True).results), 1)
+        self.assertEqual(search(self.db, None, pr='999').results, [])
+        missing = search(self.db, None, pr='1046')
+        self.assertIn('attribution thread:', ' '.join(missing.warnings))
+        for invalid in ('0', '-2', "123 OR 1=1", 'https://github.com/owner/home-lab/issues/123'):
+            with self.subTest(invalid=invalid), self.assertRaises(tts.UsageError):
+                search(self.db, None, pr=invalid)
+
+    def test_live_wal_is_visible(self) -> None:
+        writer = sqlite3.connect(self.db)
+        try:
+            writer.execute('PRAGMA journal_mode=WAL')
+            writer.execute('UPDATE orchestration_v2_projection_threads SET title=? WHERE thread_id=?',
+                           ('Fresh uncheckpointed title', self.thread))
+            writer.commit()
+            result = search(self.db, 'Fresh uncheckpointed title')
+            self.assertEqual(result.results[0]['thread_id'], self.thread)
+            self.assertNotIn('immutable=1', tts.sqlite_uri(self.db))
+        finally:
+            writer.close()
+
+    def test_uuid_is_searched_as_both_native_and_app_id(self) -> None:
+        from .t3_v2_fixture import NATIVE_ID
+        for query in (NATIVE_ID, self.thread):
+            report = search(self.db, query)
+            self.assertIn(self.thread, [row['thread_id'] for row in report.results])
+        self.assertEqual(search(self.db, None, thread_id=NATIVE_ID).results, [])
+
+    def test_delegated_and_opaque_ids_round_trip(self) -> None:
+        from .t3_v2_fixture import DELEGATED_ID, ENVIRONMENT
+        for ref in (DELEGATED_ID, f'{ENVIRONMENT}/{DELEGATED_ID}',
+                    f't3-thread://v1/{quote(DELEGATED_ID, safe="")}',
+                    f'https://app.t3.codes/{ENVIRONMENT}/{DELEGATED_ID}'):
+            with self.subTest(ref=ref):
+                report = search(self.db, None, thread_id=ref)
+                self.assertEqual(report.results[0]['thread_id'], DELEGATED_ID)
+        self.assertTrue(search(self.db, 't3-thread://v1/' + DELEGATED_ID).results)
+        conn = sqlite3.connect(self.db)
+        conn.execute('UPDATE orchestration_v2_projection_threads SET thread_id=? WHERE thread_id=?',
+                     ('opaque/id/with/slashes', DELEGATED_ID))
+        conn.commit()
+        conn.close()
+        for ref in ('opaque/id/with/slashes', ENVIRONMENT + '/opaque/id/with/slashes'):
+            self.assertEqual(search(self.db, None, thread_id=ref).results[0]['thread_id'], 'opaque/id/with/slashes')
+
+    def test_missing_v2_tables_warn_without_using_legacy(self) -> None:
+        conn = sqlite3.connect(self.db)
+        conn.execute('DROP TABLE orchestration_v2_projection_provider_threads')
+        conn.execute('DROP TABLE orchestration_v2_projection_messages')
+        conn.commit()
+        conn.close()
+        report = search(self.db, 'Update Spark OS')
+        self.assertEqual(report.results[0]['thread_id'], self.thread)
+        self.assertIn('provider lookup/status is incomplete', ' '.join(report.warnings))
+        self.assertIn('message lookup/activity is unavailable', ' '.join(report.warnings))
+        detail = search(self.db, None, thread_id=self.thread)
+        self.assertEqual(detail.results[0]['message_counts'], {})
+        self.assertIsNone(detail.results[0]['provider_name'])
+        self.assertFalse(search(self.db, None, pr='999').results)
 
 
 if __name__ == "__main__":

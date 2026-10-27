@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only search over a T3 Code `state.sqlite` projection database."""
+"""Read-only search over T3 Code's live or legacy projection database."""
 
 from __future__ import annotations
 
@@ -132,6 +132,7 @@ class Candidate:
     environment_id: str | None = None
     host: str | None = None
     provenance: str = "sqlite"
+    searchable: bool = True
 
     def resolved(self) -> Path:
         return self.path.expanduser()
@@ -285,17 +286,26 @@ def scoped_identity(environment_id: str | None, thread_id: str | None) -> str | 
 
 def looks_like_thread_id(value: str) -> bool:
     raw = value.strip()
-    return bool(UUID_RE.fullmatch(raw) or raw.startswith("thread-"))
+    return bool(UUID_RE.fullmatch(raw.removeprefix("mcp:")) or raw.startswith(("thread-", "thread:")))
 
 
 def _parse_thread_url(raw: str) -> ThreadRef | None:
     parsed = urlparse(raw)
+    # T3's native links embed namespaced IDs verbatim, including percent escapes
+    # inside those IDs. Also accept conventional URL-encoded ID segments.
+    def decode_segment(value: str) -> str:
+        return value if looks_like_thread_id(value) else unquote(value)
+
+    if parsed.scheme == "t3-thread" and parsed.netloc == "v1":
+        path = "/".join(decode_segment(part) for part in parsed.path.strip("/").split("/"))
+        ref = parse_thread_ref(path, explicit=True)
+        return ThreadRef(raw=raw, thread_id=ref.thread_id, environment_id=ref.environment_id, url=raw) if ref else None
     if parsed.scheme not in {"http", "https"}:
         return None
     query = {key: values[-1] for key, values in parse_qs(parsed.query).items() if values}
     env_from_query = query.get("environmentId") or query.get("environment_id")
     thread_from_query = query.get("threadId") or query.get("thread_id")
-    segments = [unquote(part) for part in parsed.path.split("/") if part]
+    segments = [decode_segment(part) for part in parsed.path.split("/") if part]
     env = env_from_query
     thread = thread_from_query
     if segments and segments[0].lower() not in RESERVED_URL_SEGMENTS:
@@ -317,7 +327,7 @@ def _parse_thread_url(raw: str) -> ThreadRef | None:
     )
 
 
-def parse_thread_ref(value: str | None) -> ThreadRef | None:
+def parse_thread_ref(value: str | None, *, explicit: bool = False) -> ThreadRef | None:
     if value is None:
         return None
     raw = value.strip()
@@ -326,18 +336,18 @@ def parse_thread_ref(value: str | None) -> ThreadRef | None:
     if "://" in raw:
         return _parse_thread_url(raw)
     stripped = raw.strip("/")
-    parts = [part for part in stripped.split("/") if part]
+    parts = stripped.split("/", 1)
     if (
         len(parts) == 2
+        and all(parts)
         and parts[0].lower() not in RESERVED_URL_SEGMENTS
-        and looks_like_thread_id(parts[0])
-        and looks_like_thread_id(parts[1])
+        and UUID_RE.fullmatch(parts[0])
     ):
         return ThreadRef(raw=raw, environment_id=parts[0], thread_id=parts[1])
     tokens = raw.split()
     if len(tokens) == 2 and looks_like_thread_id(tokens[0]) and looks_like_thread_id(tokens[1]):
         return ThreadRef(raw=raw, environment_id=tokens[0], thread_id=tokens[1])
-    if looks_like_thread_id(raw):
+    if explicit or looks_like_thread_id(raw):
         return ThreadRef(raw=raw, thread_id=raw)
     return None
 
@@ -510,12 +520,11 @@ def resolve_sqlite_candidate(path: Path) -> Path | None:
         return path
     if not path.is_dir():
         return None
-    userdata = path / "userdata" / "state.sqlite"
-    if userdata.is_file():
-        return userdata
-    nested = path / "state.sqlite"
-    if nested.is_file():
-        return nested
+    for directory in (path / "userdata", path):
+        for name in ("statev2.sqlite", "state.sqlite"):
+            candidate = directory / name
+            if candidate.is_file():
+                return candidate
     return None
 
 
@@ -533,7 +542,7 @@ def discover_candidates(
     if db:
         explicit = expand_path(db, cwd=cwd)
         sqlite_path = resolve_sqlite_candidate(explicit) or (
-            explicit if explicit.suffix == ".sqlite" else explicit / "userdata" / "state.sqlite"
+            explicit if explicit.suffix == ".sqlite" else explicit / "userdata" / "statev2.sqlite"
         )
         return [Candidate(path=sqlite_path, kind="explicit", source="--db")]
 
@@ -541,7 +550,7 @@ def discover_candidates(
         base = expand_path(base_dir, cwd=cwd)
         return [
             Candidate(
-                path=base / "userdata" / "state.sqlite",
+                path=resolve_sqlite_candidate(base / "userdata") or base / "userdata" / "statev2.sqlite",
                 kind="explicit-base",
                 source="--base-dir/--home-dir",
             )
@@ -550,7 +559,7 @@ def discover_candidates(
     candidates: list[Candidate] = []
     seen: set[Path] = set()
 
-    def add(path: Path, kind: str, source: str) -> None:
+    def add(path: Path, kind: str, source: str, searchable: bool = True) -> None:
         resolved = path.expanduser()
         try:
             key = resolved.resolve() if resolved.exists() else resolved
@@ -559,18 +568,26 @@ def discover_candidates(
         if key in seen:
             return
         seen.add(key)
-        candidates.append(Candidate(path=resolved, kind=kind, source=source))
+        candidates.append(Candidate(path=resolved, kind=kind, source=source, searchable=searchable))
+
+    def add_directory(directory: Path, kind: str, source: str) -> None:
+        live = directory / "statev2.sqlite"
+        legacy = directory / "state.sqlite"
+        if live.is_file() or not legacy.is_file():
+            add(live, kind, source)
+        if legacy.is_file():
+            add(legacy, kind, source, searchable=not live.is_file())
 
     worktree = is_linked_worktree(cwd)
     if worktree is not None:
-        add(worktree / ".t3" / "userdata" / "state.sqlite", "worktree", f"linked worktree {worktree}")
+        add_directory(worktree / ".t3" / "userdata", "worktree", f"linked worktree {worktree}")
 
     t3_home = env.get("T3CODE_HOME", "").strip()
     if t3_home:
-        add(expand_path(t3_home, cwd=cwd) / "userdata" / "state.sqlite", "env", "T3CODE_HOME")
+        add_directory(expand_path(t3_home, cwd=cwd) / "userdata", "env", "T3CODE_HOME")
 
-    add(home / ".t3" / "userdata" / "state.sqlite", "production", "~/.t3/userdata")
-    add(home / ".t3" / "dev" / "state.sqlite", "development", "~/.t3/dev")
+    add_directory(home / ".t3" / "userdata", "production", "~/.t3/userdata")
+    add_directory(home / ".t3" / "dev", "development", "~/.t3/dev")
     return candidates
 
 
@@ -586,6 +603,8 @@ def candidate_metadata(candidate: Candidate) -> dict[str, Any]:
         "environment_id": environment_id,
         "host": candidate.host,
         "provenance": candidate.provenance,
+        "searchable": candidate.searchable,
+        "role": "live" if path.name == "statev2.sqlite" else "legacy" if candidate.searchable else "legacy/stale (superseded)",
     }
     if exists:
         stat = path.stat()
@@ -675,6 +694,15 @@ def inspect_schema(conn: sqlite3.Connection, path: Path) -> DatabaseSchema:
 
 
 def require_projection_schema(schema: DatabaseSchema) -> None:
+    if schema.has_table("orchestration_v2_projection_threads"):
+        for table, columns in (
+            ("orchestration_v2_projection_threads", ("thread_id", "project_id", "title", "payload_json")),
+            ("projection_projects", ("project_id", "title")),
+        ):
+            absent = [column for column in columns if not schema.has_column(table, column)]
+            if absent:
+                raise SearchError(f"{schema.path} table {table} is missing required column(s): {', '.join(absent)}.")
+        return
     if schema.missing_required:
         present = ", ".join(sorted(schema.tables)) or "(none)"
         missing = ", ".join(schema.missing_required)
@@ -1287,6 +1315,214 @@ def search_messages(
     return matches
 
 
+def v2_select(schema: DatabaseSchema) -> str:
+    instance = "s.provider_instance_id" if schema.has_column('orchestration_v2_projection_provider_threads', 'provider_instance_id') else "NULL"
+    return f"""
+        t.thread_id, t.project_id, t.title, t.created_at, t.updated_at,
+        t.archived_at, t.deleted_at,
+        json_extract(t.payload_json, '$.branch') AS branch,
+        json_extract(t.payload_json, '$.worktreePath') AS worktree_path,
+        p.title AS project_title, p.workspace_root, p.deleted_at AS project_deleted_at,
+        s.provider AS provider_name, s.provider_thread_id, s.provider_session_id,
+        {instance} AS provider_instance_id
+    """
+
+
+def v2_from(schema: DatabaseSchema, *, all_providers: bool = False) -> str:
+    if not schema.has_table('orchestration_v2_projection_provider_threads'):
+        return """
+            FROM orchestration_v2_projection_threads AS t
+            LEFT JOIN projection_projects AS p ON p.project_id = t.project_id
+            LEFT JOIN (SELECT NULL AS provider, NULL AS provider_thread_id,
+                              NULL AS provider_session_id, NULL AS status, NULL AS updated_at) AS s ON 0
+        """
+    # Metadata/detail use the active provider, never an arbitrary historical session.
+    provider_join = "s.thread_id = t.thread_id" if all_providers else """
+        s.provider_thread_id = COALESCE(t.active_provider_thread_id, (
+            SELECT provider_thread_id FROM orchestration_v2_projection_provider_threads
+            WHERE thread_id = t.thread_id ORDER BY updated_at DESC, provider_thread_id LIMIT 1
+        )) AND s.thread_id = t.thread_id
+    """
+    return f"""
+        FROM orchestration_v2_projection_threads AS t
+        LEFT JOIN projection_projects AS p ON p.project_id = t.project_id
+        LEFT JOIN orchestration_v2_projection_provider_threads AS s ON {provider_join}
+    """
+
+
+def v2_warnings(schema: DatabaseSchema) -> list[str]:
+    return [f"{schema.path}: {table} unavailable; {limitation}." for table, limitation in (
+        ('orchestration_v2_projection_provider_threads', 'provider lookup/status is incomplete'),
+        ('orchestration_v2_projection_messages', 'message lookup/activity is unavailable'),
+    ) if not schema.has_table(table)]
+
+
+def v2_filters(*, active_only: bool, include_deleted: bool, project: str | None,
+               since: str | None, until: str | None, thread_id: str | None) -> tuple[str, list[Any]]:
+    clauses, params = [], []
+    if not include_deleted:
+        clauses.append("t.deleted_at IS NULL")
+    if active_only:
+        clauses.extend(["t.archived_at IS NULL", "p.deleted_at IS NULL"])
+    if project:
+        clauses.append(f"(p.title LIKE ? ESCAPE '{LIKE_ESCAPE}' OR p.workspace_root LIKE ? ESCAPE '{LIKE_ESCAPE}')")
+        params.extend([like_contains(project)] * 2)
+    for value, expression in ((since, "t.updated_at >= ?"), (until, "t.updated_at <= ?"),
+                              (thread_id, "t.thread_id = ?")):
+        if value:
+            clauses.append(expression)
+            params.append(value)
+    return (" AND " + " AND ".join(clauses) if clauses else ""), params
+
+
+def parse_pr(value: str) -> tuple[int, str | None, str | None]:
+    if value.isdigit() and int(value) > 0:
+        return int(value), None, None
+    parsed = urlparse(value)
+    match = re.fullmatch(r"/([^/]+/[^/]+)/pull/([1-9][0-9]*)/?", parsed.path)
+    if parsed.scheme in {"http", "https"} and parsed.hostname and match and not parsed.username and not parsed.password:
+        return int(match[2]), parsed.hostname, match[1]
+    raise UsageError("--pr must be a positive PR number or an HTTP(S) owner/repository/pull/number URL.")
+
+
+def search_pull_requests(conn: sqlite3.Connection, schema: DatabaseSchema, candidate: Candidate,
+                         pr: str, *, limit: int, **filters: Any) -> tuple[list[Match], list[str]]:
+    v2 = schema.has_table("orchestration_v2_projection_threads")
+    if not v2 and not schema.has_table("projection_thread_pull_requests"):
+        return [], [f"{candidate.path}: PR links unavailable; check the PR body's attribution thread: line."]
+    number, host, repository = parse_pr(pr)
+    number_expr = "json_extract(pr.value, '$.number')" if v2 else "pr.number"
+    host_expr = "json_extract(pr.value, '$.host')" if v2 else "pr.host"
+    repository_expr = "json_extract(pr.value, '$.repository')" if v2 else "pr.repository"
+    url_expr = "json_extract(pr.value, '$.url')" if v2 else "pr.url"
+    predicate = f"{number_expr} = ?"
+    params: list[Any] = [number]
+    if host:
+        predicate += f" AND {host_expr} = ? AND {repository_expr} = ?"
+        params.extend([host, repository])
+    if v2:
+        select, from_sql = v2_select(schema), v2_from(schema)
+        where, filter_params = v2_filters(**filters)
+        join = "JOIN json_each(t.payload_json, '$.pullRequests') AS pr"
+        order = "t.updated_at DESC, t.thread_id"
+    else:
+        select, from_sql = thread_select(schema), thread_from(schema)
+        pieces = [thread_status_filters(schema, active_only=filters['active_only'], include_deleted=filters['include_deleted']),
+                  project_filter_sql(schema, filters['project']),
+                  recency_filter_sql(schema, filters['since'], filters['until']),
+                  thread_id_filter_sql(filters['thread_id'])]
+        where = "".join(piece[0] for piece in pieces)
+        filter_params = [param for piece in pieces for param in piece[1]]
+        thread_expr = "projection_threads.thread_id"
+        join = f"JOIN projection_thread_pull_requests AS pr ON pr.thread_id = {thread_expr}"
+        order = "projection_threads.updated_at DESC, projection_threads.thread_id" if schema.has_column('projection_threads', 'updated_at') else thread_expr
+    rows = conn.execute(f"""SELECT {select}, {url_expr} AS pr_url {from_sql} {join}
+        WHERE {predicate} {where} ORDER BY {order} LIMIT ?""",
+        [*params, *filter_params, limit])
+    matches = [row_to_match(row, source="pr", snippet=row['pr_url'], message_created_at=None,
+                            database=candidate, rank=0) for row in rows]
+    warnings = v2_warnings(schema) if v2 else []
+    if not matches:
+        warnings.append("No stored PR link found; check the PR body's attribution thread: line.")
+    return matches, warnings
+
+
+def search_v2(conn: sqlite3.Connection, schema: DatabaseSchema, candidate: Candidate,
+              query: str, *, limit: int, pr: str | None = None, **filters: Any) -> tuple[list[Match], list[str]]:
+    if pr:
+        return search_pull_requests(conn, schema, candidate, pr, limit=limit, **filters)
+    where, params = v2_filters(**filters)
+    matches: list[Match] = []
+    warnings = v2_warnings(schema)
+    metadata = {
+        "thread_id": ["t.thread_id"], "title": ["t.title"],
+        "project": ["p.title", "p.workspace_root"],
+        "branch": ["json_extract(t.payload_json, '$.branch')"],
+        "provider": [f"s.{column}" for column in SESSION_COLUMNS[1:]
+                     if schema.has_column('orchestration_v2_projection_provider_threads', column)],
+    }
+    # V2 calls the provider field `provider`, not the legacy `provider_name`.
+    if schema.has_table('orchestration_v2_projection_provider_threads'):
+        metadata['provider'].append('s.provider')
+        if schema.has_column('orchestration_v2_projection_provider_threads', 'payload_json'):
+            metadata['provider'].append("json_extract(s.payload_json, '$.nativeThreadRef.nativeId')")
+    else:
+        del metadata['provider']
+    for source, expressions in metadata.items():
+        predicate = " OR ".join(f"{expr} LIKE ? ESCAPE '{LIKE_ESCAPE}'" for expr in expressions)
+        rows = conn.execute(f"""SELECT {v2_select(schema)} {v2_from(schema, all_providers=source == 'provider')}
+            WHERE ({predicate}) {where} ORDER BY t.updated_at DESC, t.thread_id LIMIT ?""",
+            [*[like_contains(query)] * len(expressions), *params, limit])
+        for row in rows:
+            snippet = row['title'] if source == 'title' else None
+            matches.append(row_to_match(row, source=source, snippet=snippet, message_created_at=None,
+                                        database=candidate, rank=RANK[source]))
+    if len(query) < 3 or not schema.has_table('orchestration_v2_projection_messages'):
+        return matches, warnings
+    fts = conn.execute("SELECT sql FROM sqlite_schema WHERE name = ? AND type = 'table'",
+                       ('orchestration_v2_message_search',)).fetchone()
+    if not fts or not re.search(r"USING\s+fts5\s*\(", fts[0], re.IGNORECASE):
+        warnings.append(f"{candidate.path}: v2 FTS5 message index unavailable; searched metadata only (no message scan).")
+        return matches, warnings
+    # This is a contentless trigram index. Its rowids refer to message rowids;
+    # retrieve text from the payload only after the MATCH index has found rows.
+    # Quote the whole phrase so FTS operators and punctuation stay literal.
+    phrase = query.replace('’', "'").replace('‘', "'")
+    phrase = '"' + phrase.replace('"', '""') + '"'
+    rows = conn.execute(f"""
+        WITH ranked AS (
+            SELECT {v2_select(schema)}, m.role AS match_source,
+                   json_extract(m.payload_json, '$.text') AS match_text,
+                   m.created_at AS message_created_at,
+                   ROW_NUMBER() OVER (PARTITION BY t.thread_id ORDER BY
+                       CASE m.role WHEN 'user' THEN 0 ELSE 1 END, m.created_at DESC, m.message_id) AS n
+            {v2_from(schema)}
+            JOIN orchestration_v2_projection_messages AS m ON m.thread_id = t.thread_id
+            WHERE m.rowid IN (SELECT rowid FROM orchestration_v2_message_search
+                              WHERE orchestration_v2_message_search MATCH ?)
+              AND m.streaming = 0 AND m.role IN ('user', 'assistant') {where}
+        )
+        SELECT * FROM ranked WHERE n = 1
+        ORDER BY CASE match_source WHEN 'user' THEN 0 ELSE 1 END, updated_at DESC, thread_id LIMIT ?
+    """, [phrase, *params, limit])
+    for row in rows:
+        source = row['match_source']
+        matches.append(row_to_match(row, source=source, snippet=build_snippet(row['match_text'], query),
+                                    message_created_at=row['message_created_at'], database=candidate,
+                                    rank=(UI_RANK if filters['active_only'] else RANK)[source]))
+    return matches, warnings
+
+
+def show_thread_v2(conn: sqlite3.Connection, schema: DatabaseSchema, candidate: Candidate,
+                   thread_id: str, *, include_deleted: bool) -> tuple[ThreadDetail | None, list[str]]:
+    where = "" if include_deleted else " AND t.deleted_at IS NULL"
+    row = conn.execute(f"SELECT {v2_select(schema)} {v2_from(schema)} WHERE t.thread_id = ? {where}",
+                       (thread_id,)).fetchone()
+    if row is None:
+        return None, []
+    warnings = v2_warnings(schema)
+    if not schema.has_table('orchestration_v2_projection_messages'):
+        match = row_to_match(row, source="thread_id", snippet=None, message_created_at=None, database=candidate, rank=0)
+        fields = asdict(match)
+        for key in ('source', 'sources', 'snippet', 'message_created_at', 'rank'):
+            del fields[key]
+        return ThreadDetail(**fields, message_counts={}, first_user_snippet=None, last_assistant_snippet=None), warnings
+    counts = dict(conn.execute("""SELECT role, COUNT(*) FROM orchestration_v2_projection_messages
+                                 WHERE thread_id = ? GROUP BY role""", (thread_id,)))
+    snippets = []
+    for role, direction in (("user", "ASC"), ("assistant", "DESC")):
+        message = conn.execute(f"""SELECT json_extract(payload_json, '$.text')
+            FROM orchestration_v2_projection_messages WHERE thread_id = ? AND role = ? AND streaming = 0
+            ORDER BY created_at {direction}, message_id LIMIT 1""", (thread_id, role)).fetchone()
+        snippets.append(build_snippet(message[0], None) if message else None)
+    match = row_to_match(row, source="thread_id", snippet=None, message_created_at=None, database=candidate, rank=0)
+    fields = asdict(match)
+    for key in ('source', 'sources', 'snippet', 'message_created_at', 'rank'):
+        del fields[key]
+    return ThreadDetail(**fields, message_counts=counts, first_user_snippet=snippets[0],
+                        last_assistant_snippet=snippets[1]), warnings
+
+
 def search_database(
     candidate: Candidate,
     query: str,
@@ -1298,12 +1534,21 @@ def search_database(
     until: str | None,
     thread_id: str | None,
     limit: int,
+    pr: str | None = None,
 ) -> tuple[list[Match], list[str]]:
     warnings: list[str] = []
     conn = connect_readonly(candidate.path)
     try:
         schema = inspect_schema(conn, candidate.path)
         require_projection_schema(schema)
+        if schema.has_table("orchestration_v2_projection_threads"):
+            return search_v2(conn, schema, candidate, query, active_only=active_only,
+                             include_deleted=include_deleted, project=project, since=since,
+                             until=until, thread_id=thread_id, limit=limit, pr=pr)
+        if pr:
+            return search_pull_requests(conn, schema, candidate, pr, active_only=active_only,
+                                        include_deleted=include_deleted, project=project,
+                                        since=since, until=until, thread_id=thread_id, limit=limit)
         if schema.missing_optional:
             warnings.append(
                 f"{candidate.path}: optional table(s) missing: {', '.join(schema.missing_optional)}."
@@ -1382,6 +1627,8 @@ def show_thread(
     try:
         schema = inspect_schema(conn, candidate.path)
         require_projection_schema(schema)
+        if schema.has_table("orchestration_v2_projection_threads"):
+            return show_thread_v2(conn, schema, candidate, thread_id, include_deleted=include_deleted)
         status_sql, status_params = thread_status_filters(
             schema, active_only=False, include_deleted=include_deleted
         )
@@ -1566,7 +1813,7 @@ def format_text_report(report: SearchReport) -> str:
             extra = f"  size={database.get('size_bytes')} mtime={database.get('mtime')}"
         env = f" env={database['environment_id']}" if database.get("environment_id") else ""
         lines.append(
-            f"  - [{database['kind']}] {database['path']} ({marker}, via {database['source']}){env}{extra}"
+            f"  - [{database['kind']}, {database.get('role', 'unknown')}] {database['path']} ({marker}, via {database['source']}){env}{extra}"
         )
     if report.warnings:
         lines.append("warnings:")
@@ -1673,6 +1920,7 @@ def bind_candidate(candidate: Candidate) -> Candidate:
         environment_id=env_id,
         host=candidate.host,
         provenance=candidate.provenance,
+        searchable=candidate.searchable,
     )
 
 
@@ -1743,21 +1991,32 @@ def run_search(
     remotes: list[RemoteEnvironment] | None = None,
     ssh_exec: Callable[[list[str], bytes], Any] | None = None,
     script_path: Path | None = None,
+    pr: str | None = None,
 ) -> SearchReport:
     if active_only and include_deleted:
         raise UsageError("--active-only already excludes deleted threads; do not combine it with --include-deleted.")
     if limit < 1 or limit > MAX_LIMIT:
         raise UsageError(f"--limit must be between 1 and {MAX_LIMIT}.")
+    if pr:
+        parse_pr(pr)
+        if query or thread_id or remote_json or remotes or endpoint:
+            raise UsageError("Use --pr without a query, --thread, or remote RPC results; --ssh is supported.")
 
-    query_ref = parse_thread_ref(query) if query else None
-    thread_ref = parse_thread_ref(thread_id)
+    # A positional UUID can be an app thread ID or a provider's native ID.
+    # Keep it as a search across both; --thread is the unambiguous exact lookup.
+    query_ref = parse_thread_ref(query) if query and not UUID_RE.fullmatch(query.strip()) else None
+    thread_ref = parse_thread_ref(thread_id, explicit=True)
+    if thread_id is not None and thread_ref is None:
+        raise UsageError("--thread must be a non-empty thread ID, environment/thread ID, or T3 URL.")
     if thread_ref is None and query_ref is not None and query is not None and query.strip() == query_ref.raw:
         thread_ref = query_ref
     env_filter = environment_id
     host_from_url = None
     if thread_ref is not None:
-        if thread_id is None and thread_ref.thread_id:
+        if thread_ref.thread_id:
             thread_id = thread_ref.thread_id
+        if environment_id and thread_ref.environment_id and environment_id != thread_ref.environment_id:
+            raise UsageError("--environment does not match the environment in --thread.")
         if env_filter is None:
             env_filter = thread_ref.environment_id
         host_from_url = thread_ref.host
@@ -1812,7 +2071,7 @@ def run_search(
             remote_queried=bool(loaded_remotes),
         )
 
-    existing = [candidate for candidate in candidates if candidate.path.is_file()]
+    existing = [candidate for candidate in candidates if candidate.path.is_file() and candidate.searchable]
     if env_filter:
         searchable = [candidate for candidate in existing if candidate.environment_id == env_filter]
         skipped = [candidate for candidate in existing if candidate.environment_id != env_filter]
@@ -1837,16 +2096,16 @@ def run_search(
         if db or base_dir:
             target = candidates[0].path if candidates else db or base_dir
             raise SearchError(
-                f"Database does not exist at {str(target)!r}. Pass a real state.sqlite or T3 base dir."
+                f"Database does not exist at {str(target)!r}. Pass a real SQLite file or T3 base dir."
             )
         considered = "\n".join(f"  - {item['kind']}: {item['path']}" for item in databases) or "  (none)"
         raise SearchError(
-            "No T3 state.sqlite found. Considered:\n"
+            "No T3 SQLite database found. Considered:\n"
             f"{considered}\n"
             "Pass --db PATH or --base-dir PATH. This tool does not recursively scan the home directory."
         )
 
-    lookup_only = bool(thread_id and not query)
+    lookup_only = bool(thread_id and not query and not pr)
     mode = "thread" if lookup_only else ("ui" if active_only else "recovery")
     results: list[dict[str, Any]] = []
     matches: list[Match] = []
@@ -1879,7 +2138,7 @@ def run_search(
                 continue
             found, db_warnings = search_database(
                 candidate,
-                query,
+                query or "",
                 active_only=active_only,
                 include_deleted=include_deleted,
                 project=project,
@@ -1887,6 +2146,7 @@ def run_search(
                 until=until_value,
                 thread_id=thread_id,
                 limit=limit,
+                pr=pr,
             )
         except SearchError as error:
             db_meta["error"] = str(error)
@@ -1965,6 +2225,8 @@ def run_search(
 
     if ssh:
         remote_argv = ["--json"]
+        if pr:
+            remote_argv.extend(["--pr", pr])
         if lookup_only:
             remote_argv.extend(["--thread", thread_id or ""])
         elif query:
@@ -2031,7 +2293,7 @@ def run_search(
     results = results[:limit]
     if query is not None and len(query) < 3:
         warnings.append(
-            "Short queries become broad %term% LIKE scans and may be slower on large databases. Indexes are not added."
+            "Queries shorter than three characters search metadata only on v2; trigram message search requires at least three characters. Legacy message search uses LIKE."
         )
 
     searched_any = any(item.get("searched") for item in databases) or remote_queried
@@ -2050,7 +2312,7 @@ def run_search(
             warnings.append(NOT_QUERIED_REMOTE_MESSAGE)
             warnings.append(REMOTE_REQUEST_HINT)
 
-    if not lookup_only and query is None and not thread_id:
+    if not lookup_only and query is None and not thread_id and not pr:
         raise UsageError("Provide a search query, or use --list-dbs / --thread.")
 
     return SearchReport(
@@ -2070,21 +2332,22 @@ def run_search(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="t3-thread-search",
-        description="Read-only search of T3 Code projection threads in state.sqlite.",
+        description="Read-only search of T3 Code projection threads in statev2.sqlite (legacy supported).",
         epilog=(
             "Opens SQLite with mode=ro and PRAGMA query_only=ON. Never copies, vacuums, "
             "indexes, or starts a T3 server against the database. Default recovery search "
-            "includes archived non-deleted threads. --active-only reproduces T3 command-palette "
-            "message search (no archived/deleted, user + canonical final assistant only)."
+            "includes archived non-deleted threads. --active-only excludes archived/deleted threads "
+            "and deleted projects. V2 message search uses T3's FTS5 index."
         ),
     )
     parser.add_argument("query", nargs="?", help="Text to search in titles, messages, projects, or provider IDs.")
-    parser.add_argument("--db", help="Path to state.sqlite, a userdata directory, or a T3 base directory.")
+    parser.add_argument("--pr", help="Find threads linked to a PR number or full pull request URL.")
+    parser.add_argument("--db", help="Exact SQLite file, userdata directory, or T3 base directory (prefers statev2.sqlite).")
     parser.add_argument(
         "--base-dir",
         "--home-dir",
         dest="base_dir",
-        help="T3 base/home directory. Uses <base-dir>/userdata/state.sqlite (explicit-home rule).",
+        help="T3 base/home directory. Prefers <base-dir>/userdata/statev2.sqlite (legacy fallback).",
     )
     parser.add_argument("--project", help="Restrict to project title or workspace path (LIKE, parameterized).")
     parser.add_argument("--since", help="Only threads updated at/after this time (ISO date/time or 7d/24h/30m).")
@@ -2095,7 +2358,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--active-only",
         action="store_true",
-        help="UI/command-palette semantics: exclude archived and deleted; canonical final assistant only.",
+        help="Exclude archived/deleted threads and deleted projects. V2 uses indexed non-streaming messages.",
     )
     parser.add_argument(
         "--include-deleted",
@@ -2123,7 +2386,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ssh-base-dir",
-        help="Remote T3 base/home directory for --ssh (default ~/.t3 → userdata/state.sqlite).",
+        help="Remote T3 base/home directory for --ssh (default ~/.t3 → userdata/statev2.sqlite).",
     )
     parser.add_argument(
         "--remote-json",
@@ -2160,6 +2423,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ssh=args.ssh,
             ssh_base_dir=args.ssh_base_dir,
             remote_json=args.remote_json,
+            pr=args.pr,
         )
     except SearchError as error:
         if args.json:

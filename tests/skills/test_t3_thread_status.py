@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import io
+import json
 import sqlite3
 import sys
 import tempfile
@@ -233,6 +234,140 @@ class StatusTests(unittest.TestCase):
 
         result = self.inspect(now="2026-08-29T00:31:00Z")
         self.assertNotEqual(result.state, "awaiting-input")
+
+
+
+
+class V2StatusTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from .t3_v2_fixture import fixture, THREAD, ENVIRONMENT
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / '.t3/userdata/statev2.sqlite'
+        fixture(self.db)
+        self.thread = THREAD
+        self.environment = ENVIRONMENT
+        self.candidate = status.search.Candidate(self.db, 'test', 'test', environment_id=ENVIRONMENT)
+        self.now = datetime(2026, 10, 25, 13, 40, 40, tzinfo=timezone.utc)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def inspect(self):
+        return status.inspect_thread(self.candidate, self.thread, timedelta(minutes=5), self.now)
+
+    def execute(self, sql, params=()):
+        conn = sqlite3.connect(self.db)
+        conn.execute(sql, params)
+        conn.commit()
+        conn.close()
+
+    def test_terminal_and_idle_states(self) -> None:
+        result = self.inspect()
+        self.assertEqual(result.state, 'completed')
+        self.assertEqual(result.provider, 'claudeAgent')
+        self.assertEqual(result.project, 'home-lab')
+        self.assertEqual(result.turn_id, 'run-1')
+        self.assertNotIn('do-not-leak', result.last_activity_summary or '')
+        for run, state in [('failed', 'error'), ('cancelled', 'interrupted'), ('interrupted', 'interrupted'),
+                           ('rolled_back', 'interrupted'), ('queued', 'queued'), ('preparing', 'queued'), ('starting', 'queued')]:
+            self.execute('UPDATE orchestration_v2_projection_runs SET status=?', (run,))
+            self.assertEqual(self.inspect().state, state)
+        self.execute('DELETE FROM orchestration_v2_projection_runs')
+        self.assertEqual(self.inspect().state, 'idle/ready')
+        self.execute("UPDATE orchestration_v2_projection_provider_threads SET status='not_loaded'")
+        self.assertEqual(self.inspect().state, 'idle/stopped')
+
+    def test_active_and_stale_states(self) -> None:
+        self.execute("UPDATE orchestration_v2_projection_runs SET status='running', completed_at=NULL")
+        self.assertEqual(self.inspect().state, 'running/recent')
+        self.now += timedelta(minutes=10)
+        result = self.inspect()
+        self.assertEqual(result.state, 'stale-suspect')
+        self.assertIn('does not prove', result.reason)
+        self.execute("UPDATE orchestration_v2_projection_turn_items SET updated_at='2026-10-25T13:50:39Z'")
+        self.assertEqual(self.inspect().state, 'running/recent')
+        self.execute("UPDATE orchestration_v2_projection_turn_items SET updated_at='2026-10-25T13:40:31Z'")
+        self.execute("UPDATE orchestration_v2_projection_messages SET updated_at='2026-10-25T13:50:39Z'")
+        self.assertEqual(self.inspect().last_activity_kind, 'message.updated')
+
+    def test_requests_are_scoped_to_current_run(self) -> None:
+        self.execute("""INSERT INTO orchestration_v2_projection_runtime_requests
+            VALUES ('request', ?, 'node-1', 'command', 'pending', '2026-10-25T13:40:31Z', NULL, '{}')""", (self.thread,))
+        self.assertEqual(self.inspect().state, 'completed')
+        self.execute("UPDATE orchestration_v2_projection_runs SET status='running'")
+        self.assertEqual(self.inspect().state, 'awaiting-approval')
+        self.execute("UPDATE orchestration_v2_projection_runtime_requests SET kind='user_input'")
+        self.assertEqual(self.inspect().state, 'awaiting-input')
+        self.execute("UPDATE orchestration_v2_projection_nodes SET run_id='older-run'")
+        self.assertEqual(self.inspect().state, 'running/recent')
+        self.execute("UPDATE orchestration_v2_projection_nodes SET run_id='run-1'")
+        self.execute("UPDATE orchestration_v2_projection_runtime_requests SET status='resolved'")
+        self.assertEqual(self.inspect().state, 'running/recent')
+
+    def test_active_run_precedes_terminal_run_and_historical_activity(self) -> None:
+        self.execute("""INSERT INTO orchestration_v2_projection_runs
+            VALUES ('run-2', ?, 2, 'claudeAgent', ?, 'running', '2026-10-25T13:40:32Z', NULL, '{}')""",
+            (self.thread, 'provider-' + self.thread))
+        result = self.inspect()
+        self.assertEqual(result.turn_id, 'run-2')
+        self.assertIn('weaker', ' '.join(result.warnings))
+        self.assertNotEqual(result.last_activity_kind, 'command_execution')
+
+    def test_missing_optional_tables_warn_and_do_not_invent_blockers(self) -> None:
+        self.execute('DROP TABLE orchestration_v2_projection_turn_items')
+        self.execute('DROP TABLE orchestration_v2_projection_runtime_requests')
+        result = self.inspect()
+        self.assertEqual(result.state, 'completed')
+        self.assertIn('blockers cannot be checked', ' '.join(result.warnings))
+        self.assertIn('liveness is weaker', ' '.join(result.warnings))
+
+    def test_scoped_cli_and_discovery_use_live_store(self) -> None:
+        from .test_t3_thread_search import full_fixture
+        full_fixture(self.db.with_name('state.sqlite'))
+        stdout = io.StringIO()
+        with patch.object(status.Path, 'home', return_value=Path(self.tmp.name)), redirect_stdout(stdout):
+            result = status.main(['--thread', self.environment + '/' + self.thread, '--json'])
+        self.assertEqual(result, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload['database'], str(self.db))
+        self.assertEqual(payload['state'], 'completed')
+
+    def test_unknown_pending_request_kind_is_an_approval(self) -> None:
+        self.execute("UPDATE orchestration_v2_projection_runs SET status='running'")
+        self.execute("""INSERT INTO orchestration_v2_projection_runtime_requests
+            VALUES ('request', ?, 'node-1', 'file_change', 'pending', '2026-10-25T13:40:31Z', NULL, '{}')""", (self.thread,))
+        result = self.inspect()
+        self.assertEqual(result.state, 'awaiting-approval')
+        self.assertEqual(result.pending_approvals, 1)
+
+    def test_missing_provider_and_messages_warn(self) -> None:
+        self.execute('DROP TABLE orchestration_v2_projection_provider_threads')
+        self.execute('DROP TABLE orchestration_v2_projection_messages')
+        result = self.inspect()
+        self.assertEqual(result.state, 'completed')
+        self.assertIsNone(result.provider)
+        self.assertIn('provider lookup/status is incomplete', ' '.join(result.warnings))
+        self.assertIn('message lookup/activity is unavailable', ' '.join(result.warnings))
+
+    def test_delegated_thread_id_forms(self) -> None:
+        from .t3_v2_fixture import DELEGATED_ID
+        from urllib.parse import quote
+        for ref in (DELEGATED_ID, self.environment + '/' + DELEGATED_ID,
+                    't3-thread://v1/' + DELEGATED_ID, 't3-thread://v1/' + quote(DELEGATED_ID, safe='')):
+            with self.subTest(ref=ref), redirect_stdout(io.StringIO()) as stdout:
+                result = status.main(['--db', str(self.db), '--thread', ref, '--json'])
+                self.assertEqual(result, 0)
+                payload = json.loads(stdout.getvalue())
+                self.assertEqual(payload['thread_id'], DELEGATED_ID)
+                self.assertEqual(payload['state'], 'unknown')
+
+    def test_running_run_takes_precedence_over_later_queued_run(self) -> None:
+        self.execute("UPDATE orchestration_v2_projection_runs SET status='running'")
+        self.execute("""INSERT INTO orchestration_v2_projection_runs
+            VALUES ('run-2', ?, 2, 'claudeAgent', ?, 'queued', '2026-10-25T13:40:32Z', NULL, '{}')""",
+            (self.thread, 'provider-' + self.thread))
+        self.assertEqual(self.inspect().turn_id, 'run-1')
+        self.assertEqual(self.inspect().state, 'running/recent')
 
 
 if __name__ == "__main__":

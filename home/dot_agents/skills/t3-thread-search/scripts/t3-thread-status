@@ -233,6 +233,112 @@ def activity_rows(conn: Any, schema: Any, thread_id: str, turn_id: str | None) -
     return overall, active, unresolved
 
 
+def inspect_v2(conn: Any, schema: Any, candidate: Any, thread_id: str,
+               stale_after: timedelta, now: datetime) -> ThreadStatus:
+    row = conn.execute(f"""SELECT {search.v2_select(schema)}, s.status AS session_status,
+        s.updated_at AS session_updated_at {search.v2_from(schema)} WHERE t.thread_id = ?""", (thread_id,)).fetchone()
+    if row is None:
+        raise StatusError(f"thread {thread_id} was not found in {candidate.path}")
+    warnings = search.v2_warnings(schema)
+    run = None
+    if schema.has_table('orchestration_v2_projection_runs'):
+        run = conn.execute("""SELECT run_id, status, requested_at, completed_at,
+            json_extract(payload_json, '$.startedAt') AS started_at
+            FROM orchestration_v2_projection_runs WHERE thread_id = ?
+            ORDER BY CASE WHEN status IN ('running','waiting') THEN 0
+                          WHEN status IN ('queued','preparing','starting') THEN 1
+                          ELSE 2 END, ordinal DESC LIMIT 1""", (thread_id,)).fetchone()
+    else:
+        warnings.append('v2 runs unavailable; execution state is incomplete')
+    run_id = row_value(run, 'run_id')
+    run_state = row_value(run, 'status')
+    provider_status = row_value(row, 'session_status')
+    activity = None
+    if schema.has_table('orchestration_v2_projection_turn_items') and run_id:
+        activity = conn.execute("""SELECT type AS kind, updated_at AS created_at,
+            json_extract(payload_json, '$.title') AS summary
+            FROM orchestration_v2_projection_turn_items WHERE thread_id = ? AND run_id = ?
+            ORDER BY updated_at DESC, ordinal DESC LIMIT 1""", (thread_id, run_id)).fetchone()
+    else:
+        warnings.append('v2 turn-item activity unavailable; liveness is weaker')
+    activity_at = row_value(activity, 'created_at')
+    activity_kind = row_value(activity, 'kind')
+    activity_summary = safe_summary(row_value(activity, 'summary'))
+    latest_user_message = None
+    if schema.has_table('orchestration_v2_projection_messages'):
+        user = conn.execute("""SELECT updated_at FROM orchestration_v2_projection_messages
+            WHERE thread_id = ? AND role = 'user' ORDER BY updated_at DESC LIMIT 1""", (thread_id,)).fetchone()
+        latest_user_message = user[0] if user else None
+        if run_id:
+            message = conn.execute("""SELECT updated_at FROM orchestration_v2_projection_messages
+                WHERE thread_id = ? AND run_id = ? ORDER BY updated_at DESC LIMIT 1""", (thread_id, run_id)).fetchone()
+            if message and (parse_timestamp(message[0]) or datetime.min.replace(tzinfo=timezone.utc)) > (
+                parse_timestamp(activity_at) or datetime.min.replace(tzinfo=timezone.utc)
+            ):
+                activity_at, activity_kind, activity_summary = message[0], 'message.updated', None
+    approvals = inputs = 0
+    requests_available = schema.has_table('orchestration_v2_projection_runtime_requests')
+    nodes_available = schema.has_table('orchestration_v2_projection_nodes')
+    if requests_available and nodes_available and run_id:
+        # Do not let an unresolved request from an older run override completion.
+        counts = dict(conn.execute("""SELECT r.kind, COUNT(*)
+            FROM orchestration_v2_projection_runtime_requests AS r
+            JOIN orchestration_v2_projection_nodes AS n ON n.node_id = r.node_id
+            WHERE r.thread_id = ? AND n.run_id = ? AND r.status = 'pending'
+            GROUP BY r.kind""", (thread_id, run_id)))
+        approvals = sum(count for kind, count in counts.items() if kind != 'user_input')
+        inputs = counts.get('user_input', 0)
+    elif not requests_available or not nodes_available:
+        warnings.append('v2 runtime requests/nodes unavailable; approval and input blockers cannot be checked')
+    if not activity_at:
+        activity_at = row_value(run, 'started_at') or row_value(run, 'requested_at') or row_value(row, 'session_updated_at')
+        warnings.append('no message/tool timestamp available; using run/provider time as weaker liveness evidence')
+    age = age_seconds(activity_at, now)
+    terminal = run_state in {'completed', 'failed', 'interrupted', 'cancelled', 'rolled_back'}
+    if approvals and not terminal:
+        state, reason = 'awaiting-approval', 'permission approval is pending for the active run'
+    elif inputs and not terminal:
+        state, reason = 'awaiting-input', 'user input is pending for the active run'
+    elif run_state == 'failed':
+        state, reason = 'error', 'latest run failed'
+    elif run_state == 'completed':
+        state, reason = 'completed', 'latest run completed'
+    elif run_state in {'interrupted', 'cancelled', 'rolled_back'}:
+        state, reason = 'interrupted', f'latest run is {run_state}'
+    elif run_state in {'queued', 'preparing', 'starting'}:
+        state, reason = 'queued', f'run is {run_state}'
+    elif run_state in {'running', 'waiting'} or provider_status == 'active':
+        state, reason = 'running/recent', 'active run has recent projection activity'
+        if age is None or age > stale_after.total_seconds():
+            state, reason = 'stale-suspect', 'no recent projection activity; this does not prove a hang'
+        if run_state == 'waiting':
+            warnings.append('run is waiting; no explicit approval/input blocker was found')
+    elif provider_status == 'idle':
+        state, reason = 'idle/ready', 'provider thread is idle'
+    elif provider_status == 'not_loaded':
+        state, reason = 'idle/stopped', 'provider thread is not loaded'
+    else:
+        state, reason = 'unknown', 'v2 projection has no recognized execution state'
+    if terminal and provider_status == 'active':
+        warnings.append('provider reports active while the latest run is terminal')
+    for field in ('archived_at', 'deleted_at'):
+        if row_value(row, field):
+            warnings.append(f'thread is {field.removesuffix("_at")}')
+    env_id = candidate.environment_id or search.read_environment_id(candidate.path)
+    return ThreadStatus(
+        thread_id=thread_id, scoped_id=search.scoped_identity(env_id, thread_id), environment_id=env_id,
+        database=str(candidate.path), database_kind=candidate.kind, provenance=candidate.provenance,
+        title=safe_summary(row['title'], 160) or '', project=safe_summary(row['project_title'], 120),
+        provider=safe_summary(row['provider_name'], 80), session_status=provider_status,
+        session_updated_at=row_value(row, 'session_updated_at'), turn_id=run_id, turn_state=run_state,
+        state=state, reason=reason, updated_at=row['updated_at'], latest_user_message_at=latest_user_message,
+        requested_at=row_value(run, 'requested_at'), started_at=row_value(run, 'started_at'),
+        completed_at=row_value(run, 'completed_at'), last_activity_at=activity_at, last_activity_kind=activity_kind,
+        last_activity_summary=activity_summary, activity_age_seconds=age, pending_approvals=approvals,
+        pending_user_input=inputs, last_error=None, warnings=warnings,
+    )
+
+
 def inspect_thread(candidate: Any, thread_id: str, stale_after: timedelta, now: datetime | None = None) -> ThreadStatus:
     now = now or datetime.now(timezone.utc)
     conn = search.connect_readonly(candidate.path)
@@ -240,6 +346,8 @@ def inspect_thread(candidate: Any, thread_id: str, stale_after: timedelta, now: 
     try:
         schema = search.inspect_schema(conn, candidate.path)
         search.require_projection_schema(schema)
+        if schema.has_table("orchestration_v2_projection_threads"):
+            return inspect_v2(conn, schema, candidate, thread_id, stale_after, now)
         if not schema.has_column("projection_threads", "thread_id"):
             raise StatusError(f"{candidate.path}: projection_threads has no thread_id")
         thread_fields = [
@@ -412,15 +520,16 @@ def inspect_thread(candidate: Any, thread_id: str, stale_after: timedelta, now: 
 
 
 def resolve_candidates(args: argparse.Namespace) -> tuple[list[Any], str]:
-    ref = search.parse_thread_ref(args.thread)
+    ref = search.parse_thread_ref(args.thread, explicit=True)
     if ref is None or ref.thread_id is None:
-        raise StatusError("--thread must be a thread UUID, environment/thread UUID, or T3 thread URL")
+        raise StatusError("--thread must be a non-empty thread ID, environment/thread ID, or T3 URL")
     if args.environment and ref.environment_id and args.environment != ref.environment_id:
         raise StatusError("--environment does not match the environment in --thread")
     env_id = args.environment or ref.environment_id
     cwd = Path(args.cwd).expanduser() if args.cwd else Path.cwd()
     home = Path.home()
     candidates = search.discover_candidates(cwd=cwd, home=home, env=dict(os.environ), db=args.db, base_dir=args.base_dir)
+    candidates = [c for c in candidates if c.searchable]
     if env_id:
         candidates = [c for c in candidates if (c.environment_id or search.read_environment_id(c.path)) == env_id]
     if not candidates:
@@ -464,10 +573,10 @@ def format_age(seconds: float | None) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Read-only T3 Code thread status")
-    parser.add_argument("--thread", required=True, help="thread UUID, environment/thread UUID, or T3 URL")
+    parser.add_argument("--thread", required=True, help="thread ID, environment/thread ID, or T3 URL")
     parser.add_argument("--environment", help="restrict to this environment ID")
-    parser.add_argument("--db", help="exact state.sqlite, userdata directory, or T3 base directory")
-    parser.add_argument("--base-dir", "--home-dir", dest="base_dir", help="T3 base directory containing userdata/state.sqlite")
+    parser.add_argument("--db", help="exact SQLite file, userdata directory, or T3 base directory (prefers statev2.sqlite)")
+    parser.add_argument("--base-dir", "--home-dir", dest="base_dir", help="T3 base directory containing userdata/statev2.sqlite (legacy fallback)")
     parser.add_argument("--cwd", help="working directory used for database discovery")
     parser.add_argument("--stale-after", default="5m", help="no-activity warning threshold (default: 5m)")
     parser.add_argument("--watch-for", help="finite monitoring duration, e.g. 10m (maximum 30m)")
@@ -491,7 +600,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 item = inspect_thread(candidate, thread_id, stale_after)
             except StatusError as error:
-                if args.db or args.environment:
+                if args.db or "was not found in" not in str(error):
                     raise
                 # A missing thread in one discovered DB is not a global miss.
                 continue
