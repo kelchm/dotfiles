@@ -1,4 +1,4 @@
-"""Shared read-only SQLite access, schema adapters, discovery, and identities."""
+"""Shared read-only SQLite access, discovery, and identities."""
 
 from __future__ import annotations
 
@@ -11,89 +11,24 @@ from typing import Any, Mapping
 from urllib.parse import parse_qs, unquote, urlparse
 
 BUSY_TIMEOUT_MS = 5000
-
-
-
-IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
-
-
-
 RESERVED_URL_SEGMENTS = {
-    "pair",
-    "connect",
-    "settings",
-    "login",
-    "auth",
-    "oauth",
-    "api",
-    "ws",
-    "health",
-    "ready",
-    ".",
-    "..",
+    "pair", "connect", "settings", "login", "auth", "oauth", "api", "ws",
+    "health", "ready", ".", "..",
 }
-
-
-
-REQUIRED_TABLES = ("projection_projects", "projection_threads")
-
-
-
-OPTIONAL_TABLES = (
-    "projection_thread_messages",
-    "projection_thread_sessions",
-    "projection_turns",
+REQUIRED_TABLES = (
+    "projection_projects",
+    "orchestration_v2_projection_threads",
+    "orchestration_v2_projection_provider_threads",
+    "orchestration_v2_projection_messages",
+    "orchestration_v2_projection_runs",
+    "orchestration_v2_projection_turn_items",
+    "orchestration_v2_projection_runtime_requests",
+    "orchestration_v2_projection_nodes",
+    "orchestration_v2_message_search",
 )
-
-
-
-THREAD_COLUMNS = (
-    "thread_id",
-    "project_id",
-    "title",
-    "created_at",
-    "updated_at",
-    "deleted_at",
-    "archived_at",
-    "branch",
-    "worktree_path",
-)
-
-
-
-PROJECT_COLUMNS = ("project_id", "title", "workspace_root", "deleted_at")
-
-
-
-MESSAGE_COLUMNS = (
-    "message_id",
-    "thread_id",
-    "role",
-    "text",
-    "is_streaming",
-    "created_at",
-)
-
-
-
-SESSION_COLUMNS = (
-    "thread_id",
-    "provider_name",
-    "provider_session_id",
-    "provider_thread_id",
-    "provider_instance_id",
-)
-
-
-
-TURN_COLUMNS = ("assistant_message_id",)
-
 
 
 class SearchError(Exception):
@@ -102,10 +37,8 @@ class SearchError(Exception):
     exit_code = 1
 
 
-
 class UsageError(SearchError):
     exit_code = 2
-
 
 
 @dataclass(frozen=True)
@@ -122,7 +55,6 @@ class Candidate:
         return self.path.expanduser()
 
 
-
 @dataclass(frozen=True)
 class ThreadRef:
     raw: str
@@ -132,60 +64,15 @@ class ThreadRef:
     host: str | None = None
 
 
-
-@dataclass
-class TableSchema:
-    name: str
-    columns: dict[str, str]
-
-    def has(self, column: str) -> bool:
-        return column in self.columns
-
-
-
-@dataclass
-class DatabaseSchema:
-    path: Path
-    tables: dict[str, TableSchema]
-    missing_required: list[str]
-    missing_optional: list[str]
-    missing_columns: dict[str, list[str]]
-
-    def table(self, name: str) -> TableSchema | None:
-        return self.tables.get(name)
-
-    def has_table(self, name: str) -> bool:
-        return name in self.tables
-
-    def has_column(self, table: str, column: str) -> bool:
-        schema = self.tables.get(table)
-        return schema is not None and schema.has(column)
-
-
-
-def ident(name: str) -> str:
-    if not IDENT_RE.fullmatch(name):
-        raise SearchError(f"Refusing to use invalid SQL identifier {name!r}.")
-    return name
-
-
-
-def quote_ident(name: str) -> str:
-    return '"' + ident(name).replace('"', '""') + '"'
-
-
-
 def scoped_identity(environment_id: str | None, thread_id: str | None) -> str | None:
     if not thread_id:
         return None
     return f"{environment_id or 'unknown'}/{thread_id}"
 
 
-
 def looks_like_thread_id(value: str) -> bool:
     raw = value.strip()
     return bool(UUID_RE.fullmatch(raw.removeprefix("mcp:")) or raw.startswith(("thread-", "thread:")))
-
 
 
 def _parse_thread_url(raw: str) -> ThreadRef | None:
@@ -226,7 +113,6 @@ def _parse_thread_url(raw: str) -> ThreadRef | None:
     )
 
 
-
 def parse_thread_ref(value: str | None, *, explicit: bool = False) -> ThreadRef | None:
     if value is None:
         return None
@@ -252,7 +138,6 @@ def parse_thread_ref(value: str | None, *, explicit: bool = False) -> ThreadRef 
     return None
 
 
-
 def read_environment_id(db_path: Path) -> str | None:
     path = db_path.parent / "environment-id"
     if not path.is_file():
@@ -264,13 +149,11 @@ def read_environment_id(db_path: Path) -> str | None:
     return raw or None
 
 
-
 def expand_path(value: str | Path, *, cwd: Path) -> Path:
     path = Path(value).expanduser()
     if not path.is_absolute():
         path = cwd / path
     return path
-
 
 
 def is_linked_worktree(cwd: Path) -> Path | None:
@@ -310,19 +193,17 @@ def is_linked_worktree(cwd: Path) -> Path | None:
         directory = parent
 
 
-
 def resolve_sqlite_candidate(path: Path) -> Path | None:
     if path.is_file():
         return path
     if not path.is_dir():
         return None
     for directory in (path / "userdata", path):
-        for name in ("statev2.sqlite", "state.sqlite"):
+        for name in ("statev2.sqlite",):
             candidate = directory / name
             if candidate.is_file():
                 return candidate
     return None
-
 
 
 def discover_candidates(
@@ -370,10 +251,9 @@ def discover_candidates(
     def add_directory(directory: Path, kind: str, source: str) -> None:
         live = directory / "statev2.sqlite"
         legacy = directory / "state.sqlite"
-        if live.is_file() or not legacy.is_file():
-            add(live, kind, source)
+        add(live, kind, source)
         if legacy.is_file():
-            add(legacy, kind, source, searchable=not live.is_file())
+            add(legacy, kind, source, searchable=False)
 
     worktree = is_linked_worktree(cwd)
     if worktree is not None:
@@ -386,7 +266,6 @@ def discover_candidates(
     add_directory(home / ".t3" / "userdata", "production", "~/.t3/userdata")
     add_directory(home / ".t3" / "dev", "development", "~/.t3/dev")
     return candidates
-
 
 
 def candidate_metadata(candidate: Candidate) -> dict[str, Any]:
@@ -402,7 +281,7 @@ def candidate_metadata(candidate: Candidate) -> dict[str, Any]:
         "host": candidate.host,
         "provenance": candidate.provenance,
         "searchable": candidate.searchable,
-        "role": "live" if path.name == "statev2.sqlite" else "legacy" if candidate.searchable else "legacy/stale (superseded)",
+        "role": "legacy/stale (unsupported)" if path.name == "state.sqlite" else "live",
     }
     if exists:
         stat = path.stat()
@@ -413,7 +292,6 @@ def candidate_metadata(candidate: Candidate) -> dict[str, Any]:
         info["wal"] = path.with_name(path.name + "-wal").is_file()
         info["shm"] = path.with_name(path.name + "-shm").is_file()
     return info
-
 
 
 def sqlite_uri(path: Path) -> str:
@@ -431,7 +309,6 @@ def sqlite_uri(path: Path) -> str:
     if not any(resolved.with_name(resolved.name + suffix).is_file() for suffix in ("-wal", "-journal")):
         uri += "&immutable=1"
     return uri
-
 
 
 def connect_readonly(path: Path) -> sqlite3.Connection:
@@ -453,102 +330,29 @@ def connect_readonly(path: Path) -> sqlite3.Connection:
     return conn
 
 
-
-def inspect_schema(conn: sqlite3.Connection, path: Path) -> DatabaseSchema:
-    tables: dict[str, TableSchema] = {}
-    for row in conn.execute(
-        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-    ):
-        name = row["name"]
-        ident(name)
-        columns: dict[str, str] = {}
-        for column in conn.execute(f"PRAGMA table_info({quote_ident(name)})"):
-            col_name = column["name"]
-            ident(col_name)
-            columns[col_name] = column["type"]
-        tables[name] = TableSchema(name=name, columns=columns)
-
-    missing_required = [name for name in REQUIRED_TABLES if name not in tables]
-    missing_optional = [name for name in OPTIONAL_TABLES if name not in tables]
-    missing_columns: dict[str, list[str]] = {}
-    expected = {
-        "projection_threads": THREAD_COLUMNS,
-        "projection_projects": PROJECT_COLUMNS,
-        "projection_thread_messages": MESSAGE_COLUMNS,
-        "projection_thread_sessions": SESSION_COLUMNS,
-        "projection_turns": TURN_COLUMNS,
-    }
-    for table_name, columns in expected.items():
-        table = tables.get(table_name)
-        if table is None:
-            continue
-        absent = [column for column in columns if not table.has(column)]
-        if absent:
-            missing_columns[table_name] = absent
-
-    return DatabaseSchema(
-        path=path,
-        tables=tables,
-        missing_required=missing_required,
-        missing_optional=missing_optional,
-        missing_columns=missing_columns,
-    )
-
-
-
-def require_projection_schema(schema: DatabaseSchema) -> None:
-    if schema.has_table("orchestration_v2_projection_threads"):
-        for table, columns in (
-            ("orchestration_v2_projection_threads", ("thread_id", "project_id", "title", "payload_json")),
-            ("projection_projects", ("project_id", "title")),
-        ):
-            absent = [column for column in columns if not schema.has_column(table, column)]
-            if absent:
-                raise SearchError(f"{schema.path} table {table} is missing required column(s): {', '.join(absent)}.")
-        return
-    if schema.missing_required:
-        present = ", ".join(sorted(schema.tables)) or "(none)"
-        missing = ", ".join(schema.missing_required)
+def require_projection_schema(conn: sqlite3.Connection, path: Path) -> None:
+    present = {row[0] for row in conn.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
+    missing = set(REQUIRED_TABLES) - present
+    if missing:
         raise SearchError(
-            f"{schema.path} is not a T3 projection database. Missing required table(s): {missing}. Present: {present}."
+            f"{path}: unsupported T3 schema; requires statev2.sqlite with the v2 projections. "
+            f"Missing table(s): {', '.join(sorted(missing))}. Legacy stores are no longer supported."
         )
-    threads = schema.table("projection_threads")
-    projects = schema.table("projection_projects")
-    assert threads is not None and projects is not None
-    for table, needed in (
-        (threads, ("thread_id", "project_id", "title")),
-        (projects, ("project_id", "title")),
-    ):
-        absent = [column for column in needed if not table.has(column)]
-        if absent:
-            raise SearchError(
-                f"{schema.path} table {table.name} is missing required column(s): {', '.join(absent)}."
-            )
 
 
-
-def v2_select(schema: DatabaseSchema) -> str:
-    instance = "s.provider_instance_id" if schema.has_column('orchestration_v2_projection_provider_threads', 'provider_instance_id') else "NULL"
-    return f"""
+def v2_select() -> str:
+    return """
         t.thread_id, t.project_id, t.title, t.created_at, t.updated_at,
         t.archived_at, t.deleted_at,
         json_extract(t.payload_json, '$.branch') AS branch,
         json_extract(t.payload_json, '$.worktreePath') AS worktree_path,
         p.title AS project_title, p.workspace_root, p.deleted_at AS project_deleted_at,
         s.provider AS provider_name, s.provider_thread_id, s.provider_session_id,
-        {instance} AS provider_instance_id
+        s.provider_instance_id
     """
 
 
-
-def v2_from(schema: DatabaseSchema, *, all_providers: bool = False) -> str:
-    if not schema.has_table('orchestration_v2_projection_provider_threads'):
-        return """
-            FROM orchestration_v2_projection_threads AS t
-            LEFT JOIN projection_projects AS p ON p.project_id = t.project_id
-            LEFT JOIN (SELECT NULL AS provider, NULL AS provider_thread_id,
-                              NULL AS provider_session_id, NULL AS status, NULL AS updated_at) AS s ON 0
-        """
+def v2_from(*, all_providers: bool = False) -> str:
     # Metadata/detail use the active provider, never an arbitrary historical session.
     provider_join = "s.thread_id = t.thread_id" if all_providers else """
         s.provider_thread_id = COALESCE(t.active_provider_thread_id, (
@@ -561,15 +365,6 @@ def v2_from(schema: DatabaseSchema, *, all_providers: bool = False) -> str:
         LEFT JOIN projection_projects AS p ON p.project_id = t.project_id
         LEFT JOIN orchestration_v2_projection_provider_threads AS s ON {provider_join}
     """
-
-
-
-def v2_warnings(schema: DatabaseSchema) -> list[str]:
-    return [f"{schema.path}: {table} unavailable; {limitation}." for table, limitation in (
-        ('orchestration_v2_projection_provider_threads', 'provider lookup/status is incomplete'),
-        ('orchestration_v2_projection_messages', 'message lookup/activity is unavailable'),
-    ) if not schema.has_table(table)]
-
 
 
 def bind_candidate(candidate: Candidate) -> Candidate:

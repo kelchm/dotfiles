@@ -73,6 +73,18 @@ class CliTests(unittest.TestCase):
             self.assertNotEqual(canonical.returncode, 0)
             self.assertEqual(canonical.stdout, legacy.stdout)
 
+    def test_removed_modes_are_rejected(self) -> None:
+        for command, flags in (
+            ('search', ['--remote-json', '/unused.json']),
+            ('search', ['--endpoint', 'https://example.invalid']),
+            ('status', ['--watch-for', '10m']),
+            ('status', ['--interval', '15s']),
+        ):
+            with self.subTest(command=command, flags=flags):
+                result = self.invoke('t3-thread', command, '--thread', THREAD, *flags)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('unrecognized arguments', result.stderr)
+
     def test_commands_do_not_create_bytecode_or_mutate_database(self) -> None:
         # Deploy only code into a fresh directory to catch imports creating pyc files.
         deployed = self.directory / 'scripts'

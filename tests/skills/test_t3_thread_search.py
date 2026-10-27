@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 ROOT = Path(__file__).resolve().parents[2] / "home/dot_agents/skills/t3-thread-search"
 sys.path.insert(0, str(ROOT / "scripts"))
 from t3_thread import search as tts, store
-
+from .t3_v2_fixture import fixture, THREAD, ENVIRONMENT
 
 
 def sha256(path: Path) -> str:
@@ -37,138 +37,9 @@ def write_db(path: Path, statements: list[str]) -> None:
         conn.close()
 
 
-FULL_SCHEMA = """
-CREATE TABLE projection_projects (
-  project_id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  workspace_root TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  deleted_at TEXT
-);
-CREATE TABLE projection_threads (
-  thread_id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  title TEXT NOT NULL,
-  branch TEXT,
-  worktree_path TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  deleted_at TEXT,
-  archived_at TEXT
-);
-CREATE TABLE projection_thread_messages (
-  message_id TEXT PRIMARY KEY,
-  thread_id TEXT NOT NULL,
-  turn_id TEXT,
-  role TEXT NOT NULL,
-  text TEXT NOT NULL,
-  is_streaming INTEGER NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE TABLE projection_thread_sessions (
-  thread_id TEXT PRIMARY KEY,
-  status TEXT NOT NULL,
-  provider_name TEXT,
-  provider_session_id TEXT,
-  provider_thread_id TEXT,
-  provider_instance_id TEXT,
-  updated_at TEXT NOT NULL
-);
-CREATE TABLE projection_turns (
-  row_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  thread_id TEXT NOT NULL,
-  turn_id TEXT,
-  assistant_message_id TEXT,
-  state TEXT NOT NULL,
-  requested_at TEXT NOT NULL,
-  checkpoint_files_json TEXT NOT NULL DEFAULT '[]'
-);
-"""
-
-LEGACY_SCHEMA = """
-CREATE TABLE projection_projects (
-  project_id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  workspace_root TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  deleted_at TEXT
-);
-CREATE TABLE projection_threads (
-  thread_id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  title TEXT NOT NULL,
-  branch TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  deleted_at TEXT
-);
-CREATE TABLE projection_thread_messages (
-  message_id TEXT PRIMARY KEY,
-  thread_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  text TEXT NOT NULL,
-  is_streaming INTEGER NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE projection_thread_sessions (
-  thread_id TEXT PRIMARY KEY,
-  status TEXT NOT NULL,
-  provider_name TEXT,
-  provider_session_id TEXT,
-  updated_at TEXT NOT NULL
-);
-"""
-
-SEED = """
-INSERT INTO projection_projects VALUES
-  ('proj-active', 'T3 Code', '/repo/t3code', '2026-01-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL),
-  ('proj-deleted', 'Old App', '/repo/old', '2026-01-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z');
-
-INSERT INTO projection_threads VALUES
-  ('thread-active', 'proj-active', 'Projection rebuild performance', 'feat/search', '/tmp/wt',
-   '2026-05-01T00:00:00.000Z', '2026-05-02T00:00:00.000Z', NULL, NULL),
-  ('thread-archived', 'proj-active', 'Archived relay notes', 'main', NULL,
-   '2026-04-01T00:00:00.000Z', '2026-04-02T00:00:00.000Z', NULL, '2026-04-03T00:00:00.000Z'),
-  ('thread-deleted', 'proj-active', 'Deleted secret thread', 'main', NULL,
-   '2026-03-01T00:00:00.000Z', '2026-03-02T00:00:00.000Z', '2026-03-03T00:00:00.000Z', NULL),
-  ('thread-percent-decoy', 'proj-active', 'Unrelated', 'main', NULL,
-   '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL, NULL),
-  ('thread-old-project', 'proj-deleted', 'Legacy workspace chat', 'main', NULL,
-   '2026-02-01T00:00:00.000Z', '2026-02-02T00:00:00.000Z', NULL, NULL);
-
-INSERT INTO projection_thread_messages VALUES
-  ('message-user', 'thread-active', 'turn-active', 'user',
-   'Please find this USER needle in an old prompt.', 0, '2026-05-01T00:00:12.000Z', '2026-05-01T00:00:12.000Z'),
-  ('message-percent', 'thread-active', NULL, 'user',
-   'Literal 100% fix in a prompt.', 0, '2026-05-01T00:00:11.000Z', '2026-05-01T00:00:11.000Z'),
-  ('message-percent-decoy', 'thread-percent-decoy', NULL, 'user',
-   'Literal 100x fix in a prompt.', 0, '2026-05-01T00:00:11.000Z', '2026-05-01T00:00:11.000Z'),
-  ('message-final', 'thread-active', 'turn-active', 'assistant',
-   'The canonical FINAL NEEDLE appears in this completed answer.', 0, '2026-05-01T00:00:13.000Z', '2026-05-01T00:00:13.000Z'),
-  ('message-interim', 'thread-active', 'turn-active', 'assistant',
-   'Interim needle must not be searchable in UI mode.', 0, '2026-05-01T00:00:14.000Z', '2026-05-01T00:00:14.000Z'),
-  ('message-system', 'thread-active', NULL, 'system',
-   'System needle must not be searchable.', 0, '2026-05-01T00:00:15.000Z', '2026-05-01T00:00:15.000Z'),
-  ('message-hidden', 'thread-archived', NULL, 'user',
-   'Hidden needle in archive.', 0, '2026-04-01T00:00:16.000Z', '2026-04-01T00:00:16.000Z'),
-  ('message-deleted', 'thread-deleted', NULL, 'user',
-   'Deleted needle should be opt-in.', 0, '2026-03-01T00:00:16.000Z', '2026-03-01T00:00:16.000Z'),
-  ('message-quote', 'thread-active', NULL, 'user',
-   'He said it''s a "quoted" _value_.', 0, '2026-05-01T00:00:10.000Z', '2026-05-01T00:00:10.000Z');
-
-INSERT INTO projection_turns (thread_id, turn_id, assistant_message_id, state, requested_at)
-VALUES ('thread-active', 'turn-active', 'message-final', 'completed', '2026-05-01T00:00:12.000Z');
-
-INSERT INTO projection_thread_sessions VALUES
-  ('thread-active', 'idle', 'claude', 'sess-123', 'prov-thread-xyz', 'claude-work', '2026-05-02T00:00:00.000Z');
-"""
-
-
-def full_fixture(path: Path) -> None:
-    write_db(path, [FULL_SCHEMA, SEED])
+def legacy_fixture(path: Path) -> None:
+    write_db(path, ["CREATE TABLE projection_threads (thread_id TEXT PRIMARY KEY, title TEXT);"
+                    "INSERT INTO projection_threads VALUES ('legacy-only', 'rebuild performance');"])
 
 
 def search(db: Path, query: str, **kwargs):
@@ -197,13 +68,13 @@ class DiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)
             nested = home / "deep" / "secret" / ".t3" / "userdata"
-            full_fixture(nested / "state.sqlite")
-            production = home / ".t3" / "userdata" / "state.sqlite"
-            full_fixture(production)
+            fixture(nested / "statev2.sqlite")
+            production = home / ".t3" / "userdata" / "statev2.sqlite"
+            fixture(production)
             candidates = store.discover_candidates(cwd=home, home=home, env={})
             paths = {candidate.path.resolve() for candidate in candidates if candidate.path.is_file()}
             self.assertIn(production.resolve(), paths)
-            self.assertNotIn((nested / "state.sqlite").resolve(), paths)
+            self.assertNotIn((nested / "statev2.sqlite").resolve(), paths)
 
     def test_linked_worktree_outRanks_ambient_env_as_a_listed_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -213,11 +84,11 @@ class DiscoveryTests(unittest.TestCase):
             gitdir.mkdir(parents=True)
             worktree.mkdir()
             (worktree / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
-            wt_db = worktree / ".t3" / "userdata" / "state.sqlite"
-            full_fixture(wt_db)
+            wt_db = worktree / ".t3" / "userdata" / "statev2.sqlite"
+            fixture(wt_db)
             env_base = root / "env-home"
-            env_db = env_base / "userdata" / "state.sqlite"
-            full_fixture(env_db)
+            env_db = env_base / "userdata" / "statev2.sqlite"
+            fixture(env_db)
             home = root / "home"
             home.mkdir()
             candidates = store.discover_candidates(
@@ -234,200 +105,18 @@ class DiscoveryTests(unittest.TestCase):
             repo = Path(raw)
             (repo / ".git").mkdir()
             (repo / ".t3" / "userdata").mkdir(parents=True)
-            full_fixture(repo / ".t3" / "userdata" / "state.sqlite")
+            fixture(repo / ".t3" / "userdata" / "statev2.sqlite")
             self.assertIsNone(store.is_linked_worktree(repo))
 
     def test_explicit_base_dir_uses_userdata_not_dev(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            userdata = base / "userdata" / "state.sqlite"
-            dev = base / "dev" / "state.sqlite"
-            full_fixture(userdata)
-            full_fixture(dev)
+            userdata = base / "userdata" / "statev2.sqlite"
+            dev = base / "dev" / "statev2.sqlite"
+            fixture(userdata)
+            fixture(dev)
             candidates = store.discover_candidates(cwd=base, home=base, env={}, base_dir=str(base))
             self.assertEqual(candidates[0].path, userdata)
-
-
-class SearchTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.db = Path(self.tmp.name) / "state.sqlite"
-        full_fixture(self.db)
-
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
-
-    def ids(self, report, source=None) -> list[str]:
-        rows = report.results
-        if source:
-            rows = [row for row in rows if source in row["sources"] or row["source"] == source]
-        return [row["thread_id"] for row in rows]
-
-    def test_title_match(self) -> None:
-        report = search(self.db, "rebuild performance")
-        self.assertIn("thread-active", self.ids(report))
-        match = report.results[0]
-        self.assertEqual(match["database"], str(self.db))
-        self.assertIn(match["source"], {"title", "user", "thread_id"})
-
-    def test_user_and_assistant_message_matches(self) -> None:
-        user = search(self.db, "USER needle")
-        self.assertEqual(user.results[0]["source"], "user")
-        self.assertIn("USER needle", user.results[0]["snippet"])
-        assistant = search(self.db, "FINAL NEEDLE")
-        self.assertEqual(assistant.results[0]["thread_id"], "thread-active")
-        self.assertEqual(assistant.results[0]["source"], "assistant")
-
-    def test_archived_included_by_default_deleted_opt_in(self) -> None:
-        archived = search(self.db, "Hidden needle")
-        self.assertEqual(self.ids(archived), ["thread-archived"])
-        self.assertTrue(archived.results[0]["archived"])
-        self.assertIn("archived", archived.results[0]["status"])
-
-        deleted = search(self.db, "Deleted needle")
-        self.assertEqual(deleted.results, [])
-        included = search(self.db, "Deleted needle", include_deleted=True)
-        self.assertEqual(self.ids(included), ["thread-deleted"])
-        self.assertTrue(included.results[0]["deleted"])
-        self.assertIn("deleted", included.results[0]["status"].lower())
-
-    def test_ui_mode_matches_t3_message_semantics(self) -> None:
-        ui_user = search(self.db, "user needle", active_only=True)
-        self.assertEqual(ui_user.results[0]["source"], "user")
-
-        ui_final = search(self.db, "FINAL NEEDLE", active_only=True)
-        self.assertEqual(ui_final.results[0]["source"], "assistant")
-
-        self.assertEqual(search(self.db, "interim needle", active_only=True).results, [])
-        self.assertEqual(search(self.db, "System needle", active_only=True).results, [])
-        self.assertEqual(search(self.db, "Hidden needle", active_only=True).results, [])
-
-        recovery_interim = search(self.db, "interim needle")
-        self.assertEqual(self.ids(recovery_interim), ["thread-active"])
-
-        deduped = search(self.db, "needle", active_only=True)
-        active_rows = [row for row in deduped.results if row["thread_id"] == "thread-active"]
-        self.assertEqual(len(active_rows), 1)
-        self.assertEqual(active_rows[0]["source"], "user")
-
-    def test_ui_mode_excludes_deleted_projects(self) -> None:
-        self.assertEqual(search(self.db, "Legacy workspace", active_only=True).results, [])
-        recovery = search(self.db, "Legacy workspace")
-        self.assertIn("thread-old-project", self.ids(recovery))
-
-    def test_provider_ids(self) -> None:
-        report = search(self.db, "prov-thread-xyz")
-        self.assertEqual(self.ids(report), ["thread-active"])
-        self.assertEqual(report.results[0]["provider_thread_id"], "prov-thread-xyz")
-        session = search(self.db, "sess-123")
-        self.assertEqual(self.ids(session), ["thread-active"])
-
-    def test_parameterized_special_characters(self) -> None:
-        percent = search(self.db, "100%")
-        self.assertEqual(self.ids(percent), ["thread-active"])
-        self.assertNotIn("thread-percent-decoy", self.ids(percent))
-        quoted = search(self.db, "it's a \"quoted\" _value_")
-        self.assertEqual(self.ids(quoted), ["thread-active"])
-        underscore = search(self.db, "_value_")
-        self.assertEqual(self.ids(underscore), ["thread-active"])
-
-    def test_project_and_since_filters(self) -> None:
-        by_path = search(self.db, "needle", project="/repo/t3code")
-        self.assertTrue(self.ids(by_path))
-        self.assertTrue(all(row["workspace_root"] == "/repo/t3code" for row in by_path.results))
-        recent = search(self.db, "thread", since="2026-05-01")
-        self.assertIn("thread-active", self.ids(recent))
-        self.assertNotIn("thread-archived", self.ids(recent))
-
-    def test_thread_lookup_is_bounded(self) -> None:
-        report = search(self.db, query=None, thread_id="thread-active")
-        self.assertEqual(report.mode, "thread")
-        self.assertEqual(report.results[0]["thread_id"], "thread-active")
-        self.assertIn("quoted", report.results[0]["first_user_snippet"])
-        self.assertIn("FINAL NEEDLE", report.results[0]["last_assistant_snippet"])
-        self.assertNotIn("Interim needle", report.results[0]["last_assistant_snippet"])
-        self.assertLessEqual(len(report.results[0]["first_user_snippet"]), 240)
-
-    def test_cli_json_and_readonly_enforcement(self) -> None:
-        from contextlib import redirect_stdout
-        from io import StringIO
-
-        before = sha256(self.db)
-        stdout = StringIO()
-        with redirect_stdout(stdout):
-            payload = tts.main(["--db", str(self.db), "--json", "rebuild"])
-        self.assertEqual(payload, 0)
-        body = json.loads(stdout.getvalue())
-        self.assertEqual(body["results"][0]["thread_id"], "thread-active")
-        after = sha256(self.db)
-        self.assertEqual(before, after)
-
-        conn = store.connect_readonly(self.db)
-        try:
-            pragma = conn.execute("PRAGMA query_only").fetchone()
-            self.assertEqual(int(pragma[0]), 1)
-            with self.assertRaises(sqlite3.OperationalError):
-                conn.execute("CREATE TABLE should_fail (id INTEGER)")
-            with self.assertRaises(sqlite3.OperationalError):
-                conn.execute("INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at) VALUES ('x','y','z','t','t')")
-        finally:
-            conn.close()
-        self.assertEqual(sha256(self.db), before)
-
-    def test_missing_database(self) -> None:
-        missing = Path(self.tmp.name) / "nope.sqlite"
-        with self.assertRaises(store.SearchError) as raised:
-            search(missing, "needle")
-        self.assertIn("does not exist", str(raised.exception))
-
-    def test_schema_drift_missing_required_table(self) -> None:
-        broken = Path(self.tmp.name) / "broken.sqlite"
-        write_db(broken, ["CREATE TABLE unrelated (id INTEGER);"])
-        with self.assertRaises(store.SearchError) as raised:
-            search(broken, "needle")
-        self.assertIn("Missing required table", str(raised.exception))
-
-    def test_cli_reports_selected_database(self) -> None:
-        from io import StringIO
-        from contextlib import redirect_stdout
-
-        stdout = StringIO()
-        with redirect_stdout(stdout):
-            code = tts.main(["--db", str(self.db), "rebuild performance"])
-        self.assertEqual(code, 0)
-        output = stdout.getvalue()
-        self.assertIn(str(self.db), output)
-        self.assertIn("thread-active", output)
-
-
-class LegacySchemaTests(unittest.TestCase):
-    def test_older_schema_without_optional_columns(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            db = Path(raw) / "state.sqlite"
-            write_db(
-                db,
-                [
-                    LEGACY_SCHEMA,
-                    """
-                    INSERT INTO projection_projects VALUES
-                      ('proj-active', 'T3 Code', '/repo/t3code', '2026-01-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL);
-                    INSERT INTO projection_threads VALUES
-                      ('thread-active', 'proj-active', 'Legacy title search', 'main',
-                       '2026-05-01T00:00:00.000Z', '2026-05-02T00:00:00.000Z', NULL);
-                    INSERT INTO projection_thread_messages VALUES
-                      ('message-user', 'thread-active', 'user', 'legacy user needle', 0, '2026-05-01T00:00:12.000Z');
-                    INSERT INTO projection_thread_sessions VALUES
-                      ('thread-active', 'idle', 'codex', 'sess-legacy', '2026-05-02T00:00:00.000Z');
-                    """,
-                ],
-            )
-            report = search(db, "legacy user needle")
-            self.assertEqual(report.results[0]["thread_id"], "thread-active")
-            self.assertFalse(report.results[0]["archived"])
-            provider = search(db, "sess-legacy")
-            self.assertEqual(provider.results[0]["provider_session_id"], "sess-legacy")
-            title = search(db, "Legacy title")
-            self.assertEqual(title.results[0]["source"], "title")
 
 
 class LikeEscapeTests(unittest.TestCase):
@@ -439,10 +128,10 @@ class MultipleDatabaseTests(unittest.TestCase):
     def test_list_dbs_json(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)
-            production = home / ".t3" / "userdata" / "state.sqlite"
-            development = home / ".t3" / "dev" / "state.sqlite"
-            full_fixture(production)
-            full_fixture(development)
+            production = home / ".t3" / "userdata" / "statev2.sqlite"
+            development = home / ".t3" / "dev" / "statev2.sqlite"
+            fixture(production)
+            fixture(development)
             report = tts.run_search(
                 query=None,
                 cwd=home,
@@ -459,10 +148,10 @@ class MultipleDatabaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)
             env_base = home / "custom"
-            userdata = env_base / "userdata" / "state.sqlite"
-            dev = env_base / "dev" / "state.sqlite"
-            full_fixture(userdata)
-            full_fixture(dev)
+            userdata = env_base / "userdata" / "statev2.sqlite"
+            dev = env_base / "dev" / "statev2.sqlite"
+            fixture(userdata)
+            fixture(dev)
             candidates = store.discover_candidates(
                 cwd=home, home=home, env={"T3CODE_HOME": str(env_base)}
             )
@@ -472,418 +161,29 @@ class MultipleDatabaseTests(unittest.TestCase):
     def test_db_directory_prefers_userdata_over_sibling_sqlite(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            decoy = base / "state.sqlite"
-            userdata = base / "userdata" / "state.sqlite"
+            decoy = base / "statev2.sqlite"
+            userdata = base / "userdata" / "statev2.sqlite"
             write_db(decoy, ["CREATE TABLE unrelated (id INTEGER);"])
-            full_fixture(userdata)
+            fixture(userdata)
             candidates = store.discover_candidates(cwd=base, home=base, env={}, db=str(base))
             self.assertEqual(candidates[0].path, userdata)
 
     def test_one_bad_database_does_not_abort_the_rest(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)
-            good = home / ".t3" / "userdata" / "state.sqlite"
-            bad = home / ".t3" / "dev" / "state.sqlite"
-            full_fixture(good)
+            good = home / ".t3" / "userdata" / "statev2.sqlite"
+            bad = home / ".t3" / "dev" / "statev2.sqlite"
+            fixture(good)
             write_db(bad, ["CREATE TABLE unrelated (id INTEGER);"])
             report = tts.run_search(
-                query="rebuild",
+                query="Spark BIOS",
                 cwd=home,
                 home=home,
                 env={},
             )
             self.assertTrue(report.results)
-            self.assertTrue(any("Missing required table" in warning for warning in report.warnings))
-            self.assertIn("thread-active", [row["thread_id"] for row in report.results])
-
-
-class ReviewFixTests(unittest.TestCase):
-    def test_recovery_limit_does_not_starve_other_threads(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            db = Path(raw) / "state.sqlite"
-            statements = [FULL_SCHEMA]
-            inserts = [
-                """
-                INSERT INTO projection_projects VALUES
-                  ('proj-active', 'T3 Code', '/repo/t3code', '2026-01-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL);
-                INSERT INTO projection_threads VALUES
-                  ('thread-chatty', 'proj-active', 'Chatty', 'main', NULL,
-                   '2026-05-01T00:00:00.000Z', '2026-05-03T00:00:00.000Z', NULL, NULL),
-                  ('thread-quiet-b', 'proj-active', 'Quiet B', 'main', NULL,
-                   '2026-05-01T00:00:00.000Z', '2026-05-02T00:00:00.000Z', NULL, NULL),
-                  ('thread-quiet-c', 'proj-active', 'Quiet C', 'main', NULL,
-                   '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL, NULL);
-                """
-            ]
-            messages = ["INSERT INTO projection_thread_messages VALUES"]
-            rows = []
-            for index in range(30):
-                rows.append(
-                    f"('msg-chatty-{index}', 'thread-chatty', NULL, 'user', 'shared needle {index}', 0, "
-                    f"'2026-05-01T00:00:{index:02d}.000Z', '2026-05-01T00:00:{index:02d}.000Z')"
-                )
-            rows.append(
-                "('msg-b', 'thread-quiet-b', NULL, 'user', 'shared needle b', 0, "
-                "'2026-05-01T00:00:40.000Z', '2026-05-01T00:00:40.000Z')"
-            )
-            rows.append(
-                "('msg-c', 'thread-quiet-c', NULL, 'user', 'shared needle c', 0, "
-                "'2026-05-01T00:00:41.000Z', '2026-05-01T00:00:41.000Z')"
-            )
-            messages.append(",\n".join(rows) + ";")
-            write_db(db, statements + inserts + ["\n".join(messages)])
-            report = search(db, "shared needle", limit=5)
-            ids = {row["thread_id"] for row in report.results}
-            self.assertEqual(ids, {"thread-chatty", "thread-quiet-b", "thread-quiet-c"})
-
-    def test_checkpointed_open_does_not_create_sidecars(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            db = Path(raw) / "state.sqlite"
-            full_fixture(db)
-            wal = Path(str(db) + "-wal")
-            shm = Path(str(db) + "-shm")
-            self.assertFalse(wal.exists())
-            self.assertFalse(shm.exists())
-            conn = store.connect_readonly(db)
-            try:
-                conn.execute("SELECT COUNT(*) FROM projection_threads").fetchone()
-            finally:
-                conn.close()
-            self.assertFalse(wal.exists())
-            self.assertFalse(shm.exists())
-
-    def test_until_date_includes_that_day(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            db = Path(raw) / "state.sqlite"
-            full_fixture(db)
-            report = search(db, "rebuild", until="2026-05-02")
-            self.assertIn("thread-active", [row["thread_id"] for row in report.results])
-
-    def test_workspace_match_snippet_is_the_path(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            db = Path(raw) / "state.sqlite"
-            full_fixture(db)
-            report = search(db, "/repo/t3code")
-            self.assertTrue(report.results)
-            self.assertIn("/repo/t3code", report.results[0]["snippet"] or "")
-
-    def test_sessions_table_without_thread_id_does_not_crash(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            db = Path(raw) / "state.sqlite"
-            write_db(
-                db,
-                [
-                    """
-                    CREATE TABLE projection_projects (
-                      project_id TEXT PRIMARY KEY,
-                      title TEXT NOT NULL,
-                      workspace_root TEXT NOT NULL,
-                      created_at TEXT NOT NULL,
-                      updated_at TEXT NOT NULL,
-                      deleted_at TEXT
-                    );
-                    CREATE TABLE projection_threads (
-                      thread_id TEXT PRIMARY KEY,
-                      project_id TEXT NOT NULL,
-                      title TEXT NOT NULL,
-                      created_at TEXT NOT NULL,
-                      updated_at TEXT NOT NULL,
-                      deleted_at TEXT
-                    );
-                    CREATE TABLE projection_thread_sessions (
-                      status TEXT NOT NULL,
-                      provider_name TEXT
-                    );
-                    INSERT INTO projection_projects VALUES
-                      ('proj-active', 'T3 Code', '/repo/t3code', '2026-01-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL);
-                    INSERT INTO projection_threads VALUES
-                      ('thread-active', 'proj-active', 'Legacy title search',
-                       '2026-05-01T00:00:00.000Z', '2026-05-02T00:00:00.000Z', NULL);
-                    """
-                ],
-            )
-            report = search(db, "Legacy title")
-            self.assertEqual(report.results[0]["thread_id"], "thread-active")
-
-
-class RemoteEnvironmentTests(unittest.TestCase):
-    ENV_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    ENV_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-    THREAD = "7368d725-8731-436b-a2b0-064ac9bb63af"
-
-    def _db_with_env(self, directory: Path, env_id: str, thread_id: str, title: str) -> Path:
-        db = directory / env_id / "state.sqlite"
-        write_db(
-            db,
-            [
-                FULL_SCHEMA,
-                f"""
-                INSERT INTO projection_projects VALUES
-                  ('proj-active', 'T3 Code', '/repo/t3code', '2026-01-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', NULL);
-                INSERT INTO projection_threads VALUES
-                  ('{thread_id}', 'proj-active', '{title}', 'main', NULL,
-                   '2026-05-01T00:00:00.000Z', '2026-05-02T00:00:00.000Z', NULL, NULL);
-                """,
-            ],
-        )
-        (db.parent / "environment-id").write_text(env_id + "\n", encoding="utf-8")
-        return db
-
-    def test_parse_full_t3_thread_url(self) -> None:
-        url = f"https://app.t3.codes/{self.ENV_A}/{self.THREAD}"
-        parsed = store.parse_thread_ref(url)
-        self.assertIsNotNone(parsed)
-        self.assertEqual(parsed.environment_id, self.ENV_A)
-        self.assertEqual(parsed.thread_id, self.THREAD)
-        self.assertEqual(parsed.host, "app.t3.codes")
-        self.assertIsNone(store.parse_thread_ref("https://app.t3.codes/pair?host=https://backend.example"))
-
-    def test_url_lookup_uses_both_identifiers(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            db = self._db_with_env(root, self.ENV_A, self.THREAD, "From URL")
-            url = f"https://app.t3.codes/{self.ENV_A}/{self.THREAD}"
-            report = tts.run_search(query=url, cwd=root, home=root, env={}, db=str(db))
-            self.assertEqual(report.results[0]["scoped_id"], f"{self.ENV_A}/{self.THREAD}")
-            self.assertEqual(report.results[0]["environment_id"], self.ENV_A)
-            self.assertEqual(report.mode, "thread")
-
-    def test_same_bare_id_across_multiple_environments(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            db_a = self._db_with_env(root, self.ENV_A, self.THREAD, "Alpha copy")
-            db_b = self._db_with_env(root, self.ENV_B, self.THREAD, "Bravo copy")
-            first = tts.run_search(query=None, cwd=root, home=root, env={}, db=str(db_a), thread_id=self.THREAD)
-            second = tts.run_search(query=None, cwd=root, home=root, env={}, db=str(db_b), thread_id=self.THREAD)
-            self.assertEqual(first.results[0]["environment_id"], self.ENV_A)
-            self.assertEqual(second.results[0]["environment_id"], self.ENV_B)
-            self.assertEqual(first.results[0]["scoped_id"], f"{self.ENV_A}/{self.THREAD}")
-            self.assertEqual(second.results[0]["thread_id"], self.THREAD)
-            self.assertEqual(second.results[0]["scoped_id"], f"{self.ENV_B}/{self.THREAD}")
-            combined = tts.run_search(
-                query=None,
-                cwd=root,
-                home=root,
-                env={},
-                db=str(db_a),
-                thread_id=self.THREAD,
-                remotes=[
-                    tts.RemoteEnvironment(
-                        environment_id=self.ENV_B,
-                        status="searched",
-                        provenance="rpc",
-                        host="https://backend.example:3773",
-                        details=[
-                            {
-                                "thread_id": self.THREAD,
-                                "title": "Bravo copy",
-                                "token": "should-not-leak",
-                            }
-                        ],
-                    )
-                ],
-            )
-            env_ids = {row["environment_id"] for row in combined.results}
-            self.assertEqual(env_ids, {self.ENV_A, self.ENV_B})
-            dumped = json.dumps(tts.asdict(combined))
-            self.assertNotIn("should-not-leak", dumped)
-
-    def test_find_exact_thread_id_on_remote_fixture(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            local = self._db_with_env(root, self.ENV_A, "11111111-1111-4111-8111-111111111111", "Local only")
-            report = tts.run_search(
-                query=None,
-                cwd=root,
-                home=root,
-                env={},
-                db=str(local),
-                thread_id=self.THREAD,
-                remotes=[
-                    tts.RemoteEnvironment(
-                        environment_id=self.ENV_B,
-                        status="searched",
-                        provenance="rpc",
-                        host="https://remote.example",
-                        details=[{"thread_id": self.THREAD, "title": "Remote hit"}],
-                    )
-                ],
-            )
-            self.assertEqual(len(report.results), 1)
-            self.assertEqual(report.results[0]["environment_id"], self.ENV_B)
-            self.assertEqual(report.results[0]["provenance"], "rpc")
-            self.assertEqual(report.results[0]["host"], "https://remote.example")
-
-    def test_disconnected_remote_environment(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            local = self._db_with_env(root, self.ENV_A, self.THREAD, "Local")
-            report = tts.run_search(
-                query=None,
-                cwd=root,
-                home=root,
-                env={},
-                db=str(local),
-                thread_id="99999999-9999-4999-8999-999999999999",
-                remotes=[
-                    tts.RemoteEnvironment(
-                        environment_id=self.ENV_B,
-                        status="disconnected",
-                        provenance="rpc",
-                        host="https://down.example",
-                        error="connection refused",
-                    )
-                ],
-            )
-            statuses = {item["environment_id"]: item["status"] for item in report.environments}
-            self.assertEqual(statuses[self.ENV_B], "disconnected")
-            self.assertTrue(any("disconnected" in warning for warning in report.warnings))
-            self.assertNotEqual(report.not_found_kind, None)
-
-    def test_not_found_versus_not_queried(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            local = self._db_with_env(root, self.ENV_A, self.THREAD, "Local")
-            missing = "99999999-9999-4999-8999-999999999999"
-            not_queried = tts.run_search(
-                query=None,
-                cwd=root,
-                home=root,
-                env={},
-                db=str(local),
-                thread_id=missing,
-            )
-            self.assertEqual(not_queried.not_found_kind, "not_queried")
-            self.assertTrue(any(tts.NOT_QUERIED_REMOTE_MESSAGE in warning for warning in not_queried.warnings))
-            self.assertFalse(not_queried.remote_queried)
-
-            remote_miss = tts.run_search(
-                query=None,
-                cwd=root,
-                home=root,
-                env={},
-                db=str(local),
-                thread_id=missing,
-                remotes=[
-                    tts.RemoteEnvironment(
-                        environment_id=self.ENV_B,
-                        status="searched",
-                        provenance="rpc",
-                        host="https://remote.example",
-                        details=[],
-                    )
-                ],
-            )
-            self.assertTrue(remote_miss.remote_queried)
-            self.assertEqual(remote_miss.not_found_kind, "not_found")
-            self.assertTrue(any("Not found in the environments searched." in warning for warning in remote_miss.warnings))
-            self.assertFalse(any(tts.NOT_QUERIED_REMOTE_MESSAGE in warning for warning in remote_miss.warnings))
-
-    def test_outputs_never_expose_credentials(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            local = self._db_with_env(root, self.ENV_A, self.THREAD, "Local")
-            remote_path = root / "remote.json"
-            remote_path.write_text(
-                json.dumps(
-                    {
-                        "environments": [
-                            {
-                                "environment_id": self.ENV_B,
-                                "status": "searched",
-                                "host": "https://backend.example",
-                                "token": "sk-live-secret",
-                                "credential": {"bearer": "super-secret"},
-                                "matches": [
-                                    {
-                                        "thread_id": self.THREAD,
-                                        "title": "Remote",
-                                        "authorization": "Bearer abc",
-                                    }
-                                ],
-                            }
-                        ]
-                    }
-                ),
-                encoding="utf-8",
-            )
-            from contextlib import redirect_stdout
-            from io import StringIO
-
-            stdout = StringIO()
-            with redirect_stdout(stdout):
-                code = tts.main(
-                    [
-                        "--db",
-                        str(local),
-                        "--remote-json",
-                        str(remote_path),
-                        "--json",
-                        self.THREAD,
-                    ]
-                )
-            self.assertEqual(code, 0)
-            body = stdout.getvalue()
-            self.assertNotIn("sk-live-secret", body)
-            self.assertNotIn("super-secret", body)
-            self.assertNotIn("Bearer abc", body)
-            parsed = json.loads(body)
-            self.assertTrue(parsed["results"])
-
-    def test_ssh_disconnected(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            local = self._db_with_env(root, self.ENV_A, self.THREAD, "Local")
-
-            def fail_ssh(argv, stdin):
-                self.assertEqual(argv[0], "ssh")
-                self.assertNotIn("sk-live-secret", " ".join(argv))
-                return type("Completed", (), {"returncode": 255, "stdout": b"", "stderr": b"Permission denied"})()
-
-            report = tts.run_search(
-                query=None,
-                cwd=root,
-                home=root,
-                env={},
-                db=str(local),
-                thread_id="99999999-9999-4999-8999-999999999999",
-                ssh="user@remote.example",
-                ssh_exec=fail_ssh,
-            )
-            self.assertTrue(any(item.get("status") == "disconnected" for item in report.environments))
-            self.assertTrue(any("disconnected" in warning for warning in report.warnings))
-
-    def test_ssh_quotes_query_for_remote_shell(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            local = self._db_with_env(root, self.ENV_A, self.THREAD, "Local")
-            captured: dict[str, list[str]] = {}
-
-            def capture_ssh(argv, stdin):
-                captured["argv"] = list(argv)
-                return type("Completed", (), {"returncode": 255, "stdout": b"", "stderr": b"no"})()
-
-            evil = "foo; rm -rf /; $(id)"
-            tts.run_search(
-                query=evil,
-                cwd=root,
-                home=root,
-                env={},
-                db=str(local),
-                ssh="user@remote.example",
-                ssh_exec=capture_ssh,
-            )
-            argv = captured["argv"]
-            self.assertEqual(argv[0], "ssh")
-            self.assertIn("--", argv)
-            self.assertEqual(argv[-2], "user@remote.example")
-            remote_command = argv[-1]
-            expected = " ".join(
-                ["python3", "-I", "-", "--json", shlex.quote(evil), "--base-dir", shlex.quote("~/.t3")]
-            )
-            self.assertEqual(remote_command, expected)
-
-
+            self.assertTrue(any("unsupported T3 schema" in warning for warning in report.warnings))
+            self.assertIn(THREAD, [row["thread_id"] for row in report.results])
 
 
 class V2SearchTests(unittest.TestCase):
@@ -899,7 +199,7 @@ class V2SearchTests(unittest.TestCase):
 
     def test_discovery_prefers_v2_and_lists_superseded_legacy(self) -> None:
         old = self.db.with_name('state.sqlite')
-        full_fixture(old)
+        legacy_fixture(old)
         home = Path(self.tmp.name)
         report = tts.run_search(query=None, cwd=home, home=home, env={}, list_dbs=True)
         live, legacy = [item for item in report.databases if item['exists']]
@@ -912,8 +212,8 @@ class V2SearchTests(unittest.TestCase):
         for flag in ('db', 'base_dir'):
             candidate = store.discover_candidates(cwd=home, home=home, env={}, **{flag: str(self.db.parent if flag == 'db' else self.db.parent.parent)})
             self.assertEqual(candidate[0].path, self.db)
-        explicit = search(old, 'rebuild performance')
-        self.assertTrue(explicit.results)
+        with self.assertRaisesRegex(store.SearchError, 'unsupported T3 schema'):
+            search(old, 'rebuild performance')
 
     def test_exact_identity_forms_and_fresh_title(self) -> None:
         from .t3_v2_fixture import ENVIRONMENT
@@ -955,10 +255,10 @@ class V2SearchTests(unittest.TestCase):
     def test_fts_query_plan_and_readonly_safety(self) -> None:
         conn = store.connect_readonly(self.db)
         before = sha256(self.db)
-        schema = store.inspect_schema(conn, self.db)
+        store.require_projection_schema(conn, self.db)
         statements = []
         conn.set_trace_callback(statements.append)
-        matches, _ = tts.search_v2(conn, schema, store.Candidate(self.db, 'test', 'test'), 'Spark BIOS',
+        matches, _ = tts.search_v2(conn, store.Candidate(self.db, 'test', 'test'), 'Spark BIOS',
             active_only=False, include_deleted=False, project=None, since=None, until=None, thread_id=None, limit=20)
         self.assertTrue(matches)
         query = next(sql for sql in statements if ' MATCH ' in sql)
@@ -982,9 +282,8 @@ class V2SearchTests(unittest.TestCase):
         conn.execute('DROP TABLE orchestration_v2_message_search')
         conn.commit()
         conn.close()
-        missing = search(self.db, 'Spark BIOS')
-        self.assertEqual(missing.results, [])
-        self.assertIn('metadata only', ' '.join(missing.warnings))
+        with self.assertRaisesRegex(store.SearchError, 'unsupported T3 schema.*orchestration_v2_message_search'):
+            search(self.db, 'Spark BIOS')
 
     def test_pr_number_url_and_attribution_fallback(self) -> None:
         number = search(self.db, None, pr='123')
@@ -1037,20 +336,6 @@ class V2SearchTests(unittest.TestCase):
         for ref in ('opaque/id/with/slashes', ENVIRONMENT + '/opaque/id/with/slashes'):
             self.assertEqual(search(self.db, None, thread_id=ref).results[0]['thread_id'], 'opaque/id/with/slashes')
 
-    def test_missing_v2_tables_warn_without_using_legacy(self) -> None:
-        conn = sqlite3.connect(self.db)
-        conn.execute('DROP TABLE orchestration_v2_projection_provider_threads')
-        conn.execute('DROP TABLE orchestration_v2_projection_messages')
-        conn.commit()
-        conn.close()
-        report = search(self.db, 'Update Spark OS')
-        self.assertEqual(report.results[0]['thread_id'], self.thread)
-        self.assertIn('provider lookup/status is incomplete', ' '.join(report.warnings))
-        self.assertIn('message lookup/activity is unavailable', ' '.join(report.warnings))
-        detail = search(self.db, None, thread_id=self.thread)
-        self.assertEqual(detail.results[0]['message_counts'], {})
-        self.assertIsNone(detail.results[0]['provider_name'])
-        self.assertFalse(search(self.db, None, pr='999').results)
 
     def test_live_wal_is_visible_through_symlink(self) -> None:
         alias = self.db.parent / 'alias.sqlite'
@@ -1104,34 +389,85 @@ class V2SearchTests(unittest.TestCase):
         self.assertEqual(report.results[0]['source'], 'user')
         self.assertIn('café résumé', report.results[0]['snippet'])
 
+    def test_missing_required_v2_table_is_unsupported(self) -> None:
+        writer = sqlite3.connect(self.db)
+        writer.execute('DROP TABLE orchestration_v2_projection_provider_threads')
+        writer.commit()
+        writer.close()
+        for kwargs in ({'query': 'Update Spark OS'}, {'query': None, 'thread_id': self.thread}):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(store.SearchError, 'unsupported T3 schema'):
+                search(self.db, **kwargs)
+
+    def test_legacy_only_store_is_listed_but_not_searched(self) -> None:
+        self.db.unlink()
+        old = self.db.with_name('state.sqlite')
+        legacy_fixture(old)
+        home = Path(self.tmp.name)
+        report = tts.run_search(query=None, cwd=home, home=home, env={}, list_dbs=True)
+        self.assertFalse(next(item for item in report.databases if item['exists'])['searchable'])
+        with self.assertRaisesRegex(store.SearchError, 'Only legacy'):
+            tts.run_search(query='rebuild performance', cwd=home, home=home, env={})
+
+    def test_missing_explicit_database(self) -> None:
+        with self.assertRaisesRegex(store.SearchError, 'No T3 v2 SQLite database found'):
+            search(self.db.with_name('missing.sqlite'), 'Spark')
+
+    def test_env_scope_does_not_search_another_environment(self) -> None:
+        with self.assertRaisesRegex(store.UsageError, 'no local database matched the requested environment'):
+            search(self.db, None, thread_id=self.thread, environment_id='another-environment')
+
+    def test_positional_pr_url_uses_pr_lookup(self) -> None:
+        url = 'https://github.com/owner/home-lab/pull/123'
+        explicit = search(self.db, None, pr=url)
+        positional = search(self.db, url)
+        self.assertEqual(positional.results, explicit.results)
+        self.assertEqual([item['thread_id'] for item in positional.results], [self.thread])
+
+    def test_many_matching_messages_do_not_starve_other_threads(self) -> None:
+        writer = sqlite3.connect(self.db)
+        for i in range(30):
+            writer.execute('INSERT INTO orchestration_v2_projection_messages VALUES (?,?,?,?,?,?,?,?,?)',
+                           (f'extra-{i}', self.thread, 'run-1', 'node-1', 'user', 0,
+                            '2026-10-25T13:40:31Z', '2026-10-25T13:40:31Z',
+                            json.dumps({'text': 'archived message needle'})))
+        writer.commit()
+        writer.close()
+        report = search(self.db, 'archived message needle', limit=2)
+        self.assertEqual({item['thread_id'] for item in report.results}, {self.thread, 'thread-archived'})
+
+    def test_short_query_only_reads_metadata(self) -> None:
+        conn = store.connect_readonly(self.db)
+        statements = []
+        conn.set_trace_callback(statements.append)
+        try:
+            tts.search_v2(conn, store.Candidate(self.db, 'test', 'test'), 'OS',
+                          active_only=False, include_deleted=False, project=None, since=None,
+                          until=None, thread_id=None, limit=20)
+        finally:
+            conn.close()
+        self.assertFalse(any('orchestration_v2_projection_messages' in sql for sql in statements))
+
 
 class DateFilterTests(unittest.TestCase):
     def test_equivalent_offset_bounds_preserve_equality_and_milliseconds(self) -> None:
-        from .t3_v2_fixture import fixture, THREAD
         with tempfile.TemporaryDirectory() as directory:
-            for name, factory, thread, query in (
-                ('legacy', full_fixture, 'thread-active', 'rebuild'),
-                ('v2', fixture, THREAD, 'Spark BIOS'),
-            ):
-                with self.subTest(schema=name):
-                    db = Path(directory) / name / 'state.sqlite'
-                    factory(db)
-                    table = 'projection_threads' if name == 'legacy' else 'orchestration_v2_projection_threads'
-                    for fraction in ('', '.123'):
-                        timestamp = '2026-10-25T13:40:31' + fraction + 'Z'
-                        writer = sqlite3.connect(db)
-                        writer.execute(f'UPDATE {table} SET updated_at=? WHERE thread_id=?', (timestamp, thread))
-                        writer.commit()
-                        writer.close()
-                        for bound in (timestamp, '2026-10-25T15:40:31' + fraction + '+02:00',
-                                      '2026-10-25T11:40:31' + fraction + '-02:00'):
-                            report = search(db, query, since=bound, until=bound)
-                            self.assertIn(thread, [r['thread_id'] for r in report.results], bound)
-                        self.assertFalse(search(db, query, since='2026-10-25T15:40:31.124+02:00').results)
-                        self.assertFalse(search(db, query, until='2026-10-25T11:40:30.999-02:00').results)
-                    # A relative bound uses UTC even when a caller supplies an offset-aware clock.
-                    now = datetime(2026, 10, 25, 16, 40, 31, tzinfo=timezone(timedelta(hours=2)))
-                    self.assertTrue(search(db, query, since='1h', now=now).results)
+            db = Path(directory) / 'statev2.sqlite'
+            fixture(db)
+            for fraction in ('', '.123'):
+                timestamp = '2026-10-25T13:40:31' + fraction + 'Z'
+                writer = sqlite3.connect(db)
+                writer.execute('UPDATE orchestration_v2_projection_threads SET updated_at=? WHERE thread_id=?',
+                               (timestamp, THREAD))
+                writer.commit()
+                writer.close()
+                for bound in (timestamp, '2026-10-25T15:40:31' + fraction + '+02:00',
+                              '2026-10-25T11:40:31' + fraction + '-02:00'):
+                    report = search(db, 'Spark BIOS', since=bound, until=bound)
+                    self.assertIn(THREAD, [r['thread_id'] for r in report.results], bound)
+                self.assertFalse(search(db, 'Spark BIOS', since='2026-10-25T15:40:31.124+02:00').results)
+                self.assertFalse(search(db, 'Spark BIOS', until='2026-10-25T11:40:30.999-02:00').results)
+            now = datetime(2026, 10, 25, 16, 40, 31, tzinfo=timezone(timedelta(hours=2)))
+            self.assertTrue(search(db, 'Spark BIOS', since='1h', now=now).results)
 
     def test_empty_search_is_rejected_before_database_discovery(self) -> None:
         for query in (None, '', '   '):
@@ -1139,6 +475,35 @@ class DateFilterTests(unittest.TestCase):
                 with self.assertRaises(store.UsageError):
                     tts.run_search(query=query, cwd=Path('/unused'), home=Path('/unused'), env={})
                 discover.assert_not_called()
+
+
+class SshTests(unittest.TestCase):
+    def test_remote_shell_arguments_are_quoted_and_filters_forwarded(self) -> None:
+        from types import SimpleNamespace
+        captured = {}
+        def capture_ssh(argv, stdin):
+            captured['argv'] = argv
+            return SimpleNamespace(returncode=0, stdout=json.dumps({
+                'databases': [{'path': '/remote/statev2.sqlite', 'kind': 'explicit-base',
+                               'source': '--base-dir', 'exists': True, 'searched': True}],
+                'results': [], 'warnings': [], 'truncated': False,
+            }), stderr='')
+        query = 'foo; $(id); "quoted"'
+        report = tts.run_search(query=query, cwd=Path('/unused'), home=Path('/unused'), env={},
+            ssh='user@remote', ssh_base_dir='/some path', ssh_exec=capture_ssh,
+            project='home lab', since='2026-10-25', limit=3)
+        argv = captured['argv']
+        self.assertEqual(argv[:-2], ['ssh', '-o', 'BatchMode=yes', '--'])
+        self.assertEqual(argv[-2], 'user@remote')
+        self.assertEqual(shlex.split(argv[-1]), ['python3', '-I', '-', '--json', '--limit', '3',
+            '--base-dir', '/some path', '--project', 'home lab', '--since', '2026-10-25T00:00:00', '--', query])
+        self.assertEqual(report.databases[-1]['provenance'], 'ssh')
+
+    def test_remote_failure_is_reported(self) -> None:
+        from types import SimpleNamespace
+        with self.assertRaisesRegex(store.SearchError, 'SSH search.*denied'):
+            tts.run_search(query='Spark', cwd=Path('/unused'), home=Path('/unused'), env={},
+                ssh='remote', ssh_exec=lambda argv, stdin: SimpleNamespace(returncode=255, stderr=b'denied'))
 
 
 if __name__ == "__main__":
