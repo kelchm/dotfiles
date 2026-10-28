@@ -1,127 +1,46 @@
 ---
 name: t3-thread-search
 description: >
-  Find T3 Code threads by title, thread ID, T3 thread URL, environmentId, user or assistant
-  message text, project, provider ID, or date. Searches local state.sqlite and can merge
-  remote environments. Canonical identity is (environmentId, threadId). Use for recovering
-  archived conversations, looking up UUIDs or T3 thread URLs,
-  command-palette search, remote/multi-environment lookup, and read-only execution status
-  checks such as “status?”, “is it hung?”, or “what is blocking this thread?”. Use when the
-  user runs /t3-thread-search or /find-t3-thread.
+  Last-resort local recovery for T3 Code: search archived message text and PR links,
+  find retained deleted-thread records, or map provider thread/session/native IDs
+  to T3 thread IDs. Use only for these gaps in native functionality.
 ---
 
-# T3 thread search
+# T3 thread recovery
 
-Search T3 Code's materialized read model. Never write to it.
+Use native T3 functionality first. `t3_thread_search` handles ordinary active-thread and PR lookup; `t3_thread_list` handles project inventory, including subagents. Settings → Archived threads browses archives across connected environments. `t3_thread_read` opens a known archived ID and provides conversation and execution state. This skill adds only:
+
+- Searching archived content and recorded PR links without unarchiving threads.
+- Finding whatever metadata and indexed messages remain for deleted threads, which native reads reject.
+- Mapping an exact provider thread/session/native ID to its T3 thread ID, including active threads.
+
+Inside a thread, native search without `projectId` (including `projectId: null`) searches only the caller's project. If the project is unknown, use `t3_project_list` and search the returned projects with explicit IDs, paging as needed. A miss in the current project is not a reason to use recovery. This also applies when the user explicitly invokes this skill for an ordinary lookup.
+
+Native read's “no longer available” error can mean a deleted thread or an ID that was never a T3 thread. For an ambiguous UUID, try `--provider-id` before `--include-deleted --thread`. This script does not provide status inference, conversation detail, general active-thread search, or remote access.
 
 ## Command
 
-Prefer the helper. It is read-only (`sqlite3` URI `mode=ro` plus `PRAGMA query_only=ON`), parameterizes every user value, inspects `sqlite_schema` / `PRAGMA table_info`, and prints the database it used.
-
 ```bash
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" [query] [flags]
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" 'phrase from an archived message'
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --include-deleted --thread '<threadId>'
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --provider-id '<provider session or native ID>'
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --pr 'https://github.com/owner/repository/pull/123'
 ```
 
-If `python3` is missing, retry with `python`, then `mise -C "$HOME/.agents/skills/t3-thread-search" exec -- python3 scripts/t3-thread-search ...` so the skill's `mise.toml` is used. Do not interpolate the query into SQL. Do not start a T3 server against an existing database. Do not `cp` a live `state.sqlite`. Do not `VACUUM`, migrate, index, or otherwise mutate the source. Checkpointed files are opened with `immutable=1` so `-wal`/`-shm` are not created; a live WAL file cannot be immutable (that would hide uncheckpointed writes), and SQLite may then update `-shm` in order to read the WAL.
+Text queries match archived titles, branches, and indexed messages. `--include-deleted` also searches retained deleted records. `--thread` requires `--include-deleted` and returns only the deleted record’s compact metadata; it does not establish whether messages remain. Known surviving IDs go to native read. `--provider-id` matches only exact thread/session/native identifiers and searches active and archived records, plus deleted ones when requested. Results contain identity, project, dates, provider IDs, and bounded matching context. Use native read for the selected surviving thread.
 
-| Flag | Purpose |
-|---|---|
-| `--db PATH` | Exact `state.sqlite`, a `userdata` dir, or a T3 base dir |
-| `--base-dir PATH` / `--home-dir PATH` | `<path>/userdata/state.sqlite` (explicit-home rule) |
-| `--project TEXT` | Restrict by project title or workspace path |
-| `--since` / `--until` | ISO date/time or relative `7d` / `24h` / `30m`. Date-only `--until` is end of that day. |
-| `--active-only` | Command-palette / UI semantics |
-| `--include-deleted` | Opt in to deleted threads (labeled) |
-| `--thread ID` | Thread ID, `environmentId/threadId`, or a full T3 thread URL |
-| `--environment ID` | Restrict to this environment. Combined with `--thread` this is the canonical identity |
-| `--endpoint URL` | Remote T3 HTTP(S) endpoint. Recorded as not queried unless `--remote-json` supplies RPC results |
-| `--ssh TARGET` | Explicit SSH host that owns the database. Never copies the remote DB |
-| `--remote-json PATH` | Sanitized federated RPC results (`orchestration.searchThreads` per environment). No tokens |
-| `--list-dbs` | Show candidate databases and environment IDs |
-| `--limit N` | Default 20, max 100 |
-| `--json` | Machine-readable output |
-| `--cwd PATH` | Discover worktree-local `.t3` as if started from this directory |
+`--project TEXT` filters by project title or workspace path. `--limit N` defaults to 20, maximum 100. `--json` gives structured output. See `--help` for all options. The skill's `mise.toml` supplies Python if needed.
 
-Default search is **recovery**: active + archived, non-deleted, titles, projects, provider IDs, user messages, and all non-streaming assistant messages. `--active-only` is the optional UI-parity mode.
+## Store and safety
 
-## Thread status and monitoring
+The default is `$T3CODE_HOME/userdata/statev2.sqlite` when set, otherwise `~/.t3/userdata/statev2.sqlite`. Use `--db PATH` to select an exact local file, including a development or worktree store. `--list-dbs` reports the selected path and any legacy `state.sqlite` sibling as stale/unsupported. Legacy schemas are never searched. Results report the adjacent `environment-id`; scoped thread IDs must match the selected store. A local miss says nothing about other machines or stores. For another machine's recovery records, run the helper on that machine; a connected T3 app does not provide this script with remote database access.
 
-For “status?”, “is it hung?”, “what is blocking this thread?”, or finite monitoring requests, use the companion helper:
+Connections use `mode=ro`, `PRAGMA query_only=ON`, parameterized queries, and normal SQLite reader locking even when no WAL is present. Never copy a live database, vacuum, index, migrate, mutate it, or start a server against it. SQLite may create or update WAL sidecars needed for read access. Database paths and environment identity follow symlinks to the actual store.
 
-```bash
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-status" \
-  --thread "<environmentId>/<threadId>"
-```
+## Coverage limits
 
-It reads `projection_threads`, `projection_thread_sessions`, `projection_turns`, and `projection_thread_activities` with the same SQLite `mode=ro` / `PRAGMA query_only=ON` protections. It reports `running/recent`, `awaiting-approval`, `awaiting-input`, `queued`, `completed`, `error`, `interrupted`, `idle/ready`, `idle/stopped`, `stale-suspect`, or `unknown`. A stale result means that no projection activity exceeded the threshold (five minutes by default); it does **not** prove that a provider is hung. Activity summaries are sanitized and payload JSON/full messages are never printed.
+Message search uses T3's existing FTS index with literal phrases, never a full message `LIKE` scan. Queries shorter than three characters search metadata only. At most 10,000 matching recovery messages have their text retrieved; scope and project filters apply before that cap. A warning and `truncated` flag report when older matches may be omitted.
 
-Use `--watch-for 10m --interval 15s` only when the user explicitly asks to monitor. Monitoring must be finite (maximum 30 minutes), stop on terminal state or an explicit approval/input blocker, and never auto-approve, retry, kill, restart, or send input. A recent tool/task event is stronger liveness evidence than a session timestamp alone. If the projection tables are missing or inconsistent, report the limitation rather than guessing.
+The index excludes streaming messages, **all agent-authored user prompts**, and subagent transcripts. Archived subagents can still be found by title; use native read once their ID is known. Deleted records may contain little or no message history; this is residual-data lookup, not full conversation restoration.
 
-## Agent flow
-
-1. Parse the user's request for a thread URL, `(environmentId, threadId)`, or a bare UUID. Canonical identity is `(environmentId, threadId)`. A bare UUID does **not** identify the environment.
-2. Resolve local databases (`--list-dbs`). Each DB is associated with `<stateDir>/environment-id` when that file exists. Always report environment ID, database path, and provenance.
-3. Search matching local databases.
-4. If the harness has an authenticated T3 RPC/MCP session, federate like the web client: call `orchestration.searchThreads` once per connected environment and attach `environmentId` to each hit. Feed sanitized results through `--remote-json` (never tokens). That RPC is **active/UI** search only; archived recovery needs SQLite or SSH on the owning host.
-5. There is no official T3 search CLI today. With **explicit user authorization**, `--ssh user@host` runs this same read-only helper on the owner. Do not `scp`/`cp` a live remote database.
-6. Return scoped identities (`environmentId/threadId`), host/endpoint, and database or API queried.
-7. For a chosen thread: `--environment <id> --thread <id>` (or the URL). Do not dump full conversations.
-
-A local miss is not a global miss. If remotes were not queried, say exactly:
-
-> Not found in the environments searched; remote environments were not queried.
-
-Then ask for the full thread URL, environment ID, authenticated endpoint, or SSH target.
-
-Distinguish: authoritative not found in a searched environment, environment disconnected, environment not searched, stale cache hint. Do not scrape browser/desktop credential stores. Do not print bearer, relay, pairing, or SSH credentials. Do not pass secrets on the command line.
-
-Natural-language mapping:
-
-- `https://app.t3.codes/<environmentId>/<threadId>` → parse both IDs and look up that identity
-- Bare UUID → search every local environment, then connected remotes; never conclude "does not exist"
-- "Same semantics as T3's command palette" → `--active-only` (local SQLite plus per-environment `searchThreads` RPC)
-
-## Database locations
-
-Do not invent paths and do not recurse the home directory. The helper only considers:
-
-- `--db` / `--base-dir` / `--home-dir` when given
-- linked git worktree `.t3/userdata/state.sqlite` (a `.git` *file* pointing at `…/worktrees/<name>`; this outranks ambient `T3CODE_HOME` as a candidate, matching T3)
-- `$T3CODE_HOME/userdata/state.sqlite` when `T3CODE_HOME` is set (explicit home always uses `userdata`, not `dev`)
-- `~/.t3/userdata/state.sqlite` (production)
-- `~/.t3/dev/state.sqlite` (implicit development on the main checkout)
-
-If several exist, the helper lists them and searches every file that is present, tagging each hit with its database. Ask the user to pick only when the result set is genuinely ambiguous. Missing files, schema drift, and parameterized `%` / `_` / quotes are handled by the helper.
-
-Worktree-local state can outrank ambient `T3CODE_HOME` for T3 itself; still list production if it exists so a search started inside a worktree does not hide the live install.
-
-## UI-parity mode (`--active-only`)
-
-Matches T3's current built-in message search (`searchActiveThreadRows`):
-
-- excludes deleted and archived threads and deleted projects
-- excludes streaming messages
-- searches user messages
-- searches only canonical final assistant messages referenced by `projection_turns.assistant_message_id`
-- one match per thread, preferring user matches then newer threads
-- SQLite `LIKE` (ASCII case-insensitive by default)
-
-It also searches active thread titles, project titles, and branches, which the command palette does client-side. Message search in the UI starts after two characters; warn that short queries become broad `%term%` scans. Do not add indexes.
-
-## Harness notes
-
-Canonical files live in `~/.agents/skills/t3-thread-search/` (Codex user-level, Grok, Cursor, and repo-relative Claude/T3 discovery). Claude Code's user tree does not read `~/.agents`, so a thin wrapper lives at `~/.claude/skills/t3-thread-search/` and points here. Do not put a second copy under `~/.codex/skills/` — Codex's documented user path is `~/.agents/skills` (`$CODEX_HOME/skills` is a deprecated fallback). Harness-specific skills (delegate-review, grok-review) stay in their vendor trees.
-
-Examples:
-
-```bash
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" "projection rebuild performance"
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --json --thread "https://app.t3.codes/<environmentId>/<threadId>"
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --environment "<environmentId>" --thread "<threadId>"
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --remote-json /tmp/t3-search-rpc.json --active-only "reconnect"
-python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --ssh user@host --ssh-base-dir '~/.t3' --thread "<threadId>"
-```
-
-On Windows, invoke `python` on the same script path under `%USERPROFILE%\.agents\skills\t3-thread-search\scripts\t3-thread-search`.
-
-If the helper cannot run, use `sqlite3 -readonly "file:<abs>/state.sqlite?mode=ro"` with `.parameter init` / `.parameter set` and `PRAGMA query_only=ON`. Never build SQL by concatenating the user's text.
+For PRs, try native search first. The recovery `--pr` lookup uses recorded links on archived/deleted threads and reports which field matched: `pullRequests`, `branchPullRequest`, or `linkedPullRequest`. Branch associations can be inherited by subagents sharing a checkout and do not establish PR authorship. If absent, inspect the PR body's attribution block for its `thread:` line, then use native read or recovery lookup as appropriate. A missing link does not establish that no thread produced the PR.
