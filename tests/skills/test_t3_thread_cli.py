@@ -5,11 +5,12 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
-from .t3_v2_fixture import ARCHIVED, DELETED, ENVIRONMENT, NATIVE_ID, fixture
+from .t3_v2_fixture import ARCHIVED, DELETED, ENVIRONMENT, NATIVE_ID, TIME, fixture
 
 SCRIPT = (
     Path(__file__).resolve().parents[2]
@@ -74,6 +75,64 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("error:", result.stderr)
         self.assertEqual(self.invoke("--help").returncode, 0)
+
+    def test_miss_hints_explain_the_lookup_scope(self):
+        for argv, hints in (
+            (
+                ["agent-authored opening prompt"],
+                ["archived", "Active threads are excluded", "not indexed"],
+            ),
+            (["--provider-id", NATIVE_ID[:18]], ["exact", "Prefixes", "this store"]),
+            (
+                ["--include-deleted", "--thread", ARCHIVED],
+                ["No retained deleted record", "native read", "--provider-id"],
+            ),
+            (
+                ["--pr", "https://github.com/owner/home-lab/pull/999"],
+                ["this store", "attribution thread:", "native search"],
+            ),
+        ):
+            with self.subTest(argv=argv):
+                result = self.invoke("--json", *argv)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertEqual(payload["results"], [])
+                self.assertEqual(len(payload["warnings"]), 1)
+                text = self.invoke(*argv)
+                self.assertEqual(text.returncode, 0, text.stderr)
+                for hint in hints:
+                    self.assertIn(hint, payload["warnings"][0])
+                    self.assertIn(hint, text.stderr)
+
+    def test_deleted_text_output_shows_dates_and_empty_metadata(self):
+        with sqlite3.connect(self.db) as conn:
+            conn.execute(
+                "UPDATE orchestration_v2_projection_threads SET payload_json='{}' WHERE thread_id=?",
+                (DELETED,),
+            )
+        result = self.invoke("--include-deleted", "--thread", DELETED)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("archived: -", result.stdout)
+        self.assertIn("deleted: " + TIME, result.stdout)
+        self.assertIn("branch: -  worktree: -", result.stdout)
+        self.assertIn("provider: -", result.stdout)
+        self.assertNotIn("None", result.stdout)
+        self.assertNotIn("context:", result.stdout)
+        payload = json.loads(self.invoke("--json", "--include-deleted", "--thread", DELETED).stdout)
+        self.assertIsNone(payload["results"][0]["provider"])
+
+    def test_legacy_sibling_is_reported_only_when_listing_databases(self):
+        legacy = self.db.with_name("state.sqlite")
+        legacy.touch()
+        result = self.invoke("--json", "Spark BIOS")
+        self.assertEqual(len(json.loads(result.stdout)["databases"]), 1)
+        self.assertNotIn(str(legacy), self.invoke("Spark BIOS").stdout)
+        listed = self.invoke("--list-dbs")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn(str(self.db), listed.stdout)
+        self.assertIn(str(legacy), listed.stdout)
+        self.assertIn("legacy/stale", listed.stdout)
+        self.assertNotIn("results:", listed.stdout)
 
     def test_missing_and_unsupported_database_errors(self):
         self.db.unlink()

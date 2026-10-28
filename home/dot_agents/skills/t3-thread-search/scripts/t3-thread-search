@@ -255,10 +255,6 @@ def search(
             [*params, host, repository, number, args.limit + 1],
         )
         matches = [result(row, database, "pr", args.pr) for row in rows]
-        if not matches:
-            warnings.append(
-                "No stored recovery link found; check the PR body's attribution thread: line, or native search for active threads."
-            )
     else:
         for source, expression in (
             ("title", "t.title"),
@@ -341,6 +337,24 @@ def search(
     ordered = list(best.values())
     ordered.sort(key=lambda item: (item["updated_at"] or "", item["thread_id"]), reverse=True)
     ordered.sort(key=lambda item: rank[item["source"]])
+    if not ordered:
+        if args.provider_id:
+            warnings.append(
+                "No exact provider thread/session/native ID match in this store. Prefixes and provider names are not searched."
+            )
+        elif args.thread:
+            warnings.append(
+                "No retained deleted record with this ID in this store. Active and archived IDs are excluded; use native read for those. If this is a provider UUID, try --provider-id."
+            )
+        elif args.pr:
+            warnings.append(
+                "No stored recovery link found in this store; check the PR body's attribution thread: line, or native search for active threads."
+            )
+        else:
+            scope_name = "archived/deleted" if args.include_deleted else "archived"
+            warnings.append(
+                f"No matching {scope_name} recovery records in this store. Active threads are excluded; agent-authored user prompts and subagent transcripts are not indexed. Try a title, or native read for a known surviving ID."
+            )
     return ordered[: args.limit], warnings, capped or len(ordered) > args.limit
 
 
@@ -400,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("Provide a recovery query, --provider-id, --thread, --pr, or --list-dbs.")
     try:
         paths = database_paths(args.db)
-        databases = [database_info(path) for path in paths]
+        databases = [database_info(path) for path in (paths if args.list_dbs else paths[:1])]
         results, warnings, truncated = [], [], False
         if not args.list_dbs:
             conn = connect_readonly(paths[0])
@@ -408,10 +422,6 @@ def main(argv: list[str] | None = None) -> int:
                 results, warnings, truncated = search(conn, databases[0], args)
             finally:
                 conn.close()
-            if not results:
-                warnings.append(
-                    "No matching recovery records in this store. Use native tools for ordinary active-thread lookup."
-                )
         report = {
             "mode": "list-dbs"
             if args.list_dbs
@@ -431,18 +441,21 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"database: {database['path']} [{database['role']}] env={database['environment_id'] or 'unknown'} exists={database['exists']}"
                 )
-            print(f"results: {len(results)}{' (truncated)' if truncated else ''}")
-            for item in results:
+            if not args.list_dbs:
+                print(f"results: {len(results)}{' (truncated)' if truncated else ''}")
+            for record in results:
+                item = {key: value if value is not None else "-" for key, value in record.items()}
                 print(
                     f"\n{item['scoped_id']}  {item['title']} [{item['status']}]\n  project: {item['project_title']}  {item['workspace_root']}"
                 )
                 print(
                     f"  branch: {item['branch']}  worktree: {item['worktree_path']}\n  created: {item['created_at']}  updated: {item['updated_at']}"
                 )
+                print(f"  archived: {item['archived_at']}  deleted: {item['deleted_at']}")
                 print(
                     f"  provider: {item['provider']}  thread={item['provider_thread_id']}  session={item['provider_session_id']}  native={item['native_id']}"
                 )
-                if item["snippet"]:
+                if record["snippet"]:
                     print(f"  context: {item['snippet']}")
             for warning in warnings:
                 print(f"warning: {warning}", file=sys.stderr)
