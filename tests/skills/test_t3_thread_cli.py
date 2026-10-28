@@ -1,105 +1,108 @@
-"""Exercise the shipped command and compatibility wrappers as users invoke them."""
-from __future__ import annotations
+"""Run the one shipped recovery entry point as a user invokes it."""
 
+from __future__ import annotations
 import hashlib
 import json
+from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from .t3_v2_fixture import ARCHIVED, DELETED, ENVIRONMENT, NATIVE_ID, fixture
 
-from .t3_v2_fixture import ENVIRONMENT, THREAD, fixture
-
-SCRIPTS = Path(__file__).resolve().parents[2] / 'home/dot_agents/skills/t3-thread-search/scripts'
+SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / "home/dot_agents/skills/t3-thread-search/scripts/t3-thread-search"
+)
 
 
 class CliTests(unittest.TestCase):
-    def setUp(self) -> None:
+    def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.directory = Path(self.tmp.name)
-        self.db = self.directory / 'store/userdata/statev2.sqlite'
+        self.root = Path(self.tmp.name)
+        self.db = self.root / "userdata/statev2.sqlite"
         fixture(self.db)
-        self.cwd = self.directory / 'unrelated-cwd'
-        self.cwd.mkdir()
 
-    def invoke(self, script: str, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run([sys.executable, str(SCRIPTS / script), *args],
-                              cwd=self.cwd, capture_output=True, text=True)
+    def invoke(self, *argv):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--db", str(self.db), *argv],
+            capture_output=True,
+            text=True,
+            cwd=self.root,
+        )
 
-    def test_search_and_status_match_compatibility_wrappers(self) -> None:
-        for command, args in (
-            ('search', ['--json', '--db', str(self.db), 'Spark BIOS']),
-            ('search', ['--json', '--db', str(self.db), '--pr', '123']),
-            ('search', ['--json', '--db', str(self.db), '--thread', THREAD]),
-            ('search', ['--json', '--db', str(self.db), '--list-dbs']),
-            ('status', ['--json', '--db', str(self.db), '--thread', ENVIRONMENT + '/' + THREAD]),
+    def test_json_and_text_recovery_results(self):
+        for argv in (
+            ["Spark BIOS"],
+            ["--provider-id", NATIVE_ID],
+            ["--include-deleted", "--thread", ENVIRONMENT + "/" + DELETED],
+            ["--pr", "https://github.com/owner/home-lab/pull/123"],
+            ["--list-dbs"],
         ):
-            with self.subTest(command=command, args=args):
-                canonical = self.invoke('t3-thread', command, *args)
-                legacy = self.invoke('t3-thread-' + command, *args)
-                self.assertEqual(canonical.returncode, 0, canonical.stderr)
-                self.assertEqual(legacy.returncode, canonical.returncode, legacy.stderr)
-                actual, expected = json.loads(canonical.stdout), json.loads(legacy.stdout)
-                for payload in (actual, expected):
-                    if command == 'status':
-                        payload.pop('activity_age_seconds')
-                self.assertEqual(actual, expected)
-                self.assertEqual(canonical.stderr, legacy.stderr)
+            with self.subTest(argv=argv):
+                result = self.invoke("--json", *argv)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertEqual(payload["databases"][0]["path"], str(self.db))
+                text = self.invoke(*argv)
+                self.assertEqual(text.returncode, 0, text.stderr)
+                if "--list-dbs" not in argv:
+                    self.assertIn(payload["results"][0]["scoped_id"], text.stdout)
 
-    def test_help_and_usage_errors(self) -> None:
-        for args, fragment in (
-            (['--help'], '{search,status}'),
-            (['search', '--help'], 'usage: t3-thread search'),
-            (['status', '--help'], 'usage: t3-thread status'),
+    def test_usage_and_removed_modes(self):
+        for argv in (
+            [],
+            ["--active-only", "needle"],
+            ["--since", "7d", "needle"],
+            ["--until", "2026-10-25", "needle"],
+            ["--ssh", "host"],
+            ["--remote-json", "file"],
+            ["--endpoint", "https://example.invalid"],
+            ["--watch-for", "10m"],
+            ["--environment", ENVIRONMENT],
+            ["--base-dir", "/unused"],
+            ["--cwd", "/unused"],
+            ["--provider-id", NATIVE_ID, "extra-query"],
+            ["--limit", "0", "needle"],
+            ["--limit", "101", "needle"],
+            ["--thread", ARCHIVED],
         ):
-            result = self.invoke('t3-thread', *args)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn(fragment, result.stdout)
-        for args in ([], ['unknown'], ['status'], ['search', '--watch-for', '10m']):
-            result = self.invoke('t3-thread', *args)
-            self.assertEqual(result.returncode, 2)
-            self.assertIn('error:', result.stderr)
-        for command in ('search', 'status'):
-            args = ['--json', '--db', str(self.cwd / 'missing.sqlite'), '--thread', THREAD]
-            canonical = self.invoke('t3-thread', command, *args)
-            legacy = self.invoke('t3-thread-' + command, *args)
-            self.assertEqual(canonical.returncode, legacy.returncode)
-            self.assertNotEqual(canonical.returncode, 0)
-            self.assertEqual(canonical.stdout, legacy.stdout)
-
-    def test_removed_modes_are_rejected(self) -> None:
-        for command, flags in (
-            ('search', ['--remote-json', '/unused.json']),
-            ('search', ['--ssh', 'unused-host']),
-            ('search', ['--ssh-base-dir', '/unused']),
-            ('search', ['--endpoint', 'https://example.invalid']),
-            ('status', ['--watch-for', '10m']),
-            ('status', ['--interval', '15s']),
-        ):
-            with self.subTest(command=command, flags=flags):
-                result = self.invoke('t3-thread', command, '--thread', THREAD, *flags)
+            with self.subTest(argv=argv):
+                result = self.invoke(*argv)
                 self.assertEqual(result.returncode, 2)
-                self.assertIn('unrecognized arguments', result.stderr)
+                self.assertIn("error:", result.stderr)
+        self.assertEqual(self.invoke("--help").returncode, 0)
 
-    def test_commands_do_not_create_bytecode_or_mutate_database(self) -> None:
-        # Deploy only code into a fresh directory to catch imports creating pyc files.
-        deployed = self.directory / 'scripts'
-        shutil.copytree(SCRIPTS, deployed, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    def test_missing_and_unsupported_database_errors(self):
+        self.db.unlink()
+        result = self.invoke("--json", "needle")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("does not exist", json.loads(result.stdout)["error"])
+        self.db.touch()
+        result = self.invoke("--json", "needle")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Unsupported T3 schema", json.loads(result.stdout)["error"])
+
+    def test_standalone_command_has_no_code_or_database_writes(self):
+        script = self.root / "standalone/t3-thread-search"
+        script.parent.mkdir()
+        shutil.copy2(SCRIPT, script)
         before = hashlib.sha256(self.db.read_bytes()).digest()
-        for name, command in (('t3-thread', ['search']), ('t3-thread', ['status']),
-                              ('t3-thread-search', []), ('t3-thread-status', [])):
-            result = subprocess.run([sys.executable, str(deployed / name), *command,
-                                     '--json', '--db', str(self.db), '--thread', THREAD],
-                                    cwd=self.cwd, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
+        result = subprocess.run(
+            [sys.executable, str(script), "--json", "--db", str(self.db), "Spark BIOS"],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["results"][0]["thread_id"], ARCHIVED)
         self.assertEqual(before, hashlib.sha256(self.db.read_bytes()).digest())
-        self.assertFalse(list(deployed.rglob('__pycache__')))
-        self.assertFalse(self.db.with_name(self.db.name + '-wal').exists())
-        self.assertFalse(self.db.with_name(self.db.name + '-shm').exists())
+        self.assertEqual(list(script.parent.iterdir()), [script])
+        self.assertFalse(self.db.with_name(self.db.name + "-wal").exists())
+        self.assertFalse(self.db.with_name(self.db.name + "-shm").exists())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

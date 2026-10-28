@@ -64,6 +64,15 @@ class Profiles(unittest.TestCase):
     def apply(self):
         self.chezmoi("apply", "--exclude", "scripts", "--force")
 
+    def test_retired_t3_status_cleanup_is_scoped_to_agents(self):
+        template = (ROOT / "home/.chezmoiremove").read_text()
+        target = ".agents/skills/t3-thread-search/scripts/t3-thread-status"
+        for enabled in (False, True):
+            with self.subTest(agents=enabled):
+                self.configure(modules={"agents": enabled})
+                rendered = self.chezmoi("execute-template", template).stdout.splitlines()
+                self.assertEqual(target in rendered, enabled)
+
     def test_omarchy_preserves_system_owned_files_and_tools(self):
         self.configure()
         stock = [".bashrc", ".bash_profile", ".profile", ".config/starship.toml",

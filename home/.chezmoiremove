@@ -8,6 +8,9 @@
 .codex/skills/delegate-implementation
 .codex/skills/delegate-review
 
+# Thread execution state is provided by native T3 reads.
+.agents/skills/t3-thread-search/scripts/t3-thread-status
+
 # RTK's OpenCode 1 plugin; OpenCode 2 fails to load it and warns on every start.
 .config/opencode/plugins/rtk.ts
 
