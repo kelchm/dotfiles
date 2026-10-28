@@ -35,7 +35,7 @@ Text queries match archived titles, branches, and indexed messages. `--include-d
 
 The default is `$T3CODE_HOME/userdata/statev2.sqlite` when set, otherwise `~/.t3/userdata/statev2.sqlite`. Use `--db PATH` to select an exact local file, including a development or worktree store. `--list-dbs` reports the selected path and any legacy `state.sqlite` sibling as stale/unsupported. Legacy schemas are never searched. Results report the adjacent `environment-id`; scoped thread IDs must match the selected store. A local miss says nothing about other machines or stores. For another machine's recovery records, run the helper on that machine; a connected T3 app does not provide this script with remote database access.
 
-Connections use `mode=ro`, `PRAGMA query_only=ON`, and parameterized queries. Never copy a live database, vacuum, index, migrate, mutate it, or start a server against it. Without a WAL or rollback journal beside the resolved path, reads use `immutable=1` to avoid creating sidecars. A live WAL requires normal read-only locking; SQLite may update `-shm` to read uncheckpointed data.
+Connections use `mode=ro`, `PRAGMA query_only=ON`, parameterized queries, and normal SQLite reader locking even when no WAL is present. Never copy a live database, vacuum, index, migrate, mutate it, or start a server against it. SQLite may create or update WAL sidecars needed for read access. Database paths and environment identity follow symlinks to the actual store.
 
 ## Coverage limits
 
@@ -43,4 +43,4 @@ Message search uses T3's existing FTS index with literal phrases, never a full m
 
 The index excludes streaming messages, **all agent-authored user prompts**, and subagent transcripts. Archived subagents can still be found by title; use native read once their ID is known. Deleted records may contain little or no message history; this is residual-data lookup, not full conversation restoration.
 
-For PRs, try native search first. The recovery `--pr` lookup uses recorded links on archived/deleted threads. If absent, inspect the PR body's attribution block for its `thread:` line, then use native read or recovery lookup as appropriate. A missing link does not establish that no thread produced the PR.
+For PRs, try native search first. The recovery `--pr` lookup uses recorded links on archived/deleted threads and reports which field matched: `pullRequests`, `branchPullRequest`, or `linkedPullRequest`. Branch associations can be inherited by subagents sharing a checkout and do not establish PR authorship. If absent, inspect the PR body's attribution block for its `thread:` line, then use native read or recovery lookup as appropriate. A missing link does not establish that no thread produced the PR.

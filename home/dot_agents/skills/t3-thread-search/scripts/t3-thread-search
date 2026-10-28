@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import sqlite3
 import sys
+import unicodedata
 from urllib.parse import unquote, urlparse
 
 sys.dont_write_bytecode = True
@@ -38,16 +39,18 @@ class SearchError(Exception):
 def database_paths(explicit: str | None) -> list[Path]:
     if explicit:
         path = Path(explicit).expanduser()
-        legacy = path.with_name("state.sqlite")
-        return [path, legacy] if path.name == "statev2.sqlite" and legacy.is_file() else [path]
-    import os
+    else:
+        import os
 
-    base = Path(os.environ.get("T3CODE_HOME") or Path.home() / ".t3").expanduser() / "userdata"
-    live, legacy = base / "statev2.sqlite", base / "state.sqlite"
-    return [live, legacy] if legacy.is_file() else [live]
+        base = Path(os.environ.get("T3CODE_HOME") or Path.home() / ".t3").expanduser()
+        path = base / "userdata/statev2.sqlite"
+    path = path.resolve()
+    legacy = path.with_name("state.sqlite")
+    return [path, legacy] if path.name == "statev2.sqlite" and legacy.is_file() else [path]
 
 
 def database_info(path: Path) -> dict:
+    path = path.resolve()
     env_file = path.parent / "environment-id"
     environment = env_file.read_text().strip() if env_file.is_file() else None
     return {
@@ -59,14 +62,7 @@ def database_info(path: Path) -> dict:
 
 
 def sqlite_uri(path: Path) -> str:
-    resolved = path.resolve()
-    uri = resolved.as_uri() + "?mode=ro"
-    # Immutable reads cannot see a live WAL and must not ignore a rollback journal.
-    if not any(
-        resolved.with_name(resolved.name + suffix).is_file() for suffix in ("-wal", "-journal")
-    ):
-        uri += "&immutable=1"
-    return uri
+    return path.resolve().as_uri() + "?mode=ro"
 
 
 def connect_readonly(path: Path) -> sqlite3.Connection:
@@ -133,13 +129,29 @@ def contains(value: str) -> str:
     return "%" + value.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
 
 
+def normalize_match_text(text: str) -> str:
+    text = text.replace("’", "'").replace("‘", "'").lower()
+    return "".join(
+        char for char in unicodedata.normalize("NFD", text) if not unicodedata.combining(char)
+    )
+
+
 def snippet(text: str | None, query: str | None) -> str | None:
     if not text:
         return None
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) <= 240:
         return text
-    position = text.lower().find(query.lower()) if query else 0
+    position = 0
+    if query:
+        query = re.sub(r"\s+", " ", query).strip()
+        offset = normalize_match_text(text).find(normalize_match_text(query))
+        if offset >= 0:
+            # Map the normalized match back to the original text, preserving accents.
+            for position, char in enumerate(text):
+                offset -= len(normalize_match_text(char))
+                if offset < 0:
+                    break
     start = min(max(0, position - 72), len(text) - 236)
     return (
         ("…" if start else "")
@@ -247,14 +259,30 @@ def search(
         matches = [result(row, database, "thread-id") for row in rows]
     elif args.pr:
         host, repository, number = parse_pr(args.pr)
-        rows = conn.execute(
-            f"""SELECT {FIELDS} {from_sql()} WHERE {scope} AND EXISTS (
-            SELECT 1 FROM json_each(t.payload_json,'$.pullRequests') pr
-            WHERE json_extract(pr.value,'$.host')=? AND json_extract(pr.value,'$.repository')=?
-              AND json_extract(pr.value,'$.number')=?) ORDER BY t.updated_at DESC,t.thread_id LIMIT ?""",
-            [*params, host, repository, number, args.limit + 1],
-        )
-        matches = [result(row, database, "pr", args.pr) for row in rows]
+        urls = [
+            f"{scheme}://{host}/{repository}/pull/{number}".lower() for scheme in ("https", "http")
+        ]
+        for field in ("pullRequests", "branchPullRequest", "linkedPullRequest"):
+            links = (
+                f"json_each(t.payload_json,'$.{field}')"
+                if field == "pullRequests"
+                else f"json_each(json_array(json_extract(t.payload_json,'$.{field}')))"
+            )
+            rows = conn.execute(
+                f"""SELECT {FIELDS} {from_sql()} WHERE {scope} AND EXISTS (
+                SELECT 1 FROM {links} pr
+                WHERE json_extract(pr.value,'$.repository')=? COLLATE NOCASE
+                  AND json_extract(pr.value,'$.number')=?
+                  AND (json_extract(pr.value,'$.host')=? COLLATE NOCASE
+                    OR (json_extract(pr.value,'$.host') IS NULL
+                      AND lower(rtrim(json_extract(pr.value,'$.url'),'/')) IN (?,?))))
+                ORDER BY t.updated_at DESC,t.thread_id LIMIT ?""",
+                [*params, repository, number, host, *urls, args.limit + 1],
+            )
+            for row in rows:
+                item = result(row, database, "pr", args.pr)
+                item["pr_sources"] = [field]
+                matches.append(item)
     else:
         for source, expression in (
             ("title", "t.title"),
@@ -324,6 +352,8 @@ def search(
     for item in matches:
         previous = best.get(item["thread_id"])
         if previous:
+            if item["source"] == "pr":
+                previous["pr_sources"].extend(item["pr_sources"])
             sources = list(dict.fromkeys([*previous["sources"], item["source"]]))
             if rank[item["source"]] < rank[previous["source"]]:
                 item["sources"] = sources
@@ -334,8 +364,8 @@ def search(
                     previous["snippet"] = item["snippet"]
         else:
             best[item["thread_id"]] = item
-    ordered = list(best.values())
-    ordered.sort(key=lambda item: (item["updated_at"] or "", item["thread_id"]), reverse=True)
+    ordered = sorted(best.values(), key=lambda item: item["thread_id"])
+    ordered.sort(key=lambda item: item["updated_at"] or "", reverse=True)
     ordered.sort(key=lambda item: rank[item["source"]])
     if not ordered:
         if args.provider_id:
@@ -457,6 +487,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 if record["snippet"]:
                     print(f"  context: {item['snippet']}")
+                if record.get("pr_sources"):
+                    print(f"  PR link fields: {', '.join(record['pr_sources'])}")
             for warning in warnings:
                 print(f"warning: {warning}", file=sys.stderr)
         return 0

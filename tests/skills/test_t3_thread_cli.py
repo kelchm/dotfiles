@@ -22,13 +22,13 @@ class CliTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.db = self.root / "userdata/statev2.sqlite"
         fixture(self.db)
 
-    def invoke(self, *argv):
+    def invoke(self, *argv, db=None):
         return subprocess.run(
-            [sys.executable, str(SCRIPT), "--db", str(self.db), *argv],
+            [sys.executable, str(SCRIPT), "--db", str(db or self.db), *argv],
             capture_output=True,
             text=True,
             cwd=self.root,
@@ -51,6 +51,25 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(text.returncode, 0, text.stderr)
                 if "--list-dbs" not in argv:
                     self.assertIn(payload["results"][0]["scoped_id"], text.stdout)
+                if "--pr" in argv:
+                    self.assertIn("PR link fields: pullRequests", text.stdout)
+
+    def test_symlink_uses_the_target_environment_and_legacy_sibling(self):
+        alias = self.root / "another-store/statev2.sqlite"
+        alias.parent.mkdir()
+        alias.symlink_to(self.db)
+        alias.with_name("environment-id").write_text("00000000-0000-0000-0000-000000000001")
+        legacy = self.db.with_name("state.sqlite")
+        legacy.touch()
+        result = self.invoke(
+            "--json", "--include-deleted", "--thread", ENVIRONMENT + "/" + DELETED, db=alias
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["results"][0]["scoped_id"], ENVIRONMENT + "/" + DELETED)
+        self.assertEqual(payload["results"][0]["database"], str(self.db.resolve()))
+        listed = json.loads(self.invoke("--json", "--list-dbs", db=alias).stdout)
+        self.assertEqual([d["path"] for d in listed["databases"]], [str(self.db), str(legacy)])
 
     def test_usage_and_removed_modes(self):
         for argv in (

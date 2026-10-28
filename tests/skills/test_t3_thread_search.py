@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import hashlib
+import json
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
@@ -35,7 +36,7 @@ class RecoveryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.db = self.root / "userdata/statev2.sqlite"
         fixture(self.db)
 
@@ -184,6 +185,44 @@ class RecoveryTests(unittest.TestCase):
             with self.assertRaises(recovery.SearchError):
                 self.search("--pr", value)
 
+    def test_pr_lookup_covers_recorded_link_shapes_and_reports_the_matching_fields(self):
+        link = {
+            "projectId": "p",
+            "repository": "owner/home-lab",
+            "number": 717,
+            "url": "https://github.com/owner/home-lab/pull/717",
+        }
+        payload = {
+            "pullRequests": [dict(link, host="github.com")],
+            "branchPullRequest": link,
+            "linkedPullRequest": link,
+        }
+        for field in payload:
+            with self.subTest(field=field):
+                self.execute(
+                    "UPDATE orchestration_v2_projection_threads SET payload_json=? WHERE thread_id IN (?,?,?)",
+                    (json.dumps({field: payload[field]}), THREAD, ARCHIVED, DELETED),
+                )
+                found, _, _ = self.search("--pr", link["url"])
+                self.assertEqual([item["thread_id"] for item in found], [ARCHIVED])
+                self.assertEqual(found[0]["pr_sources"], [field])
+                found, _, _ = self.search("--include-deleted", "--pr", link["url"])
+                self.assertEqual({item["thread_id"] for item in found}, {ARCHIVED, DELETED})
+                self.assertFalse(
+                    self.search("--pr", "https://another.example/owner/home-lab/pull/717")[0]
+                )
+        self.execute(
+            "UPDATE orchestration_v2_projection_threads SET payload_json=? WHERE thread_id=?",
+            (json.dumps(payload), ARCHIVED),
+        )
+        found, _, _ = self.search("--pr", link["url"])
+        self.assertEqual(len(found), 1)
+        self.assertEqual(set(found[0]["pr_sources"]), set(payload))
+        self.assertEqual(
+            self.search("--pr", "https://github.com/Owner/Home-Lab/pull/717")[0][0]["thread_id"],
+            ARCHIVED,
+        )
+
     def test_project_filter_applies_before_messages_and_provider_mapping(self):
         for argv in (
             ["Spark BIOS"],
@@ -273,6 +312,29 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn("user", found[0]["sources"])
         self.assertEqual(found[0]["snippet"], "Please update the Spark BIOS safely.")
 
+    def test_equal_time_results_keep_the_same_order_at_every_limit(self):
+        for thread in ("aaa", "bbb", "ccc"):
+            self.execute(
+                """INSERT INTO orchestration_v2_projection_threads
+                SELECT ?,project_id,'ordering probe',created_at,updated_at,archived_at,
+                    deleted_at,payload_json,NULL FROM orchestration_v2_projection_threads WHERE thread_id=?""",
+                (thread, ARCHIVED),
+            )
+        full, _, _ = self.search("--limit", "100", "ordering probe")
+        self.assertEqual([item["thread_id"] for item in full], ["aaa", "bbb", "ccc"])
+        for limit in (1, 2, 3):
+            found, _, truncated = self.search("--limit", str(limit), "ordering probe")
+            self.assertEqual(found, full[:limit])
+            self.assertEqual(truncated, limit < len(full))
+
+    def test_long_normalized_matches_show_the_matching_original_text(self):
+        text = "unrelated " * 80 + "don’t lose this match" + " trailing" * 80
+        with sqlite3.connect(self.db) as writer:
+            add_message(writer, "long-apostrophe", ARCHIVED, text)
+        found, _, _ = self.search("don't lose this match")
+        self.assertIn("don’t lose this match", found[0]["snippet"])
+        self.assertLessEqual(len(found[0]["snippet"]), 240)
+
     def test_fts_query_plan_and_readonly_safety(self):
         before = hashlib.sha256(self.db.read_bytes()).digest()
         conn = recovery.connect_readonly(self.db)
@@ -339,6 +401,35 @@ class RecoveryTests(unittest.TestCase):
             writer.rollback()
             writer.close()
 
+    def test_reader_opened_before_a_writer_never_returns_uncommitted_pages(self):
+        with sqlite3.connect(self.db) as setup:
+            for index in range(200):
+                setup.execute(
+                    """INSERT INTO orchestration_v2_projection_threads
+                    SELECT ?,project_id,?,created_at,updated_at,archived_at,deleted_at,'{}',NULL
+                    FROM orchestration_v2_projection_threads WHERE thread_id=?""",
+                    (f"probe-{index}", f"committed-{index}-" + "x" * 2000, ARCHIVED),
+                )
+        self.assertFalse(self.db.with_name(self.db.name + "-journal").exists())
+        reader = recovery.connect_readonly(self.db)
+        reader.execute("PRAGMA busy_timeout=20")
+        writer = sqlite3.connect(self.db)
+        try:
+            writer.execute("PRAGMA cache_size=5")
+            writer.execute("BEGIN EXCLUSIVE")
+            writer.execute(
+                "UPDATE orchestration_v2_projection_threads SET title='UNCOMMITTED-' || title WHERE thread_id LIKE 'probe-%'"
+            )
+            args = recovery.build_parser().parse_args(["UNCOMMITTED"])
+            with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                recovery.search(reader, recovery.database_info(self.db), args)
+            writer.rollback()
+            self.assertFalse(recovery.search(reader, recovery.database_info(self.db), args)[0])
+        finally:
+            writer.rollback()
+            writer.close()
+            reader.close()
+
     def test_schema_is_required_without_scan_fallback(self):
         self.execute("DROP TABLE orchestration_v2_message_search")
         with self.assertRaisesRegex(recovery.SearchError, "Unsupported T3 schema"):
@@ -372,6 +463,25 @@ class RecoveryTests(unittest.TestCase):
         conn.commit()
         conn.close()
         self.assertEqual(self.search("cafe resume")[0][0]["thread_id"], ARCHIVED)
+        for index, (query, original) in enumerate(
+            (
+                ("cafe resume one", "café résumé one"),
+                ("cafe resume two", "cafe\u0301 re\u0301sume\u0301 two"),
+            )
+        ):
+            with self.subTest(original=original):
+                # Decomposed accents and a case expansion before the match must
+                # not shift the snippet's offset in the original text.
+                with sqlite3.connect(self.db) as writer:
+                    add_message(
+                        writer,
+                        f"long-accent-{index}",
+                        ARCHIVED,
+                        "Cafe\u0301 İ " * 100 + original + " trailing" * 80,
+                    )
+                found, _, _ = self.search(query)
+                self.assertIn(original, found[0]["snippet"])
+                self.assertLessEqual(len(found[0]["snippet"]), 240)
 
 
 if __name__ == "__main__":
