@@ -26,7 +26,7 @@ def git(path, *args):
     try:
         result = subprocess.run(
             ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', str(path), *args],
-            text=True, capture_output=True, timeout=25, env=env)
+            text=True, errors='surrogateescape', capture_output=True, timeout=25, env=env)
         output = result.stdout if result.returncode == 0 else result.stderr
         return result.returncode, output.rstrip('\n')
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -36,8 +36,11 @@ def git(path, *args):
 def identity(url):
     """Normalize a remote without retaining credentials or query parameters."""
     if '://' in url:
-        parsed = urlsplit(url)
-        host, path = parsed.hostname, parsed.path.strip('/')
+        try:
+            parsed = urlsplit(url)
+            host, path = parsed.hostname, parsed.path.strip('/')
+        except ValueError:
+            return None
     else:
         match = re.match(r'^(?:[^@/]+@)?([^/:]+):(.+)$', url)
         if not match:
@@ -147,10 +150,13 @@ def inspect(path):
 def t3_metadata(path):
     if not path.exists():
         return {'database': str(path), 'error': 'not found'}
-    db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
-    db.execute('PRAGMA query_only=ON')
-    db.row_factory = sqlite3.Row
     try:
+        db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
+    except sqlite3.Error as error:
+        return {'database': str(path), 'error': str(error)}
+    try:
+        db.execute('PRAGMA query_only=ON')
+        db.row_factory = sqlite3.Row
         db.execute('BEGIN')
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
         projects = [dict(row) for row in db.execute(

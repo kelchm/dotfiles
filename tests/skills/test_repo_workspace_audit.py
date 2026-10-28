@@ -65,6 +65,18 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(entry['common_dir'], str(repo / '.git'))
         self.assertEqual(entry['untracked'], ['dirty'])
 
+    def test_bad_remote_and_database_do_not_abort_inventory(self):
+        repo = self.root / 'Development' / 'owner' / 'repo'
+        repo.mkdir(parents=True)
+        self.git(repo, 'init', '-b', 'main')
+        self.git(repo, 'remote', 'add', 'origin', 'https://[malformed/owner/repo.git')
+        args = [sys.executable, str(SCRIPT), '--root', str(self.root / 'Development'),
+                '--t3-db', str(self.root)]  # A directory, not a database.
+        report = json.loads(subprocess.run(args, capture_output=True, text=True, env=self.env,
+                                           timeout=60, check=True).stdout)
+        self.assertEqual(report['checkouts'][0]['remotes']['origin'], [None])
+        self.assertIn('error', report['t3'])
+
     def test_reports_broken_worktree_link(self):
         broken = self.root / 'Development' / 'owner' / 'orphan'
         broken.mkdir(parents=True)

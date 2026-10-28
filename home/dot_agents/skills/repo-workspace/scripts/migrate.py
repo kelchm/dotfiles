@@ -82,8 +82,12 @@ def worktrees(base):
     return entries
 
 
+def unreadable(error):
+    raise Refused(f"Cannot inspect {error.filename} for nested checkouts")
+
+
 def no_nested_repo(path):
-    for directory, dirs, files in os.walk(path, followlinks=False):
+    for directory, dirs, files in os.walk(path, onerror=unreadable, followlinks=False):
         if Path(directory) == path:
             dirs[:] = [d for d in dirs if d != '.git']
         else:

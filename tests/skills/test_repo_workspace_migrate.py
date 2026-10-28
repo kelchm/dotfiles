@@ -376,6 +376,18 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, 'Nested'):
             self.prepare()
 
+    def test_unreadable_directory_fails_nested_check_closed(self):
+        hidden = self.source / 'cache' / 'hidden'
+        hidden.mkdir(parents=True)
+        hidden.chmod(0)
+        try:
+            if os.access(hidden, os.R_OK):
+                self.skipTest('Running with privileges that bypass permissions')
+            with self.assertRaisesRegex(m.Refused, 'Cannot inspect'):
+                self.prepare()
+        finally:
+            hidden.chmod(0o700)
+
     def test_broken_worktree_is_refused(self):
         wt = self.linked()
         wt.rename(self.root / 'unregistered-location')
