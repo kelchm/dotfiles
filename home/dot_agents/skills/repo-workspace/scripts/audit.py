@@ -20,11 +20,13 @@ SKIP = {'.git', 'node_modules', '.venv', 'venv', 'vendor', 'target', 'dist',
 
 
 def git(path, *args):
+    # Inherited GIT_DIR/GIT_WORK_TREE would override -C and describe the caller's repository.
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    env.update(GIT_OPTIONAL_LOCKS='0', GIT_TERMINAL_PROMPT='0')
     try:
         result = subprocess.run(
             ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', str(path), *args],
-            text=True, capture_output=True, timeout=25,
-            env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0'})
+            text=True, capture_output=True, timeout=25, env=env)
         output = result.stdout if result.returncode == 0 else result.stderr
         return result.returncode, output.rstrip('\n')
     except (OSError, subprocess.TimeoutExpired) as error:

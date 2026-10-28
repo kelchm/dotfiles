@@ -27,10 +27,10 @@ class AuditTests(unittest.TestCase):
                         '-c', 'commit.gpgsign=false', '-C', str(path), *args],
                        check=True, capture_output=True, env=self.env, timeout=30)
 
-    def audit(self, *roots):
+    def audit(self, *roots, env=None):
         args = [arg for root in roots for arg in ('--root', str(root))]
         result = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True,
-                                text=True, env=self.env, timeout=60, check=True)
+                                text=True, env=env or self.env, timeout=60, check=True)
         return {entry['path']: entry for entry in json.loads(result.stdout)['checkouts']}
 
     def test_follows_external_worktrees_and_strips_credentials(self):
@@ -51,6 +51,19 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(checkouts[str(repo)]['remotes']['origin'], ['github.com/me/repo'])
         self.assertEqual(checkouts[str(repo)]['canonical_candidate'], 'github.com/owner/repo')
         self.assertNotIn('secret-token', json.dumps(checkouts))
+
+    def test_ignores_inherited_git_repository_variables(self):
+        scan = self.root / 'Development'
+        repo, decoy = scan / 'owner' / 'repo', self.root / 'decoy'
+        for path in (repo, decoy):
+            path.mkdir(parents=True)
+            self.git(path, 'init', '-b', 'main')
+            self.git(path, 'commit', '--allow-empty', '-m', 'Initialize fixture')
+        (repo / 'dirty').write_text('untracked')
+        env = {**self.env, 'GIT_DIR': str(decoy / '.git'), 'GIT_WORK_TREE': str(decoy)}
+        entry = self.audit(scan, env=env)[str(repo)]
+        self.assertEqual(entry['common_dir'], str(repo / '.git'))
+        self.assertEqual(entry['untracked'], ['dirty'])
 
     def test_reports_broken_worktree_link(self):
         broken = self.root / 'Development' / 'owner' / 'orphan'
