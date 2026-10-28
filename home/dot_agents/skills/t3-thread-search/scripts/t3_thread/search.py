@@ -3,21 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import os
 import re
-import shlex
 import sqlite3
-import subprocess
 import sys
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlparse
 
-from . import store
 from .store import (
     Candidate,
     SearchError,
@@ -85,7 +81,6 @@ class Match:
     database_kind: str
     rank: int
     environment_id: str | None = None
-    host: str | None = None
     provenance: str = "sqlite"
     scoped_id: str | None = None
 
@@ -114,7 +109,6 @@ class ThreadDetail:
     database: str
     database_kind: str
     environment_id: str | None = None
-    host: str | None = None
     provenance: str = "sqlite"
     scoped_id: str | None = None
 
@@ -224,8 +218,6 @@ def row_to_match(
         database_kind=database.kind,
         rank=rank,
         environment_id=database.environment_id,
-        host=database.host,
-        provenance=database.provenance,
         scoped_id=scoped_identity(database.environment_id, row["thread_id"]),
     )
 
@@ -484,8 +476,6 @@ def format_text_report(report: SearchReport) -> str:
         identity = item.get("scoped_id") or item.get("thread_id")
         lines.append(f"{index}. {identity}  {title!r}")
         env_line = f"   environment: {item.get('environment_id') or 'unknown'}"
-        if item.get("host"):
-            env_line += f"  host: {item['host']}"
         lines.append(env_line)
         project = item.get("project_title") or "(no project)"
         workspace = item.get("workspace_root") or ""
@@ -542,7 +532,6 @@ def format_thread_detail(detail: ThreadDetail) -> str:
         f"status: {format_status(detail)}",
         f"provider: {detail.provider_name or '-'}  instance={detail.provider_instance_id or '-'}  session={detail.provider_session_id or '-'}  thread={detail.provider_thread_id or '-'}",
         f"messages: {detail.message_counts or '{}'}",
-        f"host: {detail.host or '-'}",
         f"provenance: {detail.provenance}  {detail.database}",
     ]
     if detail.first_user_snippet:
@@ -551,69 +540,6 @@ def format_thread_detail(detail: ThreadDetail) -> str:
         lines.append(f"last assistant: {detail.last_assistant_snippet}")
     lines.append("Full conversation text is intentionally omitted.")
     return "\n".join(lines) + "\n"
-
-
-def standalone_search_source() -> bytes:
-    """Bundle shared storage and search in memory for `python3 -I -` over SSH.
-
-    Local commands use ordinary package imports. The remote host needs only
-    Python: no skill installation, temporary code files, or database copies.
-    """
-    shared = Path(store.__file__).read_text(encoding="utf-8")
-    module = ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    for node in ast.walk(module):
-        if isinstance(node, ast.ImportFrom) and node.level:
-            store_names = node.module == 'store' and all(
-                name.name != '*' and not name.asname for name in node.names
-            )
-            store_module = node.module is None and len(node.names) == 1 and (
-                node.names[0].name == 'store' and not node.names[0].asname
-            )
-            if node.level != 1 or node not in module.body or not (store_names or store_module):
-                raise SearchError("Cannot bundle SSH search: unsupported package dependency.")
-    module.body = [node for node in module.body if not (
-        isinstance(node, ast.ImportFrom) and (node.level or node.module == "__future__")
-    )]
-    return (shared + "\n" + ast.unparse(module) + "\nraise SystemExit(main())\n").encode("utf-8")
-
-
-def run_ssh_search(
-    target: str,
-    *,
-    remote_argv: list[str],
-    ssh_exec: Callable[[list[str], bytes], Any] | None,
-) -> tuple[dict[str, Any] | None, str | None]:
-    # OpenSSH joins the remote command into a string and runs it through the
-    # remote shell. Quote every argument so query/path values cannot inject.
-    remote_command = " ".join(["python3", "-I", "-", *(shlex.quote(arg) for arg in remote_argv)])
-    argv = [
-        "ssh",
-        "-o",
-        "BatchMode=yes",
-        "--",
-        target,
-        remote_command,
-    ]
-    stdin = standalone_search_source()
-    try:
-        if ssh_exec is not None:
-            completed = ssh_exec(argv, stdin)
-        else:
-            completed = subprocess.run(argv, input=stdin, capture_output=True, check=False)
-    except OSError as error:
-        return None, str(error)
-    if getattr(completed, "returncode", 1) != 0:
-        stderr = getattr(completed, "stderr", b"") or b""
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        return None, str(stderr).strip() or f"ssh exit {completed.returncode}"
-    stdout = getattr(completed, "stdout", b"") or b""
-    if isinstance(stdout, bytes):
-        stdout = stdout.decode("utf-8")
-    try:
-        return json.loads(stdout), None
-    except json.JSONDecodeError as error:
-        return None, f"Remote helper returned invalid JSON: {error}"
 
 
 def run_search(
@@ -634,9 +560,6 @@ def run_search(
     list_dbs: bool = False,
     now: datetime | None = None,
     environment_id: str | None = None,
-    ssh: str | None = None,
-    ssh_base_dir: str | None = None,
-    ssh_exec: Callable[[list[str], bytes], Any] | None = None,
     pr: str | None = None,
 ) -> SearchReport:
     if active_only and include_deleted:
@@ -683,7 +606,7 @@ def run_search(
     if list_dbs:
         return SearchReport("list-dbs", None, databases, [], [], False, limit)
     existing = [candidate for candidate in candidates if candidate.searchable and candidate.path.is_file()]
-    if environment_id and existing and not ssh and not any(
+    if environment_id and existing and not any(
         candidate.environment_id == environment_id for candidate in existing
     ):
         raise UsageError("no local database matched the requested environment")
@@ -719,30 +642,6 @@ def run_search(
     results = [match_to_dict(match) for match in merge_matches(matches)] + results
     truncated = len(results) > limit
 
-    if ssh:
-        remote_argv = ["--json", "--limit", str(limit), "--base-dir", ssh_base_dir or "~/.t3"]
-        for flag, value in (("--pr", pr), ("--thread", thread_id), ("--environment", environment_id),
-                            ("--project", project), ("--since", since_value), ("--until", until_value)):
-            if value:
-                remote_argv.extend([flag, value])
-        if include_deleted:
-            remote_argv.append("--include-deleted")
-        if active_only:
-            remote_argv.append("--active-only")
-        if query:
-            remote_argv.extend(["--", query])
-        payload, error = run_ssh_search(ssh, remote_argv=remote_argv, ssh_exec=ssh_exec)
-        if error:
-            raise SearchError(f"SSH search on {ssh} failed: {error}")
-        for metadata in payload["databases"]:
-            metadata.update(host=ssh, provenance="ssh")
-            databases.append(metadata)
-        for item in payload["results"]:
-            item.update(host=ssh, provenance="ssh")
-            results.append(item)
-        warnings.extend(payload["warnings"])
-        truncated = truncated or payload["truncated"] or len(results) > limit
-
     if not any(item.get("searched") for item in databases):
         errors = [item["error"] for item in databases if item.get("error")]
         if errors:
@@ -767,7 +666,7 @@ def run_search(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="t3-thread search",
-        description="Read-only search of T3 Code projection threads in statev2.sqlite.",
+        description="Local SQLite fallback for T3 thread recovery when native tools cannot cover the lookup.",
         epilog=(
             "Opens SQLite with mode=ro and PRAGMA query_only=ON. Never copies, vacuums, "
             "indexes, or starts a T3 server against the database. Default recovery search "
@@ -811,14 +710,6 @@ def build_parser() -> argparse.ArgumentParser:
         dest="environment_id",
         help="Restrict to this T3 environmentId. Combined with --thread this is the canonical identity.",
     )
-    parser.add_argument(
-        "--ssh",
-        help="Explicit SSH target that owns the database. Runs this helper remotely; never copies the remote DB.",
-    )
-    parser.add_argument(
-        "--ssh-base-dir",
-        help="Remote T3 base/home directory for --ssh (default ~/.t3 → userdata/statev2.sqlite).",
-    )
     parser.add_argument("--list-dbs", action="store_true", help="List candidate databases and exit.")
     parser.add_argument("--json", action="store_true", help="Machine-readable JSON on stdout.")
     parser.add_argument("--cwd", help="Directory used for linked-worktree discovery (default: process cwd).")
@@ -848,8 +739,6 @@ def run(args: argparse.Namespace) -> int:
             thread_id=args.thread_id,
             list_dbs=args.list_dbs,
             environment_id=args.environment_id,
-            ssh=args.ssh,
-            ssh_base_dir=args.ssh_base_dir,
             pr=args.pr,
         )
     except SearchError as error:

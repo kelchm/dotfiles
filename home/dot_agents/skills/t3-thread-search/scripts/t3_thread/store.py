@@ -47,12 +47,7 @@ class Candidate:
     kind: str
     source: str
     environment_id: str | None = None
-    host: str | None = None
-    provenance: str = "sqlite"
     searchable: bool = True
-
-    def resolved(self) -> Path:
-        return self.path.expanduser()
 
 
 @dataclass(frozen=True)
@@ -60,8 +55,6 @@ class ThreadRef:
     raw: str
     thread_id: str | None = None
     environment_id: str | None = None
-    url: str | None = None
-    host: str | None = None
 
 
 def scoped_identity(environment_id: str | None, thread_id: str | None) -> str | None:
@@ -85,7 +78,7 @@ def _parse_thread_url(raw: str) -> ThreadRef | None:
     if parsed.scheme == "t3-thread" and parsed.netloc == "v1":
         path = "/".join(decode_segment(part) for part in parsed.path.strip("/").split("/"))
         ref = parse_thread_ref(path, explicit=True)
-        return ThreadRef(raw=raw, thread_id=ref.thread_id, environment_id=ref.environment_id, url=raw) if ref else None
+        return ThreadRef(raw=raw, thread_id=ref.thread_id, environment_id=ref.environment_id) if ref else None
     if parsed.scheme not in {"http", "https"}:
         return None
     query = {key: values[-1] for key, values in parse_qs(parsed.query).items() if values}
@@ -108,8 +101,6 @@ def _parse_thread_url(raw: str) -> ThreadRef | None:
         raw=raw,
         thread_id=thread,
         environment_id=env,
-        url=raw,
-        host=parsed.netloc or None,
     )
 
 
@@ -278,8 +269,7 @@ def candidate_metadata(candidate: Candidate) -> dict[str, Any]:
         "source": candidate.source,
         "exists": exists,
         "environment_id": environment_id,
-        "host": candidate.host,
-        "provenance": candidate.provenance,
+        "provenance": "sqlite",
         "searchable": candidate.searchable,
         "role": "legacy/stale (unsupported)" if path.name == "state.sqlite" else "live",
     }
@@ -376,7 +366,5 @@ def bind_candidate(candidate: Candidate) -> Candidate:
         kind=candidate.kind,
         source=candidate.source,
         environment_id=env_id,
-        host=candidate.host,
-        provenance=candidate.provenance,
         searchable=candidate.searchable,
     )

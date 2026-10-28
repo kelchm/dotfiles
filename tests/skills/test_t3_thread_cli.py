@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -14,8 +13,6 @@ from pathlib import Path
 from .t3_v2_fixture import ENVIRONMENT, THREAD, fixture
 
 SCRIPTS = Path(__file__).resolve().parents[2] / 'home/dot_agents/skills/t3-thread-search/scripts'
-sys.path.insert(0, str(SCRIPTS))
-from t3_thread import search
 
 
 class CliTests(unittest.TestCase):
@@ -76,6 +73,8 @@ class CliTests(unittest.TestCase):
     def test_removed_modes_are_rejected(self) -> None:
         for command, flags in (
             ('search', ['--remote-json', '/unused.json']),
+            ('search', ['--ssh', 'unused-host']),
+            ('search', ['--ssh-base-dir', '/unused']),
             ('search', ['--endpoint', 'https://example.invalid']),
             ('status', ['--watch-for', '10m']),
             ('status', ['--interval', '15s']),
@@ -100,30 +99,6 @@ class CliTests(unittest.TestCase):
         self.assertFalse(list(deployed.rglob('__pycache__')))
         self.assertFalse(self.db.with_name(self.db.name + '-wal').exists())
         self.assertFalse(self.db.with_name(self.db.name + '-shm').exists())
-
-    def test_ssh_program_runs_without_package_installation(self) -> None:
-        before = hashlib.sha256(self.db.read_bytes()).digest()
-
-        shadow = self.cwd / 'json.py'
-        shadow.write_text("raise RuntimeError('remote cwd must not supply Python imports')\n")
-
-        def execute_remote(argv, stdin):
-            # Execute exactly the streamed program and remote arguments, isolated
-            # from the local package and cwd, without opening an SSH connection.
-            command = shlex.split(argv[-1])
-            self.assertEqual(command[:3], ['python3', '-I', '-'])
-            return subprocess.run([sys.executable, *command[1:]], input=stdin,
-                                  cwd=self.cwd, capture_output=True)
-
-        for args in (['Spark BIOS'], ['--thread', THREAD], ['--pr', '123']):
-            with self.subTest(args=args):
-                payload, error = search.run_ssh_search('test-host',
-                    remote_argv=['--json', '--base-dir', str(self.db.parent.parent), *args],
-                    ssh_exec=execute_remote)
-                self.assertIsNone(error)
-                self.assertIn(THREAD, [row['thread_id'] for row in payload['results']])
-        self.assertEqual(before, hashlib.sha256(self.db.read_bytes()).digest())
-        self.assertEqual(list(self.cwd.iterdir()), [shadow])
 
 
 if __name__ == '__main__':

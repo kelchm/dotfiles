@@ -209,7 +209,7 @@ def inspect_v2(conn: Any, candidate: Any, thread_id: str,
     env_id = candidate.environment_id or store.read_environment_id(candidate.path)
     return ThreadStatus(
         thread_id=thread_id, scoped_id=store.scoped_identity(env_id, thread_id), environment_id=env_id,
-        database=str(candidate.path), database_kind=candidate.kind, provenance=candidate.provenance,
+        database=str(candidate.path), database_kind=candidate.kind, provenance="sqlite",
         title=safe_summary(row['title'], 160) or '', project=safe_summary(row['project_title'], 120),
         provider=safe_summary(row['provider_name'], 80), session_status=provider_status,
         session_updated_at=row_value(row, 'session_updated_at'), turn_id=run_id, turn_state=run_state,
@@ -286,7 +286,7 @@ def format_age(seconds: float | None) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="t3-thread status", description="Read-only T3 Code thread status")
+    parser = argparse.ArgumentParser(prog="t3-thread status", description="Local projection diagnostics when native T3 thread reads are unavailable or need investigation")
     parser.add_argument("--thread", required=True, help="thread ID, environment/thread ID, or T3 URL")
     parser.add_argument("--environment", help="restrict to this environment ID")
     parser.add_argument("--db", help="exact SQLite file, userdata directory, or T3 base directory (prefers statev2.sqlite)")

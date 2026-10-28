@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shlex
 import sqlite3
 import sys
 import tempfile
@@ -475,35 +474,6 @@ class DateFilterTests(unittest.TestCase):
                 with self.assertRaises(store.UsageError):
                     tts.run_search(query=query, cwd=Path('/unused'), home=Path('/unused'), env={})
                 discover.assert_not_called()
-
-
-class SshTests(unittest.TestCase):
-    def test_remote_shell_arguments_are_quoted_and_filters_forwarded(self) -> None:
-        from types import SimpleNamespace
-        captured = {}
-        def capture_ssh(argv, stdin):
-            captured['argv'] = argv
-            return SimpleNamespace(returncode=0, stdout=json.dumps({
-                'databases': [{'path': '/remote/statev2.sqlite', 'kind': 'explicit-base',
-                               'source': '--base-dir', 'exists': True, 'searched': True}],
-                'results': [], 'warnings': [], 'truncated': False,
-            }), stderr='')
-        query = 'foo; $(id); "quoted"'
-        report = tts.run_search(query=query, cwd=Path('/unused'), home=Path('/unused'), env={},
-            ssh='user@remote', ssh_base_dir='/some path', ssh_exec=capture_ssh,
-            project='home lab', since='2026-10-25', limit=3)
-        argv = captured['argv']
-        self.assertEqual(argv[:-2], ['ssh', '-o', 'BatchMode=yes', '--'])
-        self.assertEqual(argv[-2], 'user@remote')
-        self.assertEqual(shlex.split(argv[-1]), ['python3', '-I', '-', '--json', '--limit', '3',
-            '--base-dir', '/some path', '--project', 'home lab', '--since', '2026-10-25T00:00:00', '--', query])
-        self.assertEqual(report.databases[-1]['provenance'], 'ssh')
-
-    def test_remote_failure_is_reported(self) -> None:
-        from types import SimpleNamespace
-        with self.assertRaisesRegex(store.SearchError, 'SSH search.*denied'):
-            tts.run_search(query='Spark', cwd=Path('/unused'), home=Path('/unused'), env={},
-                ssh='remote', ssh_exec=lambda argv, stdin: SimpleNamespace(returncode=255, stderr=b'denied'))
 
 
 if __name__ == "__main__":
