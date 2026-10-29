@@ -412,10 +412,23 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, 'lock'):
             self.prepare()
 
-    def test_idle_gh_stack_locks_are_allowed(self):
+    def test_idle_gh_stack_locks_allow_move_rollback_and_undo(self):
         for name in ('gh-stack.lock', 'gh-stack-operation.lock'):
             (self.source / '.git' / name).touch()
-        self.prepare()
+        data = self.prepare()
+        m.apply(self.journal, data)
+        m.rollback(self.journal, data)
+        self.journal.unlink()
+        data = self.prepare()
+        real_repair = m.repair
+        def fail_forward(base, journal):
+            if base == self.dest:
+                raise m.Refused('Injected repair failure')
+            return real_repair(base, journal)
+        with patch.object(m, 'repair', side_effect=fail_forward):
+            with self.assertRaisesRegex(m.Refused, 'Injected'):
+                m.apply(self.journal, data)
+        self.assertEqual(m.load(self.journal)['phase'], 'rolled_back')
 
     def test_busy_or_unfamiliar_locks_are_refused(self):
         common = self.source / '.git'

@@ -128,6 +128,11 @@ def idle_gh_stack_lock(lock, common):
     return not result.stdout.strip()
 
 
+def busy_locks(base):
+    common = base / '.git'
+    return [lock for lock in common.rglob('*.lock') if not idle_gh_stack_lock(lock, common)]
+
+
 def check_layout(source, destination, journal):
     for path in (source, destination, journal):
         path_arg(path)
@@ -159,8 +164,7 @@ def check_layout(source, destination, journal):
             require(not inside(path, other) and not inside(other, path), 'Nested worktrees are unsupported')
         no_nested_repo(path)
     require(not (source / '.git/objects/info/alternates').exists(), 'Object alternates need a separate plan')
-    locks = [lock for lock in (source / '.git').rglob('*.lock') if not idle_gh_stack_lock(lock, source / '.git')]
-    require(not locks, 'Git lock file exists; investigate the owning operation')
+    require(not busy_locks(source), 'Git lock file exists; investigate the owning operation')
     check_processes(paths)
     return paths
 
@@ -367,7 +371,7 @@ def rollback(journal, data):
     # Ignore only the pointers that this operation is responsible for repairing.
     verify_data(data, moved, check_links=False)
     check_processes([Path(s['path']) for s in expected(data, moved)['checkouts']])
-    require(not any((base / '.git').rglob('*.lock')), 'Git lock file exists')
+    require(not busy_locks(base), 'Git lock file exists')
     record(journal, data, 'rolling_back')
     if moved:
         rename_exclusive(destination, source)
@@ -469,7 +473,7 @@ def undo_failed_apply(journal, data):
     require(same_checkout(destination, data), 'Destination is no longer the inode this call moved')
     require(not os.path.lexists(source), 'Original path became occupied; cannot undo the move')
     check_processes([Path(s['path']) for s in expected(data, True)['checkouts']])
-    require(not any((destination / '.git').rglob('*.lock')), 'Git lock file appeared during the move')
+    require(not busy_locks(destination), 'Git lock file appeared during the move')
     record(journal, data, 'rolling_back')
     rename_exclusive(destination, source)
     repair(source, data)
