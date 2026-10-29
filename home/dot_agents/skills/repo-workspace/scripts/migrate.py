@@ -24,7 +24,7 @@ class Refused(RuntimeError):
 
 
 # T3 records a checkpoint commit per provider turn, even a read-only one.
-CHECKPOINT_REF = re.compile(r'refs/t3/orchestration-v2/checkpoints/[A-Za-z0-9_-]+=*/ordinal/[1-9][0-9]*')
+CHECKPOINT_REF = re.compile(r'refs/t3/orchestration-v2/checkpoints/[A-Za-z0-9_-]+=*/ordinal/(?:0|[1-9][0-9]*)')
 OBJECT_ID = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 
 
@@ -119,6 +119,15 @@ def check_processes(paths):
                     f"Process {process} has a cwd in an affected checkout")
 
 
+def idle_gh_stack_lock(lock, common):
+    """gh stack leaves its empty lock files behind between commands; only a held one is in use."""
+    if lock.parent != common or lock.name not in ('gh-stack.lock', 'gh-stack-operation.lock') or lock.stat().st_size:
+        return False
+    result = subprocess.run(['lsof', '-nP', '-w', '-t', '--', str(lock)], capture_output=True, text=True, timeout=30)
+    require(result.returncode in (0, 1) and not result.stderr.strip(), f"Could not inspect handles on {lock}")
+    return not result.stdout.strip()
+
+
 def check_layout(source, destination, journal):
     for path in (source, destination, journal):
         path_arg(path)
@@ -150,7 +159,8 @@ def check_layout(source, destination, journal):
             require(not inside(path, other) and not inside(other, path), 'Nested worktrees are unsupported')
         no_nested_repo(path)
     require(not (source / '.git/objects/info/alternates').exists(), 'Object alternates need a separate plan')
-    require(not any((source / '.git').rglob('*.lock')), 'Git lock file exists; investigate the owning operation')
+    locks = [lock for lock in (source / '.git').rglob('*.lock') if not idle_gh_stack_lock(lock, source / '.git')]
+    require(not locks, 'Git lock file exists; investigate the owning operation')
     check_processes(paths)
     return paths
 
