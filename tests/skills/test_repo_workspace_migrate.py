@@ -246,12 +246,22 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, 'finished after rollback'):
             m.apply(self.journal, data)
 
+    def test_non_ascii_worktree_path_round_trips(self):
+        wt = self.linked('tâche')
+        data = self.prepare()
+        m.apply(self.journal, data)
+        self.assertIn((self.dest / '.git').as_posix(), (wt / '.git').read_text(encoding='utf-8'))
+        m.rollback(self.journal, data)
+
     def test_rollback_refuses_a_corrupted_pointer_prefix(self):
         wt = self.linked()
         data = self.prepare()
         m.apply(self.journal, data)
-        marker = (wt / '.git').read_text()
-        (wt / '.git').write_text(marker.replace('gitdir: ', 'GITDIR: ', 1))
+        # Rewrite in place: Git for Windows hides the pointer file, and hidden files can't be replaced.
+        with open(wt / '.git', 'r+', encoding='utf-8', newline='') as pointer:
+            marker = pointer.read().replace('gitdir: ', 'GITDIR: ', 1)
+            pointer.seek(0)
+            pointer.write(marker)
         with self.assertRaises(m.Refused):
             m.rollback(self.journal, data)
         self.assertEqual(m.load(self.journal)['phase'], 'applied')

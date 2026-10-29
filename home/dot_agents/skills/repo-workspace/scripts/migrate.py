@@ -250,11 +250,12 @@ def capture(base, specs=None, check_links=True, checkpoints=()):
                  'config_worktree': file_hash(admin / 'config.worktree'),
                  'effective_config': digest(run('config', '--null', '--list', '--includes'))}
         if spec['admin'] != '.':
-            marker = pointer_text((path / '.git').read_text())
+            marker = pointer_text((path / '.git').read_text(encoding='utf-8'))
             if check_links:
                 require(marker == f'gitdir: {git_path(admin)}\n', 'Only absolute, canonical worktree pointers are supported')
-            state.update(marker=marker, backlink=(admin / 'gitdir').read_text(),
-                         commondir=(admin / 'commondir').read_text())
+            # Git writes these as UTF-8; Windows would otherwise decode them with the locale code page.
+            state.update(marker=marker, backlink=(admin / 'gitdir').read_text(encoding='utf-8'),
+                         commondir=(admin / 'commondir').read_text(encoding='utf-8'))
             require(Path(state['backlink'].strip()) == path / '.git', 'Incorrect worktree backlink')
         states.append(state)
     refs = git(base, 'for-each-ref', '--format=%(refname) %(objectname)').splitlines(keepends=True)
