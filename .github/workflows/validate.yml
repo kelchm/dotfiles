@@ -29,6 +29,23 @@ jobs:
       - name: Check isolated profiles and skills
         run: python3 -m unittest discover -s tests
 
+  # The repo-workspace move helper uses each platform's own rename and Git
+  # builds, so its fixtures run natively too. Linux runs them in profiles.
+  move-helper:
+    name: move helper (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check the move helper
+        run: python -m unittest -v tests.skills.test_repo_workspace_migrate
+
   # Run a real standalone apply, scripts included, on each native platform.
   # Package installs (brew bundle, winget import) stay off: runner images
   # differ from personal machines and the imports are slow.

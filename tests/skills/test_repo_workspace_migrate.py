@@ -73,7 +73,8 @@ class MigrationTests(unittest.TestCase):
         data = self.prepare()
         self.assertTrue(self.source.exists())
         self.assertFalse(self.dest.exists())
-        self.assertEqual(self.journal.stat().st_mode & 0o777, 0o600)
+        if not m.WINDOWS:  # Windows reports access through ACLs, not mode bits.
+            self.assertEqual(self.journal.stat().st_mode & 0o777, 0o600)
         m.apply(self.journal, data)
         self.assertFalse(self.source.exists())
         self.assertEqual(self.dest.stat().st_ino, before_inode)
@@ -94,9 +95,9 @@ class MigrationTests(unittest.TestCase):
         m.apply(self.journal, data)
         for path, head in zip((self.dest, one, two), heads):
             self.assertEqual(self.run_git(path, 'rev-parse', 'HEAD'), head)
-        self.assertIn(str(self.dest / '.git'), (one / '.git').read_text())
+        self.assertIn((self.dest / '.git').as_posix(), (one / '.git').read_text())
         m.rollback(self.journal, data)
-        self.assertIn(str(self.source / '.git'), (one / '.git').read_text())
+        self.assertIn((self.source / '.git').as_posix(), (one / '.git').read_text())
 
     def test_repair_failure_restores_base_and_pointers(self):
         wt = self.linked()
@@ -119,14 +120,14 @@ class MigrationTests(unittest.TestCase):
         extra = self.home / 'canonical.gitconfig'
         extra.write_text('[user]\n\temail = changed@example.invalid\n')
         (self.home / '.gitconfig').write_text(
-            f'[includeIf "gitdir:{self.dest.parent}/"]\n\tpath = {extra}\n')
+            f'[includeIf "gitdir:{self.dest.parent.as_posix()}/"]\n\tpath = {extra.as_posix()}\n')
         data = self.prepare()
         with self.assertRaisesRegex(m.Refused, 'effective_config'):
             m.apply(self.journal, data)
         self.assertEqual(data['phase'], 'rolled_back')
         self.assertTrue(self.source.exists())
         self.assertFalse(self.dest.exists())
-        self.assertIn(str(self.source / '.git'), (wt / '.git').read_text())
+        self.assertIn((self.source / '.git').as_posix(), (wt / '.git').read_text())
         m.verify_data(data, False)
 
     def test_automatic_undo_keeps_concurrent_changes_and_reports_them(self):
@@ -187,17 +188,23 @@ class MigrationTests(unittest.TestCase):
         data = self.prepare()
         m.apply(self.journal, data)
         self.assertEqual((wt / '.git').read_text(),
-                         f"gitdir: {self.dest / '.git' / data['before']['checkouts'][1]['admin']}\n")
+                         f"gitdir: {(self.dest / '.git' / data['before']['checkouts'][1]['admin']).as_posix()}\n")
         self.assertEqual(m.git(self.dest, 'config', '--local', '--get', 'extensions.relativeWorktrees', ok=(0, 1)), b'')
         m.rollback(self.journal, data)
 
     def test_absolute_path_config_is_refused_without_exposing_values(self):
-        self.run_git(self.source, 'config', 'core.hooksPath', str(self.source / '.githooks'))
-        with self.assertRaisesRegex(m.Refused, 'core.hookspath') as result:
-            self.prepare()
-        self.assertNotIn('.githooks', str(result.exception))
-        self.assertFalse(self.journal.exists())
-        self.assertTrue(self.source.exists())
+        # Windows tools write either slash, mixed slashes, and any case; elsewhere these coincide.
+        hooks = self.source / '.githooks'
+        windows = [hooks.as_posix().upper(), str(hooks.parent) + '/.githooks'] if m.WINDOWS else []
+        spellings = [str(hooks), hooks.as_posix(), *windows]
+        for value in spellings:
+            with self.subTest(value=value):
+                self.run_git(self.source, 'config', 'core.hooksPath', value)
+                with self.assertRaisesRegex(m.Refused, 'core.hookspath') as result:
+                    self.prepare()
+                self.assertNotIn('.githooks', str(result.exception))
+                self.assertFalse(self.journal.exists())
+                self.assertTrue(self.source.exists())
 
     def test_wrong_case_existing_destination_parent_is_refused(self):
         parent = self.root / 'CaseOwner'
@@ -239,6 +246,27 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, 'finished after rollback'):
             m.apply(self.journal, data)
 
+    def test_non_ascii_worktree_path_round_trips(self):
+        wt = self.linked('tâche')
+        data = self.prepare()
+        m.apply(self.journal, data)
+        self.assertIn((self.dest / '.git').as_posix(), (wt / '.git').read_text(encoding='utf-8'))
+        m.rollback(self.journal, data)
+
+    def test_rollback_refuses_a_corrupted_pointer_prefix(self):
+        wt = self.linked()
+        data = self.prepare()
+        m.apply(self.journal, data)
+        # Rewrite in place: Git for Windows hides the pointer file, and hidden files can't be replaced.
+        with open(wt / '.git', 'r+', encoding='utf-8', newline='') as pointer:
+            marker = pointer.read().replace('gitdir: ', 'GITDIR: ', 1)
+            pointer.seek(0)
+            pointer.write(marker)
+        with self.assertRaises(m.Refused):
+            m.rollback(self.journal, data)
+        self.assertEqual(m.load(self.journal)['phase'], 'applied')
+        self.assertTrue(self.dest.exists())
+
     def test_partial_repair_failure_restores_every_pointer(self):
         one, two = self.linked('one'), self.linked('two')
         data = self.prepare()
@@ -253,7 +281,7 @@ class MigrationTests(unittest.TestCase):
                 m.apply(self.journal, data)
         self.assertEqual(data['phase'], 'rolled_back')
         for path in (one, two):
-            self.assertIn(str(self.source / '.git'), (path / '.git').read_text())
+            self.assertIn((self.source / '.git').as_posix(), (path / '.git').read_text())
 
     def test_resume_rollback_after_crash_between_rename_and_repair(self):
         self.linked()
@@ -439,6 +467,8 @@ class MigrationTests(unittest.TestCase):
                 with self.assertRaisesRegex(m.Refused, 'lock'):
                     self.prepare()
                 lock.unlink()
+        if m.WINDOWS:
+            return  # A held lock blocks the rename instead; see the in-use test.
         lock = common / 'gh-stack.lock'
         lock.touch()
         holder = subprocess.Popen([sys.executable, '-c', 'import sys, time; f = open(sys.argv[1]); time.sleep(30)', lock])
@@ -481,6 +511,7 @@ class MigrationTests(unittest.TestCase):
                     self.fail('Second lock acquired')
         self.assertFalse(self.journal.with_name(self.journal.name + '.lock').exists())
 
+    @unittest.skipIf(m.WINDOWS, 'Windows has no lsof; the rename itself is the guard')
     def test_real_cwd_guard(self):
         self.process_guard.stop()
         process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], cwd=self.source)
@@ -491,6 +522,32 @@ class MigrationTests(unittest.TestCase):
         finally:
             process.terminate()
             process.wait(timeout=10)
+
+    @unittest.skipUnless(m.WINDOWS, 'Windows drive letters')
+    def test_lowercase_drive_letter_round_trips(self):
+        self.linked()
+        lower = lambda path: Path(str(path)[0].lower() + str(path)[1:])
+        data = m.prepare(lower(self.source), lower(self.dest), self.journal)
+        m.apply(self.journal, data)
+        m.verify_data(data, True)
+        m.rollback(self.journal, data)
+
+    @unittest.skipUnless(m.WINDOWS, 'Windows-only guard')
+    def test_windows_will_not_move_a_directory_in_use(self):
+        data = self.prepare()
+        process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], cwd=self.source)
+        try:
+            with self.assertRaises(OSError):
+                m.apply(self.journal, data)
+        finally:
+            process.terminate()
+            process.wait(timeout=10)
+        with open(self.source / 'tracked'):
+            with self.assertRaises(OSError):
+                m.apply(self.journal, data)
+        self.assertEqual(m.load(self.journal)['phase'], 'prepared')
+        self.assertFalse(self.dest.exists())
+        m.apply(self.journal, data)
 
     def checkpoint(self, path, ordinal, tree='HEAD^{tree}', parent='HEAD', ref=None, named=None):
         """Mimic T3: a commit of the clean HEAD tree, parented on HEAD, under a per-thread ref."""

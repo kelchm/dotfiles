@@ -26,6 +26,7 @@ class Refused(RuntimeError):
 # T3 records a checkpoint commit per provider turn, even a read-only one.
 CHECKPOINT_REF = re.compile(r'refs/t3/orchestration-v2/checkpoints/[A-Za-z0-9_-]+=*/ordinal/(?:0|[1-9][0-9]*)')
 OBJECT_ID = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
+WINDOWS = sys.platform == 'win32'
 
 
 def require(condition, message):
@@ -50,6 +51,26 @@ def path_arg(value):
         require(part in names, f"Path spelling differs from disk at {current}; use the exact existing name")
         parent = current
     return path
+
+
+def git_path(path):
+    """Spell a path as Git writes it: forward slashes, compared without case on Windows."""
+    return git_text(Path(path).as_posix())
+
+
+def git_text(text):
+    """Normalize path-bearing text from Git so it compares with git_path on every platform."""
+    return text.replace('\\', '/').lower() if WINDOWS else text
+
+
+def pointer_text(text):
+    """Normalize only the path in a worktree pointer; its 'gitdir: ' prefix must stay exact."""
+    prefix = 'gitdir: '
+    return prefix + git_text(text[len(prefix):]) if text.startswith(prefix) else text
+
+
+def output_path(output):
+    return Path(os.fsdecode(output.rstrip(b'\n')))
 
 
 def inside(path, parent):
@@ -103,6 +124,10 @@ def no_nested_repo(path):
 
 def check_processes(paths):
     """Best-effort visibility is limited to the current user's cwd handles."""
+    if WINDOWS:
+        # No cwd listing here, but Windows refuses to rename a directory while a
+        # process has its cwd or an open file inside it. Retained worktrees go unchecked.
+        return
     # Suppress warnings about unrelated unmounted/network volumes. Errors still
     # fail the command; this remains a best-effort guard, not a process lock.
     result = subprocess.run(['lsof', '-nP', '-w', '-a', '-u', str(os.getuid()), '-d', 'cwd', '-Fpn'],
@@ -123,6 +148,8 @@ def idle_gh_stack_lock(lock, common):
     """gh stack leaves its empty lock files behind between commands; only a held one is in use."""
     if lock.parent != common or lock.name not in ('gh-stack.lock', 'gh-stack-operation.lock') or lock.stat().st_size:
         return False
+    if WINDOWS:
+        return True  # A held handle makes the rename itself fail.
     result = subprocess.run(['lsof', '-nP', '-w', '-t', '--', str(lock)], capture_output=True, text=True, timeout=30)
     require(result.returncode in (0, 1) and not result.stderr.strip(), f"Could not inspect handles on {lock}")
     return not result.stdout.strip()
@@ -138,9 +165,9 @@ def check_layout(source, destination, journal):
         path_arg(path)
     require(source.is_dir() and (source / '.git').is_dir(), 'Source must be a primary checkout')
     require(not (source / '.git').is_symlink(), 'Git directory must not be a symlink')
-    require(git(source, 'rev-parse', '--show-toplevel').rstrip(b'\n') == os.fsencode(source),
+    require(output_path(git(source, 'rev-parse', '--show-toplevel')) == source,
             'Source must equal the Git top-level path')
-    require(Path(os.fsdecode(git(source, 'rev-parse', '--absolute-git-dir').strip())) == source / '.git',
+    require(output_path(git(source, 'rev-parse', '--absolute-git-dir')) == source / '.git',
             'Separate Git directories are outside this helper scope')
     require(not inside(destination, source) and not inside(source, destination),
             'Source and destination must not overlap')
@@ -169,11 +196,15 @@ def check_layout(source, destination, journal):
     return paths
 
 
+def mentions(value, path):
+    return git_path(path) in git_text(os.fsdecode(value))
+
+
 def check_path_config(source, paths):
     for path in paths:
         entries = git(path, 'config', '--null', '--list', '--includes').split(b'\0')
         keys = sorted({os.fsdecode(entry.partition(b'\n')[0]) for entry in entries
-                       if os.fsencode(source) in entry.partition(b'\n')[2]})
+                       if mentions(entry.partition(b'\n')[2], source)})
         require(not keys, f"Config refers to the old checkout path at {path}: {', '.join(keys)}; "
                 'resolve those path consumers before preparing a move (values withheld)')
 
@@ -184,7 +215,7 @@ def capture(base, specs=None, check_links=True, checkpoints=()):
     if specs is None:
         specs = []
         for path in paths:
-            admin = Path(os.fsdecode(git(path, 'rev-parse', '--absolute-git-dir').strip()))
+            admin = output_path(git(path, 'rev-parse', '--absolute-git-dir'))
             require(admin == common or admin.parent == common / 'worktrees',
                     'Worktree uses an unexpected Git directory')
             specs.append({'path': str(path), 'admin': str(admin.relative_to(common))})
@@ -201,9 +232,9 @@ def capture(base, specs=None, check_links=True, checkpoints=()):
         def run(*args, **kw):
             return git(path, *args, admin=admin, **kw)
         if check_links:
-            require(git(path, 'rev-parse', '--show-toplevel').rstrip(b'\n') == os.fsencode(path),
+            require(output_path(git(path, 'rev-parse', '--show-toplevel')) == path,
                     f"Incorrect Git top-level path: {path}")
-            require(Path(os.fsdecode(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir').strip())) == common,
+            require(output_path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir')) == common,
                     f"Incorrect Git common directory: {path}")
         require(not run('status', '--porcelain=v1', '--untracked-files=all'), f"Dirty checkout: {path}")
         require(not (path / '.gitmodules').exists() and not run('submodule', 'status'),
@@ -219,11 +250,12 @@ def capture(base, specs=None, check_links=True, checkpoints=()):
                  'config_worktree': file_hash(admin / 'config.worktree'),
                  'effective_config': digest(run('config', '--null', '--list', '--includes'))}
         if spec['admin'] != '.':
-            marker = (path / '.git').read_text()
+            marker = pointer_text((path / '.git').read_text(encoding='utf-8'))
             if check_links:
-                require(marker == f'gitdir: {admin}\n', 'Only absolute, canonical worktree pointers are supported')
-            state.update(marker=marker, backlink=(admin / 'gitdir').read_text(),
-                         commondir=(admin / 'commondir').read_text())
+                require(marker == f'gitdir: {git_path(admin)}\n', 'Only absolute, canonical worktree pointers are supported')
+            # Git writes these as UTF-8; Windows would otherwise decode them with the locale code page.
+            state.update(marker=marker, backlink=(admin / 'gitdir').read_text(encoding='utf-8'),
+                         commondir=(admin / 'commondir').read_text(encoding='utf-8'))
             require(Path(state['backlink'].strip()) == path / '.git', 'Incorrect worktree backlink')
         states.append(state)
     refs = git(base, 'for-each-ref', '--format=%(refname) %(objectname)').splitlines(keepends=True)
@@ -233,15 +265,21 @@ def capture(base, specs=None, check_links=True, checkpoints=()):
         require(line in refs, f"Recorded checkpoint is missing or moved: {checkpoint['ref']}")
         refs.remove(line)
     return {'checkouts': states, 'refs': digest(b''.join(refs)),
-            'config': file_hash(common / 'config'), 'worktrees': git(base, 'worktree', 'list', '--porcelain', '-z').hex()}
+            'config': file_hash(common / 'config'), 'worktrees': worktree_listing(base).hex()}
+
+
+def worktree_listing(base):
+    fields = git(base, 'worktree', 'list', '--porcelain', '-z').split(b'\0')
+    return b'\0'.join(b'worktree ' + os.fsencode(git_text(os.fsdecode(field[9:])))
+                      if field.startswith(b'worktree ') else field for field in fields)
 
 
 def expected(data, moved):
     result = json.loads(json.dumps(data['before']))
     if not moved:
         return result
-    old, new = data['source'], data['destination']
-    result['checkouts'][0]['path'] = new
+    result['checkouts'][0]['path'] = data['destination']
+    old, new = git_path(data['source']), git_path(data['destination'])
     for state in result['checkouts'][1:]:
         state['marker'] = state['marker'].replace(f'gitdir: {old}/.git/', f'gitdir: {new}/.git/', 1)
     listing = bytes.fromhex(result['worktrees'])
@@ -262,7 +300,8 @@ def verify_data(data, moved, check_links=True):
             if 'marker' in actual:
                 # Git repair may have stopped partway through this list.
                 original = data['before']['checkouts'][i]['marker']
-                allowed = {original, original.replace(data['source'] + '/.git/', data['destination'] + '/.git/', 1)}
+                old, new = git_path(data['source']), git_path(data['destination'])
+                allowed = {original, original.replace(f'gitdir: {old}/.git/', f'gitdir: {new}/.git/', 1)}
                 require(actual['marker'] in allowed, 'Worktree pointer changed outside this migration')
                 actual['marker'] = desired['marker']
     for key in want:
@@ -318,6 +357,9 @@ def record(journal, data, phase):
 
 def rename_exclusive(source, destination):
     """Atomic no-overwrite rename. Refuse platforms without an exclusive API."""
+    if WINDOWS:
+        os.rename(source, destination)  # MoveFileExW without REPLACE_EXISTING: never overwrites
+        return
     libc = ctypes.CDLL(None, use_errno=True)
     if sys.platform == 'darwin':
         function = libc.renamex_np
