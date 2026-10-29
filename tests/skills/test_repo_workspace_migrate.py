@@ -192,12 +192,17 @@ class MigrationTests(unittest.TestCase):
         m.rollback(self.journal, data)
 
     def test_absolute_path_config_is_refused_without_exposing_values(self):
-        self.run_git(self.source, 'config', 'core.hooksPath', str(self.source / '.githooks'))
-        with self.assertRaisesRegex(m.Refused, 'core.hookspath') as result:
-            self.prepare()
-        self.assertNotIn('.githooks', str(result.exception))
-        self.assertFalse(self.journal.exists())
-        self.assertTrue(self.source.exists())
+        # Windows tools write either slash and any case; elsewhere these spellings coincide.
+        hooks = self.source / '.githooks'
+        spellings = [str(hooks), hooks.as_posix()] + ([hooks.as_posix().upper()] if m.WINDOWS else [])
+        for value in spellings:
+            with self.subTest(value=value):
+                self.run_git(self.source, 'config', 'core.hooksPath', value)
+                with self.assertRaisesRegex(m.Refused, 'core.hookspath') as result:
+                    self.prepare()
+                self.assertNotIn('.githooks', str(result.exception))
+                self.assertFalse(self.journal.exists())
+                self.assertTrue(self.source.exists())
 
     def test_wrong_case_existing_destination_parent_is_refused(self):
         parent = self.root / 'CaseOwner'
@@ -439,6 +444,8 @@ class MigrationTests(unittest.TestCase):
                 with self.assertRaisesRegex(m.Refused, 'lock'):
                     self.prepare()
                 lock.unlink()
+        if m.WINDOWS:
+            return  # A held lock blocks the rename instead; see the in-use test.
         lock = common / 'gh-stack.lock'
         lock.touch()
         holder = subprocess.Popen([sys.executable, '-c', 'import sys, time; f = open(sys.argv[1]); time.sleep(30)', lock])
@@ -481,6 +488,7 @@ class MigrationTests(unittest.TestCase):
                     self.fail('Second lock acquired')
         self.assertFalse(self.journal.with_name(self.journal.name + '.lock').exists())
 
+    @unittest.skipIf(m.WINDOWS, 'Windows has no lsof; the rename itself is the guard')
     def test_real_cwd_guard(self):
         self.process_guard.stop()
         process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], cwd=self.source)
@@ -491,6 +499,23 @@ class MigrationTests(unittest.TestCase):
         finally:
             process.terminate()
             process.wait(timeout=10)
+
+    @unittest.skipUnless(m.WINDOWS, 'Windows-only guard')
+    def test_windows_will_not_move_a_directory_in_use(self):
+        data = self.prepare()
+        process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], cwd=self.source)
+        try:
+            with self.assertRaises(OSError):
+                m.apply(self.journal, data)
+        finally:
+            process.terminate()
+            process.wait(timeout=10)
+        with open(self.source / 'tracked'):
+            with self.assertRaises(OSError):
+                m.apply(self.journal, data)
+        self.assertEqual(m.load(self.journal)['phase'], 'prepared')
+        self.assertFalse(self.dest.exists())
+        m.apply(self.journal, data)
 
     def checkpoint(self, path, ordinal, tree='HEAD^{tree}', parent='HEAD', ref=None, named=None):
         """Mimic T3: a commit of the clean HEAD tree, parented on HEAD, under a per-thread ref."""
