@@ -446,12 +446,13 @@ class MigrationTests(unittest.TestCase):
             process.terminate()
             process.wait(timeout=10)
 
-    def checkpoint(self, path, ordinal, tree='HEAD^{tree}', parent='HEAD', ref=None):
+    def checkpoint(self, path, ordinal, tree='HEAD^{tree}', parent='HEAD', ref=None, named=None):
         """Mimic T3: a commit of the clean HEAD tree, parented on HEAD, under a per-thread ref."""
         ref = ref or f'refs/t3/orchestration-v2/checkpoints/dGhyZWFk/ordinal/{ordinal}'
         tree = self.run_git(path, 'rev-parse', tree).decode().strip()
         parent = self.run_git(path, 'rev-parse', parent).decode().strip()
-        oid = self.run_git(path, 'commit-tree', tree, '-p', parent, '-m', f't3 checkpoint ref={ref}').decode().strip()
+        message = f't3 checkpoint ref={named or ref}'
+        oid = self.run_git(path, 'commit-tree', tree, '-p', parent, '-m', message).decode().strip()
         self.run_git(path, 'update-ref', ref, oid)
         return [ref, oid, str(path)]
 
@@ -529,6 +530,8 @@ class MigrationTests(unittest.TestCase):
             'parent': lambda: self.checkpoint(self.dest, 3, parent=task_head),
             'missing or moved': lambda: [self.checkpoint(self.dest, 3)[0], '0' * 40, str(self.dest)],
             'not a commit': lambda: self.tree_ref(empty_tree),
+            'name its own ref': lambda: self.checkpoint(
+                self.dest, 3, named='refs/t3/orchestration-v2/checkpoints/b3RoZXI/ordinal/7'),
         }
         for pattern, make in cases.items():
             with self.subTest(pattern=pattern):

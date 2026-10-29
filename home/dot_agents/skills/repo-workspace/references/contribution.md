@@ -29,7 +29,7 @@ Do not change project or environment preferences, such as a project's `autoPull`
 - An independent contribution starts from freshly fetched `upstream/<target>` and does not inherit the baseline's pull tracking: `git fetch upstream && git switch -c <topic> --no-track upstream/<target>`. Release work starts from its explicit release target.
 - A dependent stack layer starts from its actual parent branch. Use the `gh-stack` skill.
 - T3's `startFromOrigin=true` does not always mean `origin`. According to T3 source, it follows the selected local branch's configured tracking remote, or an explicitly remote-qualified ref, and falls back to `origin` only when neither applies. For an independent contribution, request `upstream/<target>` explicitly with `startFromOrigin=true` where the native surface allows it. Don't rely on the environment's `newWorktreesStartFromOrigin` default being applied to a native request. A local branch literally named `upstream/<target>` would shadow the remote ref. For a stack layer, use the parent branch with `startFromOrigin=false` so its local commits are kept.
-- Before the first edit in a new contribution worktree, confirm that `git rev-parse HEAD` equals `git rev-parse upstream/<target>` right after a fresh `git fetch upstream`. If they differ, stop and fix the base. Don't build on it.
+- Before the first edit in a new worktree, confirm its base. For an independent contribution, `git rev-parse HEAD` must equal `git rev-parse upstream/<target>` right after a fresh `git fetch upstream`. For a stack layer, HEAD must equal the parent branch's SHA, captured when you chose it. If the base is wrong, stop and fix it. Don't build on it.
 
 ## Publishing
 

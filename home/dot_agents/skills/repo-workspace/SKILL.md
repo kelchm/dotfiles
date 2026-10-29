@@ -22,7 +22,7 @@ Layout:
 - Before placing anything, read the task's intent, the repository's history and remotes, any existing project, and the current work. Keep an established intentional placement. If the long-term role is still materially unclear, ask one small concrete question about intent before creating a lasting home. Meanwhile, investigate read-only or work in task scratch.
 - A directory with the same name is a conflict to resolve, not a duplicate to replace. Verify which variant it is, and choose a distinct meaningful alias if both are needed.
 - Placement is stable. An occasional upstream PR from a Personal downstream stays in Personal, and an experiment in a contribution checkout does not move it. Deliberately adopting a separately maintained variant can prompt an explicit reorganization plan.
-- The development root and category folders are plain directories. They are never Git repositories or T3 projects. Before registering a checkout, confirm that `git rev-parse --show-toplevel` equals its real path.
+- The development root and category folders are plain directories. They are never Git repositories or T3 projects. Before registering a Git checkout, confirm that `git rev-parse --show-toplevel` equals its real path.
 - The chezmoi-managed dotfiles stay where chezmoi manages them. `chezmoi source-path` can be a subdirectory, so the Git and T3 root is `git -C "$(chezmoi source-path)" rev-parse --show-toplevel`. Never create a duplicate checkout under Personal.
 
 ## Remotes and publication

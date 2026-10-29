@@ -426,6 +426,9 @@ def record_checkpoints(journal, data, claims):
         head = checkouts[checkpoint['checkout']]['head']
         oid = checkpoint['oid']
         require(git(base, 'cat-file', '-t', oid).strip() == b'commit', f"Checkpoint is not a commit: {checkpoint['ref']}")
+        message = git(base, 'show', '-s', '--format=%B', oid).decode(errors='replace').strip()
+        require(message == f"t3 checkpoint ref={checkpoint['ref']}",
+                f"Checkpoint commit does not name its own ref: {checkpoint['ref']}")
         require(git(base, 'rev-list', '--parents', '-n', '1', oid).split()[1:] == [head.encode()],
                 f"Checkpoint parent is not its checkout's HEAD: {checkpoint['ref']}")
         tree = git(base, 'rev-parse', oid + '^{tree}').strip()

@@ -54,7 +54,7 @@ python3 scripts/migrate.py record-checkpoints --journal /private/evidence/move.j
   --checkpoint refs/t3/orchestration-v2/checkpoints/<thread>/ordinal/<n> <oid> /real/dev-root/Contribute/talos
 ```
 
-The helper accepts only `refs/t3/orchestration-v2/checkpoints/<id>/ordinal/<n>` names. Each must be a commit whose parent is its checkout's saved HEAD and whose tree equals that clean HEAD tree. Every other ref, as well as HEAD, branch, index, config, worktree pointer, and inode, must still match the saved snapshot, and no unlisted ref may appear. The original snapshot is kept unchanged; the accepted refs are added to the journal, and later `verify` runs account for them. Refusal leaves the journal untouched.
+The helper accepts only `refs/t3/orchestration-v2/checkpoints/<id>/ordinal/<n>` names. Each must be a commit whose message names that same ref (`t3 checkpoint ref=<ref>`), whose parent is its checkout's saved HEAD, and whose tree equals that clean HEAD tree. The helper cannot see T3 lineage: when two checkouts share a HEAD, their checkpoints are indistinguishable by content, so the checkout you name comes from the thread binding you verified in step 1. Every other ref, as well as HEAD, branch, index, config, worktree pointer, and inode, must still match the saved snapshot, and no unlisted ref may appear. The original snapshot is kept unchanged; the accepted refs are added to the journal, and later `verify` runs account for them. Refusal leaves the journal untouched.
 
 ## Recovery
 
