@@ -210,32 +210,50 @@ def check_path_config(source, paths):
 
 
 def dirty_paths(status):
-    """Paths named by `git status --porcelain=v1 -z`; a rename or copy also names its source."""
+    """Paths named by `git status --porcelain=v1 -z`; a rename or copy in either column also names its source."""
     entries, paths = iter(status.split(b'\0')), []
     for entry in entries:
         if entry:
             paths.append(entry[3:])
-            if entry[:1] in b'RC':
+            if set(entry[:2]) & set(b'RC'):
                 paths.append(next(entries))
     return paths
 
 
 def content_hash(path):
     if path.is_symlink():
-        return digest(os.fsencode(os.readlink(path)))
+        return 'link:' + digest(os.fsencode(os.readlink(path)))
     if not path.is_file():
         return None
     hasher = hashlib.sha256()
     with path.open('rb') as stream:
         for block in iter(lambda: stream.read(1 << 20), b''):
             hasher.update(block)
-    return hasher.hexdigest()
+    return 'file:' + hasher.hexdigest()
+
+
+def disk_spelling(root, name, listings):
+    """Spell a path as its directory entries do, so a case-only rename shows on case-insensitive disks."""
+    current, spelled = root, []
+    for part in Path(name).parts:
+        if current not in listings:
+            listings[current] = os.listdir(current) if current.is_dir() else []
+        entries = listings[current]
+        matches = [entry for entry in entries if entry.casefold() == part.casefold()]
+        entry = part if part in entries else matches[0] if len(matches) == 1 else part
+        spelled.append(entry)
+        current = current / entry
+    return '/'.join(spelled)
 
 
 def dirty_state(path, status):
-    """Fingerprint uncommitted work by its status and the content of every path it names."""
-    parts = [status] + [name + b'\0' + str(content_hash(path / os.fsdecode(name))).encode()
-                        for name in dirty_paths(status)]
+    """Fingerprint uncommitted work by its status and the spelling and content of every path it names."""
+    listings = {}
+    parts = [status]
+    for name in dirty_paths(status):
+        decoded = os.fsdecode(name)
+        parts.append(os.fsencode(disk_spelling(path, decoded, listings)) + b'\0'
+                     + str(content_hash(path / decoded)).encode())
     return digest(b'\0'.join(parts))
 
 

@@ -321,6 +321,37 @@ class MigrationTests(unittest.TestCase):
     def test_dirty_paths_include_rename_sources(self):
         self.assertEqual(m.dirty_paths(b'R  new name\0old name\0 M edited\0?? new file\0'),
                          [b'new name', b'old name', b'edited', b'new file'])
+        # An unstaged rename (after `git add -N`) puts R in the second column.
+        self.assertEqual(m.dirty_paths(b' R new\0old\0?? scratch\0'), [b'new', b'old', b'scratch'])
+
+    def test_allowed_dirty_detects_unstaged_rename_neighbours_type_and_case(self):
+        (self.source / 'tracked').rename(self.source / 'moved')
+        self.run_git(self.source, 'add', '-N', 'moved')
+        (self.source / 'scratch').write_text('original')
+        (self.source / 'note').write_text('target')
+        data = m.prepare(self.source, self.dest, self.journal, allow_dirty=True)
+        changes = [lambda: (self.source / 'scratch').write_text('edited'),
+                   lambda: ((self.source / 'note').unlink(), (self.source / 'note').symlink_to('target'))]
+        restores = [lambda: (self.source / 'scratch').write_text('original'),
+                    lambda: ((self.source / 'note').unlink(), (self.source / 'note').write_text('target'))]
+        for change, restore in zip(changes, restores):
+            change()
+            with self.assertRaisesRegex(m.Refused, 'dirty'):
+                m.apply(self.journal, data)
+            restore()
+        m.apply(self.journal, data)
+        m.rollback(self.journal, data)
+
+    def test_allowed_dirty_detects_case_only_rename(self):
+        probe = self.root / 'CaseProbe'
+        probe.write_text('')
+        if not (self.root / 'caseprobe').exists():
+            self.skipTest('Case-sensitive filesystem; Git reports the rename itself')
+        self.run_git(self.source, 'mv', 'tracked', 'Tracked')
+        data = m.prepare(self.source, self.dest, self.journal, allow_dirty=True)
+        (self.source / 'Tracked').rename(self.source / 'TRACKED')
+        with self.assertRaisesRegex(m.Refused, 'dirty'):
+            m.apply(self.journal, data)
 
     def make_dirty(self, wt):
         (self.source / 'tracked').write_text('edited, not committed\n')
