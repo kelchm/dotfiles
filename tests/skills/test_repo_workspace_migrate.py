@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -411,6 +412,51 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, 'lock'):
             self.prepare()
 
+    def test_idle_gh_stack_locks_allow_move_rollback_and_undo(self):
+        for name in ('gh-stack.lock', 'gh-stack-operation.lock'):
+            (self.source / '.git' / name).touch()
+        data = self.prepare()
+        m.apply(self.journal, data)
+        m.rollback(self.journal, data)
+        self.journal.unlink()
+        data = self.prepare()
+        real_repair = m.repair
+        def fail_forward(base, journal):
+            if base == self.dest:
+                raise m.Refused('Injected repair failure')
+            return real_repair(base, journal)
+        with patch.object(m, 'repair', side_effect=fail_forward):
+            with self.assertRaisesRegex(m.Refused, 'Injected'):
+                m.apply(self.journal, data)
+        self.assertEqual(m.load(self.journal)['phase'], 'rolled_back')
+
+    def test_busy_or_unfamiliar_locks_are_refused(self):
+        common = self.source / '.git'
+        for lock, content in ((common / 'gh-stack.lock', 'busy'), (common / 'other-tool.lock', ''),
+                              (common / 'refs' / 'gh-stack.lock', '')):
+            with self.subTest(lock=str(lock.relative_to(common))):
+                lock.write_text(content)
+                with self.assertRaisesRegex(m.Refused, 'lock'):
+                    self.prepare()
+                lock.unlink()
+        lock = common / 'gh-stack.lock'
+        lock.touch()
+        holder = subprocess.Popen([sys.executable, '-c', 'import sys, time; f = open(sys.argv[1]); time.sleep(30)', lock])
+        try:
+            self.wait_for_handle(lock)
+            with self.assertRaisesRegex(m.Refused, 'lock'):
+                self.prepare()
+        finally:
+            holder.terminate()
+            holder.wait(timeout=10)
+
+    def wait_for_handle(self, path):
+        for _ in range(50):
+            if subprocess.run(['lsof', '-t', '--', str(path)], capture_output=True).stdout.strip():
+                return
+            time.sleep(0.1)
+        self.fail(f'No process opened {path}')
+
     def test_cross_device_refusal_without_mutation(self):
         # Patch only the device comparison, leaving the actual fixture intact.
         original = Path.stat
@@ -474,7 +520,7 @@ class MigrationTests(unittest.TestCase):
     def test_continuation_checkpoints_are_recorded_without_rewriting_snapshot(self):
         data, wt = self.moved_with_task_worktree()
         saved = json.dumps(data['before'], sort_keys=True)
-        claims = [self.checkpoint(self.dest, 3), self.checkpoint(wt, 49)]
+        claims = [self.checkpoint(self.dest, 0), self.checkpoint(wt, 49)]
         with self.assertRaisesRegex(m.Refused, 'refs'):
             m.verify_data(data, True)
         result = subprocess.run([sys.executable, str(MODULE), 'record-checkpoints', '--journal', str(self.journal),
@@ -487,7 +533,7 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(data['phase'], 'applied')
         m.verify_data(data, True)
         m.apply(self.journal, data)  # A retried apply accepts recorded checkpoints too.
-        later = self.checkpoint(self.dest, 4)
+        later = self.checkpoint(self.dest, 1)
         with self.assertRaisesRegex(m.Refused, 'refs'):
             m.verify_data(data, True)
         m.record_checkpoints(self.journal, data, [later])
@@ -516,7 +562,10 @@ class MigrationTests(unittest.TestCase):
         self.run_git(self.dest, 'branch', 'unrelated-work')
         self.assert_record_refused(data, [claim], 'refs')
         self.run_git(self.dest, 'branch', '-D', 'unrelated-work')
-        for ref in ('refs/heads/unrelated-work', 'refs/t3/other/thread', 'refs/t3/orchestration-v2/checkpoints/a/b/ordinal/1'):
+        padded = ('refs/t3/orchestration-v2/checkpoints/dGhyZWFk/ordinal/00',
+                  'refs/t3/orchestration-v2/checkpoints/dGhyZWFk/ordinal/01')
+        for ref in ('refs/heads/unrelated-work', 'refs/t3/other/thread',
+                    'refs/t3/orchestration-v2/checkpoints/a/b/ordinal/1', *padded):
             with self.subTest(ref=ref):
                 self.assert_record_refused(data, [[ref, claim[1], str(self.dest)]], 'Not a T3 checkpoint')
         m.record_checkpoints(self.journal, data, [claim])
