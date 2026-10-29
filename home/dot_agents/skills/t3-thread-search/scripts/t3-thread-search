@@ -15,6 +15,7 @@ from urllib.parse import unquote, urlparse
 sys.dont_write_bytecode = True
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
+MAX_PATH_LIMIT = 1000  # Path inventories feed move and retirement checks; keep them whole.
 MESSAGE_HIT_LIMIT = 10_000
 REQUIRED_TABLES = {
     "projection_projects",
@@ -123,6 +124,14 @@ def parse_pr(value: str) -> tuple[str, str, int]:
     ):
         raise SearchError("--pr requires a full HTTP(S) owner/repository/pull/number URL.")
     return parsed.hostname, match[1], int(match[2])
+
+
+def path_forms(value: str | None) -> set[str]:
+    """A path as written and as resolved, without trailing slashes."""
+    if not value:
+        return set()
+    written = value.rstrip("/") or "/"
+    return {written, str(Path(written).expanduser().resolve())}
 
 
 def contains(value: str) -> str:
@@ -257,6 +266,19 @@ def search(
             [*params, thread_id],
         )
         matches = [result(row, database, "thread-id") for row in rows]
+    elif args.path:
+        # A primary checkout matches its project's root; a worktree matches its own binding.
+        # Normalize stored paths too, before limiting, so spelling never hides a binding.
+        target = path_forms(args.path)
+        rows = conn.execute(
+            f"SELECT {FIELDS} {from_sql()} WHERE {scope} ORDER BY t.updated_at DESC,t.thread_id",
+            params,
+        )
+        matches = [
+            result(row, database, "path")
+            for row in rows
+            if target & (path_forms(row["worktree_path"]) | path_forms(row["workspace_root"]))
+        ]
     elif args.pr:
         host, repository, number = parse_pr(args.pr)
         urls = [
@@ -344,6 +366,7 @@ def search(
         "provider-id": 0,
         "thread-id": 0,
         "pr": 0,
+        "path": 0,
         "title": 1,
         "user": 2,
         "assistant": 3,
@@ -376,6 +399,12 @@ def search(
             warnings.append(
                 "No retained deleted record with this ID in this store. Active and archived IDs are excluded; use native read for those. If this is a provider UUID, try --provider-id."
             )
+        elif args.path:
+            warnings.append(
+                "No archived threads bound to this path in this store; use native listing for active threads."
+                if not args.include_deleted
+                else "No archived or deleted threads bound to this path in this store; use native listing for active threads."
+            )
         elif args.pr:
             warnings.append(
                 "No stored recovery link found in this store; check the PR body's attribution thread: line, or native search for active threads."
@@ -402,6 +431,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exact deleted record ID, environment/thread ID, or T3 URL; requires --include-deleted.",
     )
     modes.add_argument("--pr", help="Full PR URL; searches recorded links on recovery records.")
+    modes.add_argument(
+        "--path",
+        help="Checkout or worktree path; lists recovery records whose project root or worktree is that path.",
+    )
     parser.add_argument(
         "query",
         nargs="?",
@@ -422,7 +455,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report selected v2 path and any legacy/stale sibling.",
     )
     parser.add_argument(
-        "--limit", type=int, default=DEFAULT_LIMIT, help="Maximum results (default 20, max 100)."
+        "--limit",
+        type=int,
+        default=DEFAULT_LIMIT,
+        help="Maximum results (default 20, max 100; max 1000 with --path).",
     )
     parser.add_argument("--json", action="store_true", help="Machine-readable output.")
     return parser
@@ -431,9 +467,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if not 1 <= args.limit <= MAX_LIMIT:
-        parser.error("--limit must be between 1 and 100.")
-    selectors = args.provider_id or args.thread or args.pr
+    if not 1 <= args.limit <= (MAX_PATH_LIMIT if args.path else MAX_LIMIT):
+        parser.error("--limit must be between 1 and 100, or 1000 with --path.")
+    selectors = args.provider_id or args.thread or args.pr or args.path
     if selectors and args.query is not None:
         parser.error("Use a query or one ID/PR lookup, not both.")
     if args.thread and not args.include_deleted:
@@ -441,7 +477,7 @@ def main(argv: list[str] | None = None) -> int:
             "--thread is only for deleted records with --include-deleted; use native read for surviving IDs."
         )
     if not args.list_dbs and not (selectors or (args.query and args.query.strip())):
-        parser.error("Provide a recovery query, --provider-id, --thread, --pr, or --list-dbs.")
+        parser.error("Provide a recovery query, --provider-id, --thread, --pr, --path, or --list-dbs.")
     try:
         paths = database_paths(args.db)
         databases = [database_info(path) for path in (paths if args.list_dbs else paths[:1])]
