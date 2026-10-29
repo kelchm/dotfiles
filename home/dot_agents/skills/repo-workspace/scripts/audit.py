@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Read-only checkout/worktree inventory. No fetches, project changes, or cleanup."""
+"""Read-only checkout/worktree inventory. No fetches, project changes, or cleanup.
+
+T3 bindings are not read here: use native T3 tools, plus the t3-thread-search
+skill's --path lookup for archived and deleted threads.
+"""
 
 import argparse
 import concurrent.futures
@@ -8,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import re
-import sqlite3
 import subprocess
 import sys
 from urllib.parse import urlsplit
@@ -147,65 +150,10 @@ def inspect(path):
     }
 
 
-def t3_metadata(path):
-    if not path.exists():
-        return {'database': str(path), 'error': 'not found'}
-    try:
-        db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
-    except sqlite3.Error as error:
-        return {'database': str(path), 'error': str(error)}
-    try:
-        db.execute('PRAGMA query_only=ON')
-        db.row_factory = sqlite3.Row
-        db.execute('BEGIN')
-        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
-        projects = [dict(row) for row in db.execute(
-            'SELECT project_id,title,workspace_root,created_at,updated_at,deleted_at,auto_pull '
-            'FROM projection_projects')]
-        threads = [dict(row) for row in db.execute(
-            'SELECT thread_id,project_id,title,branch,worktree_path,created_at,updated_at,'
-            'deleted_at,archived_at,settled_at,settled_override,latest_user_message_at '
-            'FROM projection_threads')]
-        sessions = [dict(row) for row in db.execute(
-            'SELECT thread_id,status,active_turn_id,updated_at FROM projection_thread_sessions')]
-        if 'orchestration_v2_projection_threads' in tables:
-            native = [dict(row) for row in db.execute(
-                "SELECT thread_id,project_id,title,created_at,updated_at,deleted_at,archived_at,"
-                "json_extract(payload_json,'$.branch') AS branch,"
-                "json_extract(payload_json,'$.worktreePath') AS worktree_path,"
-                "json_extract(payload_json,'$.settledAt') AS settled_at,"
-                "json_extract(payload_json,'$.settledOverride') AS settled_override,"
-                "json_extract(payload_json,'$.lineage.parentThreadId') AS parent_thread_id,"
-                "json_extract(payload_json,'$.lineage.relationshipToParent') AS relationship_to_parent "
-                "FROM orchestration_v2_projection_threads")]
-            merged = {row['thread_id']: row for row in threads}
-            for row in native:
-                merged[row['thread_id']] = {**row, 'metadata_source': 'native-v2'}
-            threads = list(merged.values())
-            sessions = [dict(row) for row in db.execute(
-                'SELECT r.thread_id,r.status,r.run_id,r.requested_at,r.completed_at '
-                'FROM orchestration_v2_projection_runs r '
-                'JOIN (SELECT thread_id,MAX(ordinal) AS ordinal '
-                'FROM orchestration_v2_projection_runs GROUP BY thread_id) latest '
-                'ON r.thread_id=latest.thread_id AND r.ordinal=latest.ordinal')]
-        prs = [dict(row) for row in db.execute(
-            "SELECT thread_id,host,repository,number,url,source,"
-            "json_extract(snapshot_json,'$.state') AS cached_state "
-            "FROM projection_thread_pull_requests")]
-        return {'database': str(path), 'projects': projects, 'threads': threads,
-                'sessions': sessions, 'pull_requests': prs,
-                'authority': 'local read model; revalidate lifecycle actions through live T3 tools'}
-    except sqlite3.DatabaseError as error:
-        return {'database': str(path), 'error': str(error)}
-    finally:
-        db.close()
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', action='append', required=True, type=Path)
     parser.add_argument('--depth', type=int, default=4)
-    parser.add_argument('--t3-db', type=Path)
     parser.add_argument('--workers', type=int, default=6)
     args = parser.parse_args()
     roots = [p.expanduser().resolve() for p in args.root]
@@ -229,8 +177,6 @@ def main():
                         'Ignored files, running processes, and other machines were not inventoried.'],
         'checkouts': checkouts,
     }
-    if args.t3_db:
-        result['t3'] = t3_metadata(args.t3_db.expanduser())
     json.dump(result, sys.stdout, indent=2)
     print()
 

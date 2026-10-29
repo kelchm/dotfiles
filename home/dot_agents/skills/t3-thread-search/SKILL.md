@@ -2,8 +2,9 @@
 name: t3-thread-search
 description: >
   Last-resort local recovery for T3 Code: search archived message text and PR links,
-  find retained deleted-thread records, or map provider thread/session/native IDs
-  to T3 thread IDs. Use only for these gaps in native functionality.
+  find retained deleted-thread records, list archived or deleted threads bound to a
+  checkout or worktree path, or map provider thread/session/native IDs to T3 thread
+  IDs. Use only for these gaps in native functionality.
 ---
 
 # T3 thread recovery
@@ -13,6 +14,7 @@ Use native T3 functionality first. `t3_thread_search` handles ordinary active-th
 - Searching archived content and recorded PR links without unarchiving threads.
 - Finding whatever metadata and indexed messages remain for deleted threads, which native reads reject.
 - Mapping an exact provider thread/session/native ID to its T3 thread ID, including active threads.
+- Listing the archived (and, with `--include-deleted`, deleted) threads bound to a checkout or worktree path. Native project listings return active threads only, so moves and retirements need this to see every binding.
 
 Inside a thread, native search without `projectId` (including `projectId: null`) searches only the caller's project. If the project is unknown, use `t3_project_list` and search the returned projects with explicit IDs, paging as needed. A miss in the current project is not a reason to use recovery. This also applies when the user explicitly invokes this skill for an ordinary lookup.
 
@@ -25,9 +27,12 @@ python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" 'phrase
 python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --include-deleted --thread '<threadId>'
 python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --provider-id '<provider session or native ID>'
 python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --pr 'https://github.com/owner/repository/pull/123'
+python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --include-deleted --path /path/to/checkout --limit 1000
 ```
 
 Text queries match archived titles, branches, and indexed messages. `--include-deleted` also searches retained deleted records. `--thread` requires `--include-deleted` and returns only the deleted record’s compact metadata; it does not establish whether messages remain. Known surviving IDs go to native read. `--provider-id` matches only exact thread/session/native identifiers and searches active and archived records, plus deleted ones when requested. Results contain identity, project, dates, provider IDs, and bounded matching context. Use native read for the selected surviving thread.
+
+`--path` is an exact match, not a prefix. A primary checkout's path matches every thread of the project rooted there, including threads bound to its worktrees elsewhere. A worktree's path matches only the threads bound to that worktree. It accepts `--limit` up to 1000, so a whole project fits in one result. Check the `truncated` flag before treating the list as complete.
 
 `--project TEXT` filters by project title or workspace path. `--limit N` defaults to 20, maximum 100. `--json` gives structured output. See `--help` for all options. The skill's `mise.toml` supplies Python if needed.
 

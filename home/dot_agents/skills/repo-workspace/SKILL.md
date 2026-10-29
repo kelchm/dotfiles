@@ -42,7 +42,7 @@ Layout:
 
 ## Audit, move, and retire
 
-- Live T3 tools are authoritative. Native project thread listings return active threads only, so check archives separately. Never write to or copy T3's database or provider session files. Before passing `--t3-db` to `audit.py`, confirm it is the live environment's active database.
+- Live T3 tools are authoritative. Native project thread listings return active threads only, so for archived and deleted threads bound to a checkout or worktree, use the `t3-thread-search` skill's `--path` lookup. Never write to or copy T3's database or provider session files.
 - Give `audit.py` explicit roots: the development root, T3's worktree and scratch directories, other agent hosts' worktree directories, and the dotfiles Git root. Missing roots, Git errors, and scan limits are findings, not evidence that something is disposable.
 - Never delete, archive, prune, merge, or move automatically because a task finished, a PR merged, a checkout is clean or old, or a thread was archived. Broad planning does not authorize every move in the plan.
 - Retire only the specific checkout or worktree the user authorized. Collect fresh evidence immediately before acting: active runs, open PRs, tracked, untracked, and ignored files, local-only refs, stashes, detached commits, submodules, and other tools using the path. Retire task worktrees before their primary clone. Repair or preserve broken Git links; never prune them.
