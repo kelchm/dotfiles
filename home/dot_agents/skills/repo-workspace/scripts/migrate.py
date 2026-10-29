@@ -54,8 +54,13 @@ def path_arg(value):
 
 
 def git_path(path):
-    """Git writes paths with forward slashes on every platform."""
-    return Path(path).as_posix()
+    """Spell a path as Git writes it: forward slashes, compared without case on Windows."""
+    return git_text(Path(path).as_posix())
+
+
+def git_text(text):
+    """Normalize path-bearing text from Git so it compares with git_path on every platform."""
+    return text.replace('\\', '/').lower() if WINDOWS else text
 
 
 def output_path(output):
@@ -186,10 +191,7 @@ def check_layout(source, destination, journal):
 
 
 def mentions(value, path):
-    forms = {str(path), git_path(path)}
-    if WINDOWS:
-        value, forms = value.lower(), {form.lower() for form in forms}
-    return any(os.fsencode(form) in value for form in forms)
+    return git_path(path) in git_text(os.fsdecode(value))
 
 
 def check_path_config(source, paths):
@@ -242,7 +244,7 @@ def capture(base, specs=None, check_links=True, checkpoints=()):
                  'config_worktree': file_hash(admin / 'config.worktree'),
                  'effective_config': digest(run('config', '--null', '--list', '--includes'))}
         if spec['admin'] != '.':
-            marker = (path / '.git').read_text()
+            marker = git_text((path / '.git').read_text())
             if check_links:
                 require(marker == f'gitdir: {git_path(admin)}\n', 'Only absolute, canonical worktree pointers are supported')
             state.update(marker=marker, backlink=(admin / 'gitdir').read_text(),
@@ -256,7 +258,13 @@ def capture(base, specs=None, check_links=True, checkpoints=()):
         require(line in refs, f"Recorded checkpoint is missing or moved: {checkpoint['ref']}")
         refs.remove(line)
     return {'checkouts': states, 'refs': digest(b''.join(refs)),
-            'config': file_hash(common / 'config'), 'worktrees': git(base, 'worktree', 'list', '--porcelain', '-z').hex()}
+            'config': file_hash(common / 'config'), 'worktrees': worktree_listing(base).hex()}
+
+
+def worktree_listing(base):
+    fields = git(base, 'worktree', 'list', '--porcelain', '-z').split(b'\0')
+    return b'\0'.join(b'worktree ' + os.fsencode(git_text(os.fsdecode(field[9:])))
+                      if field.startswith(b'worktree ') else field for field in fields)
 
 
 def expected(data, moved):
