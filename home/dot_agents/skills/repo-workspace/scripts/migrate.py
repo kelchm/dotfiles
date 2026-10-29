@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Journaled, same-filesystem relocation of a clean primary Git checkout.
+"""Journaled, same-filesystem relocation of a primary Git checkout, clean or with reviewed uncommitted work.
 
 Linked worktrees stay in place. T3 coordination belongs to the calling workflow.
 No fetch, checkout, pruning, copying, deletion, remote changes, or database writes.
@@ -209,7 +209,37 @@ def check_path_config(source, paths):
                 'resolve those path consumers before preparing a move (values withheld)')
 
 
-def capture(base, specs=None, check_links=True, checkpoints=()):
+def dirty_paths(status):
+    """Paths named by `git status --porcelain=v1 -z`; a rename or copy also names its source."""
+    entries, paths = iter(status.split(b'\0')), []
+    for entry in entries:
+        if entry:
+            paths.append(entry[3:])
+            if entry[:1] in b'RC':
+                paths.append(next(entries))
+    return paths
+
+
+def content_hash(path):
+    if path.is_symlink():
+        return digest(os.fsencode(os.readlink(path)))
+    if not path.is_file():
+        return None
+    hasher = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1 << 20), b''):
+            hasher.update(block)
+    return hasher.hexdigest()
+
+
+def dirty_state(path, status):
+    """Fingerprint uncommitted work by its status and the content of every path it names."""
+    parts = [status] + [name + b'\0' + str(content_hash(path / os.fsdecode(name))).encode()
+                        for name in dirty_paths(status)]
+    return digest(b'\0'.join(parts))
+
+
+def capture(base, specs=None, check_links=True, checkpoints=(), allow_dirty=False):
     common = base / '.git'
     paths = worktrees(base)
     if specs is None:
@@ -236,7 +266,12 @@ def capture(base, specs=None, check_links=True, checkpoints=()):
                     f"Incorrect Git top-level path: {path}")
             require(output_path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir')) == common,
                     f"Incorrect Git common directory: {path}")
-        require(not run('status', '--porcelain=v1', '--untracked-files=all'), f"Dirty checkout: {path}")
+        status = run('status', '--porcelain=v1', '-z', '--untracked-files=all')
+        if status and not allow_dirty:
+            names = [os.fsdecode(name) for name in dirty_paths(status)]
+            shown = ', '.join(names[:10]) + (f', and {len(names) - 10} more' if len(names) > 10 else '')
+            raise Refused(f"Dirty checkout: {path} ({shown}). To move this work in progress unchanged, "
+                          'review it and run prepare again with --allow-dirty')
         require(not (path / '.gitmodules').exists() and not run('submodule', 'status'),
                 'Submodules need a separate migration plan')
         require(all(item.startswith(b'H ') for item in run('ls-files', '-v', '-z').split(b'\0') if item),
@@ -249,6 +284,8 @@ def capture(base, specs=None, check_links=True, checkpoints=()):
                  'index_entries': digest(run('ls-files', '--stage', '-z')),
                  'config_worktree': file_hash(admin / 'config.worktree'),
                  'effective_config': digest(run('config', '--null', '--list', '--includes'))}
+        if allow_dirty:
+            state['dirty'] = dirty_state(path, status) if status else None
         if spec['admin'] != '.':
             marker = pointer_text((path / '.git').read_text(encoding='utf-8'))
             if check_links:
@@ -294,7 +331,8 @@ def verify_data(data, moved, check_links=True):
     require(not os.path.lexists(other), f"Opposite checkout path is occupied: {other}")
     want = expected(data, moved)
     got = capture(base, want['checkouts'], check_links=check_links,
-                  checkpoints=data.get('checkpoints', []) if moved else ())
+                  checkpoints=data.get('checkpoints', []) if moved else (),
+                  allow_dirty=data.get('allow_dirty', False))
     if not check_links:
         for i, (actual, desired) in enumerate(zip(got['checkouts'], want['checkouts'])):
             if 'marker' in actual:
@@ -383,12 +421,15 @@ def repair(base, data):
         git(base, '-c', 'worktree.useRelativePaths=false', 'worktree', 'repair', *linked)
 
 
-def prepare(source, destination, journal):
+def prepare(source, destination, journal, allow_dirty=False):
     paths = check_layout(source, destination, journal)
     check_path_config(source, paths)
-    before = capture(source)
+    before = capture(source, allow_dirty=allow_dirty)
     data = {'version': 2, 'source': str(source), 'destination': str(destination),
             'created_at': now(), 'phase': 'prepared', 'before': before}
+    if allow_dirty:
+        # Uncommitted work is then fingerprinted by content and must survive unchanged.
+        data['allow_dirty'] = True
     write_json(journal, data, exclusive=True)
     return data
 
@@ -529,6 +570,8 @@ def main():
     p = sub.add_parser('prepare', help='Check and snapshot one move without relocating it')
     p.add_argument('--source', required=True)
     p.add_argument('--destination', required=True)
+    p.add_argument('--allow-dirty', action='store_true',
+                   help='Move reviewed uncommitted work as-is; its content must survive unchanged')
     for name in ('apply', 'verify', 'rollback'):
         sub.add_parser(name, help={'apply': 'Revalidate, move, repair, and verify',
                                   'verify': 'Check the preserved state at its current location',
@@ -543,7 +586,7 @@ def main():
         journal = path_arg(args.journal)
         with locked(journal):
             if args.command == 'prepare':
-                data = prepare(path_arg(args.source), path_arg(args.destination), journal)
+                data = prepare(path_arg(args.source), path_arg(args.destination), journal, args.allow_dirty)
             else:
                 data = load(journal)
                 if args.command == 'apply':

@@ -313,6 +313,71 @@ class MigrationTests(unittest.TestCase):
                     (self.source / path).write_bytes(original)
         self.assertFalse(self.journal.exists())
 
+    def test_dirty_refusal_names_the_work_and_the_option(self):
+        (self.source / 'notes.md').write_text('draft')
+        with self.assertRaisesRegex(m.Refused, r'notes\.md.*--allow-dirty'):
+            self.prepare()
+
+    def test_dirty_paths_include_rename_sources(self):
+        self.assertEqual(m.dirty_paths(b'R  new name\0old name\0 M edited\0?? new file\0'),
+                         [b'new name', b'old name', b'edited', b'new file'])
+
+    def make_dirty(self, wt):
+        (self.source / 'tracked').write_text('edited, not committed\n')
+        (self.source / 'staged').write_text('staged only\n')
+        self.run_git(self.source, 'add', 'staged')
+        self.run_git(self.source, 'mv', '.gitignore', 'renamed-ignore')
+        (self.source / 'drafts').mkdir()
+        (self.source / 'drafts' / 'idea.md').write_text('untracked\n')
+        (wt / 'scratch.txt').write_text('worktree work in progress\n')
+
+    def snapshot_files(self, root, wt):
+        return {str(p.relative_to(base)): p.read_bytes() for base in (root, wt)
+                for p in base.rglob('*') if p.is_file() and '.git' not in p.relative_to(base).parts}
+
+    def test_allowed_dirty_work_round_trips_unchanged(self):
+        wt = self.linked()
+        self.make_dirty(wt)
+        before = self.snapshot_files(self.source, wt)
+        data = m.prepare(self.source, self.dest, self.journal, allow_dirty=True)
+        m.apply(self.journal, data)
+        self.assertEqual(self.snapshot_files(self.dest, wt), before)
+        m.verify_data(m.load(self.journal), True)
+        m.rollback(self.journal, data)
+        self.assertEqual(self.snapshot_files(self.source, wt), before)
+
+    def test_allowed_dirty_work_must_not_change(self):
+        wt = self.linked()
+        self.make_dirty(wt)
+        data = m.prepare(self.source, self.dest, self.journal, allow_dirty=True)
+        (self.source / 'drafts' / 'idea.md').write_text('edited after prepare\n')
+        with self.assertRaisesRegex(m.Refused, 'dirty'):
+            m.apply(self.journal, data)
+        self.assertEqual(data['phase'], 'prepared')
+        (self.source / 'drafts' / 'idea.md').write_text('untracked\n')
+        m.apply(self.journal, data)
+        (wt / 'scratch.txt').write_text('edited during the move\n')
+        with self.assertRaisesRegex(m.Refused, 'dirty'):
+            m.verify_data(data, True)
+        with self.assertRaisesRegex(m.Refused, 'dirty'):
+            m.rollback(self.journal, data)
+        self.assertTrue(self.dest.exists())
+
+    def test_clean_checkout_prepared_with_allow_dirty_stays_clean(self):
+        data = m.prepare(self.source, self.dest, self.journal, allow_dirty=True)
+        (self.source / 'new-work').write_text('appeared after prepare')
+        with self.assertRaisesRegex(m.Refused, 'dirty'):
+            m.apply(self.journal, data)
+
+    def test_cli_allow_dirty(self):
+        (self.source / 'untracked').write_text('keep')
+        for args in (['prepare', '--source', str(self.source), '--destination', str(self.dest), '--allow-dirty'],
+                     ['apply'], ['verify'], ['rollback']):
+            result = subprocess.run([sys.executable, str(MODULE), *args, '--journal', str(self.journal)],
+                                    capture_output=True, text=True, timeout=45)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.source / 'untracked').read_text(), 'keep')
+
     def test_dirty_linked_checkout_is_refused(self):
         wt = self.linked()
         (wt / 'untracked').write_text('keep')
