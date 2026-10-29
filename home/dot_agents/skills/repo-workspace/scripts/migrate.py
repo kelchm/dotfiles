@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,11 @@ import tempfile
 
 class Refused(RuntimeError):
     pass
+
+
+# T3 records a checkpoint commit per provider turn, even a read-only one.
+CHECKPOINT_REF = re.compile(r'refs/t3/orchestration-v2/checkpoints/[A-Za-z0-9_-]+=*/ordinal/[1-9][0-9]*')
+OBJECT_ID = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 
 
 def require(condition, message):
@@ -158,7 +164,7 @@ def check_path_config(source, paths):
                 'resolve those path consumers before preparing a move (values withheld)')
 
 
-def capture(base, specs=None, check_links=True):
+def capture(base, specs=None, check_links=True, checkpoints=()):
     common = base / '.git'
     paths = worktrees(base)
     if specs is None:
@@ -206,7 +212,13 @@ def capture(base, specs=None, check_links=True):
                          commondir=(admin / 'commondir').read_text())
             require(Path(state['backlink'].strip()) == path / '.git', 'Incorrect worktree backlink')
         states.append(state)
-    return {'checkouts': states, 'refs': digest(git(base, 'for-each-ref', '--format=%(refname) %(objectname)')),
+    refs = git(base, 'for-each-ref', '--format=%(refname) %(objectname)').splitlines(keepends=True)
+    for checkpoint in checkpoints:
+        # Set aside only an exact recorded name and object; anything else stays in the fingerprint.
+        line = f"{checkpoint['ref']} {checkpoint['oid']}\n".encode()
+        require(line in refs, f"Recorded checkpoint is missing or moved: {checkpoint['ref']}")
+        refs.remove(line)
+    return {'checkouts': states, 'refs': digest(b''.join(refs)),
             'config': file_hash(common / 'config'), 'worktrees': git(base, 'worktree', 'list', '--porcelain', '-z').hex()}
 
 
@@ -229,7 +241,8 @@ def verify_data(data, moved, check_links=True):
     other = Path(data['source'] if moved else data['destination'])
     require(not os.path.lexists(other), f"Opposite checkout path is occupied: {other}")
     want = expected(data, moved)
-    got = capture(base, want['checkouts'], check_links=check_links)
+    got = capture(base, want['checkouts'], check_links=check_links,
+                  checkpoints=data.get('checkpoints', []) if moved else ())
     if not check_links:
         for i, (actual, desired) in enumerate(zip(got['checkouts'], want['checkouts'])):
             if 'marker' in actual:
@@ -338,6 +351,7 @@ def load(journal):
 def rollback(journal, data):
     source, destination = Path(data['source']), Path(data['destination'])
     require(data['phase'] != 'prepared', 'Nothing has been moved')
+    require(not data.get('checkpoints'), 'Provider work resumed after this move; plan a new reverse move instead')
     moved = not source.exists() and destination.exists()
     base = destination if moved else source
     # Ignore only the pointers that this operation is responsible for repairing.
@@ -387,6 +401,42 @@ def apply(journal, data):
     return data
 
 
+def record_checkpoints(journal, data, claims):
+    """Accept exactly the named checkpoint commits that a verified continuation added.
+
+    The saved snapshot is never rewritten. Every other ref and Git field must
+    still match, and each checkpoint must snapshot its unchanged, clean HEAD.
+    """
+    require(data['phase'] == 'applied', 'Record checkpoints only after a successful apply')
+    checkouts = {state['path']: state for state in expected(data, True)['checkouts']}
+    known = {checkpoint['ref'] for checkpoint in data.get('checkpoints', [])}
+    added = []
+    for ref, oid, checkout in claims:
+        require(CHECKPOINT_REF.fullmatch(ref), f'Not a T3 checkpoint ref: {ref}')
+        require(ref not in known, f'Checkpoint named twice: {ref}')
+        known.add(ref)
+        require(OBJECT_ID.fullmatch(oid), f'Use the full object ID for {ref}')
+        state = checkouts.get(str(path_arg(checkout)))
+        require(state is not None, f'Not a checkout in this move: {checkout}')
+        added.append({'ref': ref, 'oid': oid, 'checkout': state['path']})
+    candidate = {**data, 'checkpoints': data.get('checkpoints', []) + added}
+    verify_data(candidate, True)
+    base = Path(data['destination'])
+    for checkpoint in added:
+        head = checkouts[checkpoint['checkout']]['head']
+        oid = checkpoint['oid']
+        require(git(base, 'cat-file', '-t', oid).strip() == b'commit', f"Checkpoint is not a commit: {checkpoint['ref']}")
+        require(git(base, 'rev-list', '--parents', '-n', '1', oid).split()[1:] == [head.encode()],
+                f"Checkpoint parent is not its checkout's HEAD: {checkpoint['ref']}")
+        tree = git(base, 'rev-parse', oid + '^{tree}').strip()
+        require(tree == git(base, 'rev-parse', head + '^{tree}').strip(),
+                f"Checkpoint tree differs from its clean checkout: {checkpoint['ref']}")
+        checkpoint.update(tree=tree.decode(), recorded_at=now())
+    data['checkpoints'] = candidate['checkpoints']
+    record(journal, data, 'applied')
+    return data
+
+
 def same_checkout(path, data):
     if not path.is_dir() or path.is_symlink():
         return False
@@ -424,6 +474,8 @@ def main():
         sub.add_parser(name, help={'apply': 'Revalidate, move, repair, and verify',
                                   'verify': 'Check the preserved state at its current location',
                                   'rollback': 'Restore the original path if preserved state still matches'}[name])
+    p = sub.add_parser('record-checkpoints', help='Accept exactly the checkpoint refs a verified continuation added')
+    p.add_argument('--checkpoint', nargs=3, action='append', required=True, metavar=('REF', 'OID', 'CHECKOUT'))
     for p in sub.choices.values():
         p.add_argument('--journal', required=True, help='Private JSON record outside all affected checkouts')
     args = parser.parse_args()
@@ -439,12 +491,15 @@ def main():
                     data = apply(journal, data)
                 elif args.command == 'rollback':
                     data = rollback(journal, data)
+                elif args.command == 'record-checkpoints':
+                    data = record_checkpoints(journal, data, args.checkpoint)
                 else:
                     moved = not Path(data['source']).exists() and Path(data['destination']).exists()
                     verify_data(data, moved)
         print(json.dumps({'status': 'passed', 'command': args.command, 'phase': data['phase'],
                           'source': data['source'], 'destination': data['destination'],
-                          'retained_worktrees': len(data['before']['checkouts']) - 1, 'journal': str(journal)}))
+                          'retained_worktrees': len(data['before']['checkouts']) - 1,
+                          'checkpoints': len(data.get('checkpoints', [])), 'journal': str(journal)}))
     except (Refused, OSError, ValueError, subprocess.SubprocessError) as error:
         phase = f"; journal phase: {data['phase']}" if data else ''
         print(f'Refused: {error}{phase}', file=sys.stderr)

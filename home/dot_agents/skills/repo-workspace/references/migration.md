@@ -14,14 +14,14 @@ Keep the journal in a private, persistent directory outside every affected check
 
 ## Prepare the coordinated move
 
-1. Verify repository/upstream/fork identity and the exact old/new paths. Inspect path consumers such as setup scripts, absolute configuration, shell sessions, editors, agents, and external worktrees. Do not change remotes as part of a path migration.
-2. Read the live project and **all** its threads, including archived threads and review children. Record the original project ID/root/title/scripts, thread IDs/parents/branches/worktree bindings, run/provider metadata, settled/archive state, and ordered history item IDs. Classify each thread by provider and root versus retained-worktree binding. Before a batch, run an explicitly authorized bounded pilot for any provider/binding combination whose resumption must remain usable but is not yet proven. Known live proof covers root-bound Grok and Codex in an unchanged external worktree; Claude resumption and a changed root-bound Codex cwd remain unproven. Keep the snapshot outside affected paths. Paginate metadata reads; avoid exporting message bodies or credentials. Preserve IDs rather than recreating projects or transferring threads.
+1. Verify repository/upstream/fork identity, the category and alias of the destination, and the exact old and new paths. Inspect path consumers such as setup scripts, absolute configuration, shell sessions, editors, agents, and external worktrees. Do not change remotes as part of a path migration.
+2. Read the live project and **all** its threads, including archived threads and review children. The native project thread listing currently returns active threads only. Check archived and deleted records separately through supported native access, or through read-only metadata lookup against the verified live environment store, then read surviving IDs natively. Record the original project ID/root/title/scripts, thread IDs/parents/branches/worktree bindings, run/provider metadata, settled/archive state, and ordered history item IDs. Classify each thread by provider and root versus retained-worktree binding. Before a batch, run an explicitly authorized bounded pilot for any provider/binding combination whose resumption must remain usable but is not yet proven. Known live proof covers root-bound Grok and Claude after a root change, and Codex and Claude in an unchanged external worktree. A changed root-bound Codex cwd remains unproven. Keep the snapshot outside affected paths. Paginate metadata reads; avoid exporting message bodies or credentials. Preserve IDs rather than recreating projects or transferring threads.
 3. Confirm affected runs and tools are idle, and keep them idle during cutover. Do not move an active provider process. An existing cwd beneath any affected checkout blocks the helper. Use a coordinating thread whose cwd is outside all affected paths.
-4. Create/inspect the destination owner directory, then prepare:
+4. Create or inspect the destination category directory, then prepare:
 
 ```sh
-python3 scripts/migrate.py prepare --source /real/old/owner/repo \
-  --destination /real/new/owner/repo --journal /private/evidence/move.json
+python3 scripts/migrate.py prepare --source /real/old/path/talos \
+  --destination /real/dev-root/Contribute/talos --journal /private/evidence/move.json
 ```
 
 Preparation writes a snapshot but does not relocate anything. Review the exact paths and retained worktrees, T3 update, continuation test, and rollback plan. Existing user authorization for that concrete move suffices; an audit request alone does not authorize applying it.
@@ -40,7 +40,21 @@ Read the journal phase after any error: `prepared` after a rename refusal means 
 
 2. Update the **existing** T3 project root/title through the live project API, retaining its ID and scripts. Linked worktree paths remain unchanged. Compare saved thread bindings, lineage, run metadata, and history IDs before continuing any thread; no unexplained loss or replacement is acceptable.
 3. Continue the relevant existing conversation with a tightly scoped, read-only test. Have it report `pwd`, Git top-level/common directory, HEAD, branch, and status, and recall its prior task. Do not supply the expected cwd or let it use `cd`/an explicit workdir: that would conceal a stale binding. Inspect actual command output, not just the agent's claim. This test appends history; verify the original ordered prefix survives and restore prior settled/archive state where appropriate. It must not edit, fetch, build, delegate, or publish.
-4. Run `verify` against the journal and confirm Git still matches, the old path is absent, and no duplicate project was created. Record any host-created internal ref/config drift as a blocker to inspect, not something to force through. Finish only when filesystem, project/history preservation, and continuation have passed.
+4. Run `verify` against the journal and confirm Git still matches, the old path is absent, and no duplicate project was created. Finish only when filesystem, project/history preservation, and continuation have passed.
+
+### Checkpoint refs from the continuation
+
+T3 records a checkpoint commit for each provider turn, even a read-only one, so after the continuation `verify` refuses with `refs` changed. Do not weaken the check, delete the refs, or edit the journal. Instead:
+
+1. List the new refs with `git for-each-ref refs/t3` and match each name to its thread and the continuation run: the ordinal is that thread's run ordinal. Anything you cannot account for that way is a blocker to inspect.
+2. Record exactly those refs, each with its full object ID and the checkout its thread is bound to:
+
+```sh
+python3 scripts/migrate.py record-checkpoints --journal /private/evidence/move.json \
+  --checkpoint refs/t3/orchestration-v2/checkpoints/<thread>/ordinal/<n> <oid> /real/dev-root/Contribute/talos
+```
+
+The helper accepts only `refs/t3/orchestration-v2/checkpoints/<id>/ordinal/<n>` names. Each must be a commit whose parent is its checkout's saved HEAD and whose tree equals that clean HEAD tree. Every other ref, as well as HEAD, branch, index, config, worktree pointer, and inode, must still match the saved snapshot, and no unlisted ref may appear. The original snapshot is kept unchanged; the accepted refs are added to the journal, and later `verify` runs account for them. Refusal leaves the journal untouched.
 
 ## Recovery
 
@@ -49,12 +63,14 @@ python3 scripts/migrate.py verify --journal /private/evidence/move.json
 python3 scripts/migrate.py rollback --journal /private/evidence/move.json
 ```
 
-Standalone rollback restores the original path and Git pointers **only when the saved Git state still matches**, ignoring solely the pointer changes owned by this move. It refuses later edits, new refs, configuration changes, an occupied old path, or active cwd processes. It can also recover an interrupted rename/repair when that state still matches. Inspect recovery failures instead of deleting paths, pruning records, resetting refs, or creating a compatibility symlink.
+Standalone rollback restores the original path and Git pointers **only when the saved Git state still matches**, before any provider work resumes, ignoring solely the pointer changes owned by this move. It refuses later edits, new refs, configuration changes, an occupied old path, or active cwd processes. It can also recover an interrupted rename/repair when that state still matches. Inspect recovery failures instead of deleting paths, pruning records, resetting refs, or creating a compatibility symlink.
+
+Once a continuation's checkpoints are recorded, the journal refuses rollback: the threads have new history that moving the directory back cannot undo. After that, or after any later legitimate work, the journal is evidence rather than a live invariant, and `verify` will refuse once ordinary work changes the checkout. To revert such a move, plan a new move in the reverse direction with a new journal and its own T3 update and continuation check.
 
 If the T3 update or continuation fails after Git moved, keep affected threads idle, roll back Git when eligible, and restore the saved project root/title through the API. Verify original bindings/history and their usability. If the API reply is ambiguous, read the current project before retrying. A failure to restore either side remains an incomplete migration; the helper journal alone does not claim T3 success.
 
 ## Evidence and tests
 
-The fixture tests live in the dotfiles repository, not in the deployed skill. Run `python3 -m unittest tests.skills.test_repo_workspace_migrate` from the repository root (the parent of `chezmoi source-path`). They create disposable local Git fixtures, including temporary commits, and never move real checkouts. They exercise the real exclusive rename and Git repair, plus the failure and recovery paths. Cross-device refusal is simulated, so no second mounted filesystem is needed.
+The fixture tests live in the dotfiles repository, not in the deployed skill. Run `python3 -m unittest tests.skills.test_repo_workspace_migrate` from the repository root, which is `git -C "$(chezmoi source-path)" rev-parse --show-toplevel`. They create disposable local Git fixtures, including temporary commits, and never move real checkouts. They exercise the real exclusive rename and Git repair, the failure and recovery paths, and checkpoint recording, including refusals for changed or extra refs, wrong objects, and unrelated drift. Cross-device refusal is simulated, so no second mounted filesystem is needed.
 
-Live pilots proved two cases: a root-bound Grok continuation, and a Codex continuation in a retained external worktree that also preserved its review children. They did not prove a change to a root-bound Codex cwd, Claude continuation, moving active processes, dirty or submodule migrations, or cross-filesystem moves. Run a fresh bounded pilot before expanding into those cases.
+Live pilots proved a root-bound Grok continuation; a Codex continuation in a retained external worktree that preserved its review children; and Claude continuations at a changed root and in a retained external worktree, with all original thread history intact. The Claude pilot found the checkpoint ref behavior; `record-checkpoints` is fixture-tested but has not yet been run against a live journal. Pilots did not prove a change to a root-bound Codex cwd, moving active processes, dirty or submodule migrations, cross-filesystem moves, or any Linux or Windows move. Run a fresh bounded pilot before expanding into those cases.

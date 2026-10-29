@@ -446,6 +446,119 @@ class MigrationTests(unittest.TestCase):
             process.terminate()
             process.wait(timeout=10)
 
+    def checkpoint(self, path, ordinal, tree='HEAD^{tree}', parent='HEAD', ref=None):
+        """Mimic T3: a commit of the clean HEAD tree, parented on HEAD, under a per-thread ref."""
+        ref = ref or f'refs/t3/orchestration-v2/checkpoints/dGhyZWFk/ordinal/{ordinal}'
+        tree = self.run_git(path, 'rev-parse', tree).decode().strip()
+        parent = self.run_git(path, 'rev-parse', parent).decode().strip()
+        oid = self.run_git(path, 'commit-tree', tree, '-p', parent, '-m', f't3 checkpoint ref={ref}').decode().strip()
+        self.run_git(path, 'update-ref', ref, oid)
+        return [ref, oid, str(path)]
+
+    def moved_with_task_worktree(self):
+        wt = self.linked()
+        (wt / 'tracked').write_text('task branch content')
+        self.run_git(wt, 'commit', '-am', 'Diverge the task worktree')
+        self.run_git(self.source, 'update-ref', 'refs/notes/fixture', 'HEAD')
+        data = self.prepare()
+        m.apply(self.journal, data)
+        return data, wt
+
+    def assert_record_refused(self, data, claims, pattern):
+        before = self.journal.read_bytes()
+        with self.assertRaisesRegex(m.Refused, pattern):
+            m.record_checkpoints(self.journal, data, claims)
+        self.assertEqual(self.journal.read_bytes(), before)
+
+    def test_continuation_checkpoints_are_recorded_without_rewriting_snapshot(self):
+        data, wt = self.moved_with_task_worktree()
+        saved = json.dumps(data['before'], sort_keys=True)
+        claims = [self.checkpoint(self.dest, 3), self.checkpoint(wt, 49)]
+        with self.assertRaisesRegex(m.Refused, 'refs'):
+            m.verify_data(data, True)
+        result = subprocess.run([sys.executable, str(MODULE), 'record-checkpoints', '--journal', str(self.journal),
+                                 *[arg for claim in claims for arg in ('--checkpoint', *claim)]],
+                                capture_output=True, text=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['checkpoints'], 2)
+        data = m.load(self.journal)
+        self.assertEqual(json.dumps(data['before'], sort_keys=True), saved)
+        self.assertEqual(data['phase'], 'applied')
+        m.verify_data(data, True)
+        m.apply(self.journal, data)  # A retried apply accepts recorded checkpoints too.
+        later = self.checkpoint(self.dest, 4)
+        with self.assertRaisesRegex(m.Refused, 'refs'):
+            m.verify_data(data, True)
+        m.record_checkpoints(self.journal, data, [later])
+        self.assert_record_refused(data, [later], 'named twice')
+        with self.assertRaisesRegex(m.Refused, 'reverse move'):
+            m.rollback(self.journal, data)
+        self.assertTrue(self.dest.exists())
+
+    def test_checkpoint_recording_refuses_changed_or_deleted_old_refs(self):
+        data, _ = self.moved_with_task_worktree()
+        claim = self.checkpoint(self.dest, 3)
+        original = self.run_git(self.dest, 'rev-parse', 'refs/notes/fixture').decode().strip()
+        self.run_git(self.dest, 'update-ref', 'refs/notes/fixture', claim[1])
+        self.assert_record_refused(data, [claim], 'refs')
+        self.run_git(self.dest, 'update-ref', '-d', 'refs/notes/fixture')
+        self.assert_record_refused(data, [claim], 'refs')
+        self.run_git(self.dest, 'update-ref', 'refs/notes/fixture', original)
+        m.record_checkpoints(self.journal, data, [claim])
+
+    def test_checkpoint_recording_refuses_unexpected_refs(self):
+        data, wt = self.moved_with_task_worktree()
+        claim = self.checkpoint(self.dest, 3)
+        undeclared = self.checkpoint(wt, 49)
+        self.assert_record_refused(data, [claim], 'refs')
+        self.run_git(self.dest, 'update-ref', '-d', undeclared[0])
+        self.run_git(self.dest, 'branch', 'unrelated-work')
+        self.assert_record_refused(data, [claim], 'refs')
+        self.run_git(self.dest, 'branch', '-D', 'unrelated-work')
+        for ref in ('refs/heads/unrelated-work', 'refs/t3/other/thread', 'refs/t3/orchestration-v2/checkpoints/a/b/ordinal/1'):
+            with self.subTest(ref=ref):
+                self.assert_record_refused(data, [[ref, claim[1], str(self.dest)]], 'Not a T3 checkpoint')
+        m.record_checkpoints(self.journal, data, [claim])
+
+    def test_checkpoint_recording_refuses_wrong_objects(self):
+        data, wt = self.moved_with_task_worktree()
+        empty_tree = self.run_git(self.dest, 'hash-object', '-t', 'tree', '-w', os.devnull).decode().strip()
+        task_head = self.run_git(wt, 'rev-parse', 'HEAD').decode().strip()
+        cases = {
+            'tree differs': lambda: self.checkpoint(self.dest, 3, tree=empty_tree),
+            'parent': lambda: self.checkpoint(self.dest, 3, parent=task_head),
+            'missing or moved': lambda: [self.checkpoint(self.dest, 3)[0], '0' * 40, str(self.dest)],
+            'not a commit': lambda: self.tree_ref(empty_tree),
+        }
+        for pattern, make in cases.items():
+            with self.subTest(pattern=pattern):
+                claim = make()
+                self.assert_record_refused(data, [claim], pattern)
+                self.run_git(self.dest, 'update-ref', '-d', claim[0])
+        claim = self.checkpoint(wt, 3)
+        self.assert_record_refused(data, [[claim[0], claim[1], str(self.dest)]], 'parent')
+        self.assert_record_refused(data, [[claim[0], claim[1][:12], str(wt)]], 'full object ID')
+        self.assert_record_refused(data, [[claim[0], claim[1], str(self.root)]], 'Not a checkout')
+
+    def tree_ref(self, tree):
+        ref = 'refs/t3/orchestration-v2/checkpoints/dGhyZWFk/ordinal/3'
+        self.run_git(self.dest, 'update-ref', ref, tree)
+        return [ref, tree, str(self.dest)]
+
+    def test_checkpoint_recording_refuses_unrelated_drift(self):
+        data, _ = self.moved_with_task_worktree()
+        claim = self.checkpoint(self.dest, 3)
+        self.run_git(self.dest, 'config', 'remote.pushDefault', 'changed')
+        self.assert_record_refused(data, [claim], 'config')
+        self.run_git(self.dest, 'config', '--unset', 'remote.pushDefault')
+        (self.dest / 'new-work').write_text('keep')
+        self.assert_record_refused(data, [claim], 'Dirty')
+
+    def test_checkpoints_require_an_applied_move(self):
+        data = self.prepare()
+        claim = self.checkpoint(self.source, 3)
+        self.assert_record_refused(data, [claim], 'successful apply')
+
     def test_cli_prepare_apply_verify_rollback(self):
         for args in (
             ['prepare', '--source', str(self.source), '--destination', str(self.dest)],
