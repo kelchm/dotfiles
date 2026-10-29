@@ -246,6 +246,17 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, 'finished after rollback'):
             m.apply(self.journal, data)
 
+    def test_rollback_refuses_a_corrupted_pointer_prefix(self):
+        wt = self.linked()
+        data = self.prepare()
+        m.apply(self.journal, data)
+        marker = (wt / '.git').read_text()
+        (wt / '.git').write_text(marker.replace('gitdir: ', 'GITDIR: ', 1))
+        with self.assertRaises(m.Refused):
+            m.rollback(self.journal, data)
+        self.assertEqual(m.load(self.journal)['phase'], 'applied')
+        self.assertTrue(self.dest.exists())
+
     def test_partial_repair_failure_restores_every_pointer(self):
         one, two = self.linked('one'), self.linked('two')
         data = self.prepare()

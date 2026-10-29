@@ -63,6 +63,12 @@ def git_text(text):
     return text.replace('\\', '/').lower() if WINDOWS else text
 
 
+def pointer_text(text):
+    """Normalize only the path in a worktree pointer; its 'gitdir: ' prefix must stay exact."""
+    prefix = 'gitdir: '
+    return prefix + git_text(text[len(prefix):]) if text.startswith(prefix) else text
+
+
 def output_path(output):
     return Path(os.fsdecode(output.rstrip(b'\n')))
 
@@ -244,7 +250,7 @@ def capture(base, specs=None, check_links=True, checkpoints=()):
                  'config_worktree': file_hash(admin / 'config.worktree'),
                  'effective_config': digest(run('config', '--null', '--list', '--includes'))}
         if spec['admin'] != '.':
-            marker = git_text((path / '.git').read_text())
+            marker = pointer_text((path / '.git').read_text())
             if check_links:
                 require(marker == f'gitdir: {git_path(admin)}\n', 'Only absolute, canonical worktree pointers are supported')
             state.update(marker=marker, backlink=(admin / 'gitdir').read_text(),
