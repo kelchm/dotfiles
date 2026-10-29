@@ -126,6 +126,14 @@ def parse_pr(value: str) -> tuple[str, str, int]:
     return parsed.hostname, match[1], int(match[2])
 
 
+def path_forms(value: str | None) -> set[str]:
+    """A path as written and as resolved, without trailing slashes."""
+    if not value:
+        return set()
+    written = value.rstrip("/") or "/"
+    return {written, str(Path(written).expanduser().resolve())}
+
+
 def contains(value: str) -> str:
     return "%" + value.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
 
@@ -260,16 +268,17 @@ def search(
         matches = [result(row, database, "thread-id") for row in rows]
     elif args.path:
         # A primary checkout matches its project's root; a worktree matches its own binding.
-        given = args.path.rstrip("/") or "/"
-        paths = list(dict.fromkeys([given, str(Path(given).expanduser().resolve())]))
-        marks = ",".join("?" * len(paths))
+        # Normalize stored paths too, before limiting, so spelling never hides a binding.
+        target = path_forms(args.path)
         rows = conn.execute(
-            f"""SELECT {FIELDS} {from_sql()} WHERE {scope} AND (
-            json_extract(t.payload_json,'$.worktreePath') IN ({marks}) OR p.workspace_root IN ({marks}))
-            ORDER BY t.updated_at DESC,t.thread_id LIMIT ?""",
-            [*params, *paths, *paths, args.limit + 1],
+            f"SELECT {FIELDS} {from_sql()} WHERE {scope} ORDER BY t.updated_at DESC,t.thread_id",
+            params,
         )
-        matches = [result(row, database, "path") for row in rows]
+        matches = [
+            result(row, database, "path")
+            for row in rows
+            if target & (path_forms(row["worktree_path"]) | path_forms(row["workspace_root"]))
+        ]
     elif args.pr:
         host, repository, number = parse_pr(args.pr)
         urls = [

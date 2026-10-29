@@ -32,7 +32,7 @@ python3 "$HOME/.agents/skills/t3-thread-search/scripts/t3-thread-search" --inclu
 
 Text queries match archived titles, branches, and indexed messages. `--include-deleted` also searches retained deleted records. `--thread` requires `--include-deleted` and returns only the deleted record’s compact metadata; it does not establish whether messages remain. Known surviving IDs go to native read. `--provider-id` matches only exact thread/session/native identifiers and searches active and archived records, plus deleted ones when requested. Results contain identity, project, dates, provider IDs, and bounded matching context. Use native read for the selected surviving thread.
 
-`--path` is an exact match, not a prefix. A primary checkout's path matches every thread of the project rooted there, including threads bound to its worktrees elsewhere. A worktree's path matches only the threads bound to that worktree. It accepts `--limit` up to 1000, so a whole project fits in one result. Check the `truncated` flag before treating the list as complete.
+`--path` matches a whole path, not a prefix, after resolving symlinks and trailing slashes on both the query and stored paths. It returns threads whose project is rooted at that path, including threads bound to that project's worktrees elsewhere, plus threads whose own worktree is that path. It accepts `--limit` up to 1000. Check the `truncated` flag before treating the list as complete.
 
 `--project TEXT` filters by project title or workspace path. `--limit N` defaults to 20, maximum 100. `--json` gives structured output. See `--help` for all options. The skill's `mise.toml` supplies Python if needed.
 

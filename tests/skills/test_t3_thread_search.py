@@ -182,6 +182,23 @@ class RecoveryTests(unittest.TestCase):
                 self.assertFalse(found)
                 self.assertIn("native listing for active threads", warnings[0])
 
+    def test_path_matches_stored_spellings_and_symlinks(self):
+        real = self.root / "checkout"
+        real.mkdir()
+        alias = self.root / "alias"
+        alias.symlink_to(real, target_is_directory=True)
+        for stored, query in ((f"{real}/", str(real)), (str(alias), str(real)), (str(real), str(alias))):
+            with self.subTest(stored=stored, query=query):
+                self.execute("UPDATE projection_projects SET workspace_root=?", (stored,))
+                found, _, truncated = self.search("--path", query)
+                self.assertEqual({r["thread_id"] for r in found}, {ARCHIVED, DELEGATED_ID})
+                self.assertFalse(truncated)
+
+    def test_path_truncation_is_reported(self):
+        found, _, truncated = self.search("--path", "/tmp/spark", "--limit", "1")
+        self.assertEqual(len(found), 1)
+        self.assertTrue(truncated)
+
     def test_path_inventories_allow_a_larger_limit(self):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             self.assertEqual(recovery.main(["--db", str(self.db), "--path", "/tmp/spark", "--limit", "1000"]), 0)
