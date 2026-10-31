@@ -20,7 +20,7 @@ thread: T3_THREAD_ID
 -->
 ```
 
-`MODEL_ID` is the exact ID the runtime uses, not a display name. `HARNESS` is the CLI you are running in. In T3 Code, `t3_thread_configuration` returns the model ID and the thread ID. Leave out a line you can't fill; never guess one.
+`MODEL_ID` is the exact ID the runtime uses, not a display name. `HARNESS` is the CLI you are running in. In T3 Code, `t3_thread_configure` with no arguments returns the model ID and the thread ID. Leave out a line you can't fill; never guess one.
 
 The block names whoever wrote that text. A pull request description and its commits can have different authors.
 
