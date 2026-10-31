@@ -9,6 +9,8 @@
 
 - Review across labs. For a consequential review, use a model from a different vendor than the one that wrote the work. Same-model review is fine for a quick sanity check.
 - Choose effort from the task, not the model. A clear, bounded task needs little; ambiguous, risky, or verification-heavy work needs more. When in doubt, go higher. Set it explicitly when you delegate: left unset, it falls back to a default, often medium. If the output misses the bar, raise the effort on the same model first; if it still misses, redo the work with a smarter model. Don't stop to ask.
+- When the user asks for a T3 thread they will work in directly, create a normal top-level thread rather than silently substituting a subagent.
+- Before asking the user to sign in to a T3 browser, open the tab in a thread they can reach and verify its state. If thread or profile scoping prevents that, say so and establish a reachable normal thread first.
 
 ## Pull requests
 
