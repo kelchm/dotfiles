@@ -160,11 +160,75 @@ extra_bins = ["opencode2"]
         self.apply()
         self.assertEqual(p.read_bytes(), text)
 
+    def test_tools_re_is_off_by_default(self):
+        for profile in DEFAULTS:
+            with self.subTest(profile=profile):
+                self.assertFalse(DEFAULTS[profile]["tools-re"])
+                self.configure(profile)
+                managed = self.chezmoi("managed").stdout
+                self.assertNotIn("reverse-engineer-anything", managed)
+                body = self.chezmoi("cat", str(self.home / ".config/mise/config.toml")).stdout
+                config = tomllib.loads(body)
+                self.assertNotIn("npm:rea-agents", config["tools"])
+                external = self.chezmoi("execute-template", "-f", str(ROOT / "home/.chezmoiexternal.toml")).stdout
+                self.assertNotIn("rea-agents", external)
+
+    def test_tools_re_opt_in_and_opt_out_preserve_local_state(self):
+        self.configure(modules={"tools-re": True})
+        mise = self.seed(".config/mise/config.toml", '[tools]\nnode = "24.22.1"\nruby = "3.4"\n')
+        local = self.seed(".codex/config.toml", '[mcp_servers.local]\ncommand = "local-server"\n')
+        original = local.read_bytes()
+        self.apply()
+        config = tomllib.loads(mise.read_text())
+        pin = tomllib.loads((ROOT / "home/.chezmoidata.toml").read_text())["dotfiles"]["pins"]["rea"]
+        self.assertEqual(config["tools"]["npm:rea-agents"]["version"], pin)
+        self.assertEqual(config["tools"]["node"], "24.22.1")
+        self.assertEqual(config["tools"]["ruby"], "3.4")
+        skill = self.home / ".agents/skills/reverse-engineer-anything"
+        self.assertIn("name: reverse-engineer-anything", (skill / "SKILL.md").read_text())
+        self.assertTrue((skill / "references/connection-and-recovery.md").is_file())
+        for harness in [".claude/skills", ".codex/skills", ".pi/agent/skills"]:
+            self.assertEqual((self.home / harness / skill.name).resolve(), skill.resolve())
+        self.assertEqual(local.read_bytes(), original)
+        first = mise.read_bytes()
+        self.apply()
+        self.assertEqual(mise.read_bytes(), first)
+        self.chezmoi("verify", "--exclude", "scripts")
+        self.configure()
+        self.apply()
+        self.assertNotIn("reverse-engineer-anything", self.chezmoi("managed").stdout)
+        self.assertEqual(mise.read_bytes(), first)
+        self.assertTrue((skill / "SKILL.md").is_file())
+        self.assertEqual(local.read_bytes(), original)
+
+    def test_tools_re_cli_can_be_used_without_agent_configuration(self):
+        self.configure(modules={"tools-re": True, "agents": False})
+        self.apply()
+        config = tomllib.loads((self.home / ".config/mise/config.toml").read_text())
+        self.assertIn("npm:rea-agents", config["tools"])
+        self.assertFalse((self.home / ".agents").exists())
+        self.assertFalse((self.home / ".codex").exists())
+        external = self.chezmoi("execute-template", "-f", str(ROOT / "home/.chezmoiexternal.toml")).stdout
+        self.assertNotIn("rea-agents", external)
+
+    def test_tools_re_requires_tools(self):
+        self.configure("standalone", modules={"tools-re": True, "tools": False, "runtimes": False})
+        for args in [("init",), ("managed",)]:
+            result = self.chezmoi(*args, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("tools-re module requires the tools module", result.stderr)
+
+    def test_tools_re_choice_survives_init(self):
+        self.configure("standalone", modules={"tools-re": True})
+        self.chezmoi("init")
+        data = tomllib.loads(self.config.read_text())["data"]
+        self.assertTrue(data["modules"]["tools-re"])
+
     def test_standalone_platforms_and_bootstrap_render(self):
         for platform in ["linux", "darwin", "windows"]:
             with self.subTest(platform=platform):
                 self.platform = platform
-                self.configure("standalone", bootstrap=True)
+                self.configure("standalone", bootstrap=True, modules={"tools-re": True})
                 managed = self.chezmoi("managed").stdout.splitlines()
                 self.assertIn(".config/starship.toml", managed)
                 self.assertFalse(any("/tests/" in target for target in managed))
@@ -177,6 +241,7 @@ extra_bins = ["opencode2"]
                 self.assertEqual(config["tools"]["node"], "lts")
                 self.assertEqual(config["tools"]["python"], "3.12")
                 self.assertEqual(config["tools"]["aqua:cli/cli"], "2.101.0")
+                self.assertIn("npm:rea-agents", config["tools"])
                 self.assertNotIn("minimum_release_age", config.get("settings", {}))
                 for script in sorted((ROOT / "home/.chezmoiscripts").glob("run*.sh.tmpl")):
                     result = self.chezmoi("execute-template", "-f", str(script)).stdout
@@ -237,6 +302,7 @@ signingMethod = "none"
                 self.assertEqual(data["modules"]["shell"], profile == "standalone")
                 self.assertEqual(data["modules"]["runtimes"], profile == "standalone")
                 self.assertTrue(data["modules"]["agents"])
+                self.assertFalse(data["modules"]["tools-re"])
 
     def test_owned_blocks_survive_external_crlf_rewrites(self):
         self.configure(sshAgent="1password")

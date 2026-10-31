@@ -102,6 +102,7 @@ jobs:
               agents = true
               tools = true
               runtimes = true
+              tools-re = false
               shell = true
               prompt = true
               terminal = true
