@@ -5,3 +5,12 @@ type = "archive"
 url = "https://github.com/github/gh-stack/archive/{{ .dotfiles.pins.ghStackCommit }}.tar.gz"
 stripComponents = 3
 include = ["*/skills/gh-stack/**"]
+
+{{ if and (hasKey . "modules") (index .modules "reverseEngineering") (index .modules "agents") -}}
+# Use the skill bundled with the pinned npm release, including its references.
+[".agents/skills/reverse-engineer-anything"]
+type = "archive"
+url = "https://registry.npmjs.org/rea-agents/-/rea-agents-{{ .dotfiles.pins.rea }}.tgz"
+stripComponents = 3
+include = ["package/skills/reverse-engineer-anything/**"]
+{{ end -}}

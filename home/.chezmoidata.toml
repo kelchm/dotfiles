@@ -6,6 +6,7 @@ git = true
 agents = true
 tools = true
 runtimes = true
+reverseEngineering = false
 shell = true
 prompt = true
 terminal = true
@@ -18,6 +19,7 @@ git = true
 agents = true
 tools = true
 runtimes = false
+reverseEngineering = false
 shell = false
 prompt = false
 terminal = false
@@ -52,6 +54,13 @@ agents = [
 tools = [
     ".config/mise",
     ".config/mise/**",
+]
+reverseEngineering = [
+    ".agents/skills/reverse-engineer-anything",
+    ".agents/skills/reverse-engineer-anything/**",
+    ".claude/skills/reverse-engineer-anything",
+    ".codex/skills/reverse-engineer-anything",
+    ".pi/agent/skills/reverse-engineer-anything",
 ]
 runtimes = [
     ".local",
@@ -130,3 +139,5 @@ posix = [
 # github/gh-stack release for the gh extension, and that tag's commit for its agent skill.
 ghStack = "v0.2.0"
 ghStackCommit = "d4ab7ab47e5b3e3708a27c8c42abcdf4bc321419"
+# Keep the REA CLI and its bundled agent skill on the same release.
+rea = "6.8.0"

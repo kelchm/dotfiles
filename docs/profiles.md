@@ -9,6 +9,7 @@ A profile supplies module defaults on initialization. Every resulting switch is 
 | `agents` | Shared instructions/skills and the OpenCode Go provider invariant | On | On |
 | `tools` | mise harnesses, gh, uv, updater environment, harness update task | On | On |
 | `runtimes` | Global Node LTS, Python 3.12, Python environment and Rust version-file settings | On | Off |
+| `reverseEngineering` | REA CLI and shared skill when `agents` is enabled | Off | Off |
 | `shell` | Bash/Zsh/Fish/PowerShell startup files and shared shell environment | On | Off |
 | `prompt` | Personal Starship configuration | On | Off |
 | `terminal` | Ghostty, iTerm2, Windows Terminal, and T3 theme files | On | Off |
@@ -36,6 +37,7 @@ git = true
 agents = true
 tools = true
 runtimes = false
+reverseEngineering = false
 shell = false
 prompt = false
 terminal = false
@@ -44,7 +46,7 @@ packages = false
 desktop = false
 ```
 
-Set any switch and review `chezmoi diff` before applying. `runtimes` requires `tools`; `desktop` requires the `omarchy` profile. Disabling a module stops managing its targets and running its bootstrap scripts; it does not delete files already deployed or uninstall tools. To relinquish a managed key in mise, remove it from the local global config after disabling its owning module. There is no automatic destructive cleanup.
+Set any switch and review `chezmoi diff` before applying. `runtimes` and `reverseEngineering` require `tools`; `desktop` requires the `omarchy` profile. Disabling a module stops managing its targets and running its bootstrap scripts; it does not delete files already deployed or uninstall tools. To relinquish a managed key in mise, remove it from the local global config after disabling its owning module. There is no automatic destructive cleanup.
 
 Changing `profile` alone does not reset persisted module choices. To adopt a new profile's defaults, remove `[data.modules]`, change the profile, and run `chezmoi init`. OS/profile and dependency checks run during initialization and ordinary rendering/apply, including after direct local-config edits.
 
@@ -80,6 +82,23 @@ On a change, the merge serializes TOML and removes comments. Once compliant, the
 OpenCode's merge rule enables `opencode-go` when there is an allowlist and removes it from a denylist. Existing `opencode.json` and `opencode.jsonc` are both supported; missing files are left missing, so apply does not add a second global config. Local providers and default models stay local. A changed JSONC file is normalized to JSON; an already-compliant file keeps its comments. Connect providers once per machine; credentials are never in the repo.
 
 Skills have one copy in `~/.agents/skills` and relative links for Claude, Codex, and Pi. `gh-stack` is GitHub's own skill, downloaded at the commit of the extension release pinned in `.chezmoidata.toml`. Skill directories are additive: Omarchy's existing skill links and Codex's built-in `.system` directory remain in place. Agent settings, credentials, sessions, Pi model definitions, and OpenCode local providers remain machine-owned. The exception is the home-lab Sparks: `~/.pi/agent/extensions/spark.ts` lists whichever model they serve and registers nothing when they are unreachable.
+
+## Reverse engineering
+
+`reverseEngineering` is off in both profiles. Run `chezmoi init` once to populate the new switch, then set `reverseEngineering = true` under `[data.modules]` with `chezmoi edit-config`. Review `chezmoi diff` and apply. With bootstrap enabled, the existing mise script installs [Reverse Engineer Anything (REA)](https://github.com/morluto/rea). Otherwise, run `mise install` after applying. When `agents` is also enabled, chezmoi installs REA's upstream skill and references, shared by Claude, Codex, and Pi.
+
+REA 6.8.0 needs Node `^22.23.4 || ^24.22.1 || >=26.12.1`, and this module doesn't install it. With `runtimes` enabled, run `mise upgrade node` if the installed LTS is older. Otherwise, select a supported global version, for example `mise use -g node@24`. The REA install allows Frida's build script for native instrumentation.
+
+Choose MCP clients explicitly, preview the registrations, then apply them:
+
+```bash
+rea setup --client codex --client claude_code --skill=false --dry-run
+rea setup --client codex --client claude_code --skill=false --yes
+```
+
+Change the `--client` flags to select your agents, or replace them with `--all-detected` to configure every detected agent. Keep `--skill=false` to preserve chezmoi's skill links. The apply command configures MCP without installing Hopper; Ghidra and other analysis engines are installed separately as needed. Restart the selected agents afterward. MCP settings stay local to each machine; disabling the module leaves existing tools, skills, and registrations in place.
+
+The CLI and skill use the same `dotfiles.pins.rea` release in `.chezmoidata.toml`. To upgrade, update that pin, apply, repeat the scoped MCP setup above, and restart the agents: registrations point at the versioned installation. On Windows, rerun setup after changing Node too. `harness:update` leaves REA at its pin. See [REA's setup guide](https://github.com/morluto/rea/blob/rea-agents-6.8.0/docs/installation.md) for providers and other clients.
 
 ## Extending the repo
 
