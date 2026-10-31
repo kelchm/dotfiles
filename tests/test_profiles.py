@@ -160,10 +160,10 @@ extra_bins = ["opencode2"]
         self.apply()
         self.assertEqual(p.read_bytes(), text)
 
-    def test_reverse_engineering_is_off_by_default(self):
+    def test_tools_re_is_off_by_default(self):
         for profile in DEFAULTS:
             with self.subTest(profile=profile):
-                self.assertFalse(DEFAULTS[profile]["reverseEngineering"])
+                self.assertFalse(DEFAULTS[profile]["tools-re"])
                 self.configure(profile)
                 managed = self.chezmoi("managed").stdout
                 self.assertNotIn("reverse-engineer-anything", managed)
@@ -173,8 +173,8 @@ extra_bins = ["opencode2"]
                 external = self.chezmoi("execute-template", "-f", str(ROOT / "home/.chezmoiexternal.toml")).stdout
                 self.assertNotIn("rea-agents", external)
 
-    def test_reverse_engineering_opt_in_and_opt_out_preserve_local_state(self):
-        self.configure(modules={"reverseEngineering": True})
+    def test_tools_re_opt_in_and_opt_out_preserve_local_state(self):
+        self.configure(modules={"tools-re": True})
         mise = self.seed(".config/mise/config.toml", '[tools]\nnode = "24.22.1"\nruby = "3.4"\n')
         local = self.seed(".codex/config.toml", '[mcp_servers.local]\ncommand = "local-server"\n')
         original = local.read_bytes()
@@ -201,8 +201,8 @@ extra_bins = ["opencode2"]
         self.assertTrue((skill / "SKILL.md").is_file())
         self.assertEqual(local.read_bytes(), original)
 
-    def test_reverse_engineering_cli_can_be_used_without_agent_configuration(self):
-        self.configure(modules={"reverseEngineering": True, "agents": False})
+    def test_tools_re_cli_can_be_used_without_agent_configuration(self):
+        self.configure(modules={"tools-re": True, "agents": False})
         self.apply()
         config = tomllib.loads((self.home / ".config/mise/config.toml").read_text())
         self.assertIn("npm:rea-agents", config["tools"])
@@ -211,24 +211,24 @@ extra_bins = ["opencode2"]
         external = self.chezmoi("execute-template", "-f", str(ROOT / "home/.chezmoiexternal.toml")).stdout
         self.assertNotIn("rea-agents", external)
 
-    def test_reverse_engineering_requires_tools(self):
-        self.configure("standalone", modules={"reverseEngineering": True, "tools": False, "runtimes": False})
+    def test_tools_re_requires_tools(self):
+        self.configure("standalone", modules={"tools-re": True, "tools": False, "runtimes": False})
         for args in [("init",), ("managed",)]:
             result = self.chezmoi(*args, check=False)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("reverseEngineering module requires the tools module", result.stderr)
+            self.assertIn("tools-re module requires the tools module", result.stderr)
 
-    def test_reverse_engineering_choice_survives_init(self):
-        self.configure("standalone", modules={"reverseEngineering": True})
+    def test_tools_re_choice_survives_init(self):
+        self.configure("standalone", modules={"tools-re": True})
         self.chezmoi("init")
         data = tomllib.loads(self.config.read_text())["data"]
-        self.assertTrue(data["modules"]["reverseEngineering"])
+        self.assertTrue(data["modules"]["tools-re"])
 
     def test_standalone_platforms_and_bootstrap_render(self):
         for platform in ["linux", "darwin", "windows"]:
             with self.subTest(platform=platform):
                 self.platform = platform
-                self.configure("standalone", bootstrap=True, modules={"reverseEngineering": True})
+                self.configure("standalone", bootstrap=True, modules={"tools-re": True})
                 managed = self.chezmoi("managed").stdout.splitlines()
                 self.assertIn(".config/starship.toml", managed)
                 self.assertFalse(any("/tests/" in target for target in managed))
@@ -302,7 +302,7 @@ signingMethod = "none"
                 self.assertEqual(data["modules"]["shell"], profile == "standalone")
                 self.assertEqual(data["modules"]["runtimes"], profile == "standalone")
                 self.assertTrue(data["modules"]["agents"])
-                self.assertFalse(data["modules"]["reverseEngineering"])
+                self.assertFalse(data["modules"]["tools-re"])
 
     def test_owned_blocks_survive_external_crlf_rewrites(self):
         self.configure(sshAgent="1password")

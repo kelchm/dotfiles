@@ -20,8 +20,8 @@
 {{- if and .modules.runtimes (not .modules.tools) -}}
   {{- fail "the runtimes module requires the tools module" -}}
 {{- end -}}
-{{- if and .modules.reverseEngineering (not .modules.tools) -}}
-  {{- fail "the reverseEngineering module requires the tools module" -}}
+{{- if and (index .modules "tools-re") (not .modules.tools) -}}
+  {{- fail "the tools-re module requires the tools module" -}}
 {{- end -}}
 {{- if and .modules.desktop (ne .profile "omarchy") -}}
   {{- fail "the desktop module requires the omarchy profile" -}}

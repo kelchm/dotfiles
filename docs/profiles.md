@@ -9,7 +9,7 @@ A profile supplies module defaults on initialization. Every resulting switch is 
 | `agents` | Shared instructions/skills and the OpenCode Go provider invariant | On | On |
 | `tools` | mise harnesses, gh, uv, updater environment, harness update task | On | On |
 | `runtimes` | Global Node LTS, Python 3.12, Python environment and Rust version-file settings | On | Off |
-| `reverseEngineering` | REA CLI and shared skill when `agents` is enabled | Off | Off |
+| `tools-re` | REA CLI and shared skill when `agents` is enabled | Off | Off |
 | `shell` | Bash/Zsh/Fish/PowerShell startup files and shared shell environment | On | Off |
 | `prompt` | Personal Starship configuration | On | Off |
 | `terminal` | Ghostty, iTerm2, Windows Terminal, and T3 theme files | On | Off |
@@ -37,7 +37,7 @@ git = true
 agents = true
 tools = true
 runtimes = false
-reverseEngineering = false
+tools-re = false
 shell = false
 prompt = false
 terminal = false
@@ -46,7 +46,7 @@ packages = false
 desktop = false
 ```
 
-Set any switch and review `chezmoi diff` before applying. `runtimes` and `reverseEngineering` require `tools`; `desktop` requires the `omarchy` profile. Disabling a module stops managing its targets and running its bootstrap scripts; it does not delete files already deployed or uninstall tools. To relinquish a managed key in mise, remove it from the local global config after disabling its owning module. There is no automatic destructive cleanup.
+Set any switch and review `chezmoi diff` before applying. `runtimes` and `tools-re` require `tools`; `desktop` requires the `omarchy` profile. Disabling a module stops managing its targets and running its bootstrap scripts; it does not delete files already deployed or uninstall tools. To relinquish a managed key in mise, remove it from the local global config after disabling its owning module. There is no automatic destructive cleanup.
 
 Changing `profile` alone does not reset persisted module choices. To adopt a new profile's defaults, remove `[data.modules]`, change the profile, and run `chezmoi init`. OS/profile and dependency checks run during initialization and ordinary rendering/apply, including after direct local-config edits.
 
@@ -85,7 +85,7 @@ Skills have one copy in `~/.agents/skills` and relative links for Claude, Codex,
 
 ## Reverse engineering
 
-`reverseEngineering` is off in both profiles. Run `chezmoi init` once to populate the new switch, then set `reverseEngineering = true` under `[data.modules]` with `chezmoi edit-config`. Review `chezmoi diff` and apply. With bootstrap enabled, the existing mise script installs [Reverse Engineer Anything (REA)](https://github.com/morluto/rea). Otherwise, run `mise install` after applying. When `agents` is also enabled, chezmoi installs REA's upstream skill and references, shared by Claude, Codex, and Pi.
+`tools-re` is off in both profiles. Run `chezmoi init` once to populate the new switch, then set `tools-re = true` under `[data.modules]` with `chezmoi edit-config`. Review `chezmoi diff` and apply. With bootstrap enabled, the existing mise script installs [Reverse Engineer Anything (REA)](https://github.com/morluto/rea). Otherwise, run `mise install` after applying. When `agents` is also enabled, chezmoi installs REA's upstream skill and references, shared by Claude, Codex, and Pi.
 
 REA 6.8.0 needs Node `^22.23.4 || ^24.22.1 || >=26.12.1`, and this module doesn't install it. With `runtimes` enabled, run `mise upgrade node` if the installed LTS is older. Otherwise, select a supported global version, for example `mise use -g node@24`. The REA install allows Frida's build script for native instrumentation.
 

@@ -6,7 +6,7 @@ git = true
 agents = true
 tools = true
 runtimes = true
-reverseEngineering = false
+tools-re = false
 shell = true
 prompt = true
 terminal = true
@@ -19,7 +19,7 @@ git = true
 agents = true
 tools = true
 runtimes = false
-reverseEngineering = false
+tools-re = false
 shell = false
 prompt = false
 terminal = false
@@ -55,7 +55,7 @@ tools = [
     ".config/mise",
     ".config/mise/**",
 ]
-reverseEngineering = [
+tools-re = [
     ".agents/skills/reverse-engineer-anything",
     ".agents/skills/reverse-engineer-anything/**",
     ".claude/skills/reverse-engineer-anything",

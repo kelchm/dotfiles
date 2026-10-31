@@ -6,7 +6,7 @@ url = "https://github.com/github/gh-stack/archive/{{ .dotfiles.pins.ghStackCommi
 stripComponents = 3
 include = ["*/skills/gh-stack/**"]
 
-{{ if and (hasKey . "modules") (index .modules "reverseEngineering") (index .modules "agents") -}}
+{{ if and (hasKey . "modules") (index .modules "tools-re") (index .modules "agents") -}}
 # Use the skill bundled with the pinned npm release, including its references.
 [".agents/skills/reverse-engineer-anything"]
 type = "archive"
