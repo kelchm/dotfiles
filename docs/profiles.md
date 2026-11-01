@@ -93,9 +93,11 @@ Bootstrap installs tools on first apply and when the corresponding declarations 
 
 ```bash
 mise install
-# macOS only; installs missing packages without upgrading existing ones:
+# macOS only; installs missing packages without requesting upgrades:
 brew bundle --file="$HOME/.config/reverse-engineering/Brewfile" --no-upgrade
 ```
+
+`--no-upgrade` suppresses explicit upgrades; Homebrew may still update dependencies required to install a missing package.
 
 REA is an optional analysis driver, with built-in JavaScript/artifact inspection and structured evidence. Ghidra provides native decompilation and also works directly through its GUI or headless scripting API. `ghidraRun` starts the GUI; the skill's native guide covers headless analysis without changing the machine's global Java environment. Native engine provisioning on Linux and Windows is not implemented by this module.
 
