@@ -56,6 +56,8 @@ tools = [
     ".config/mise/**",
 ]
 tools-re = [
+    ".config/reverse-engineering",
+    ".config/reverse-engineering/**",
     ".agents/skills/reverse-engineer-anything",
     ".agents/skills/reverse-engineer-anything/**",
     ".claude/skills/reverse-engineer-anything",
@@ -107,6 +109,8 @@ packages = [
 
 [dotfiles.platformPaths]
 darwin = [
+    ".config/reverse-engineering",
+    ".config/reverse-engineering/**",
     ".config/packages/Brewfile",
     ".config/iterm2",
     ".config/iterm2/**",
@@ -139,5 +143,5 @@ posix = [
 # github/gh-stack release for the gh extension, and that tag's commit for its agent skill.
 ghStack = "v0.2.0"
 ghStackCommit = "d4ab7ab47e5b3e3708a27c8c42abcdf4bc321419"
-# Keep the REA CLI and its bundled agent skill on the same release.
+# REA is an optional analysis driver; its workflow skill is maintained locally.
 rea = "6.8.0"

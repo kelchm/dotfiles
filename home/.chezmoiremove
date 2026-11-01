@@ -15,3 +15,12 @@
 .config/opencode/plugins/rtk.ts
 
 {{ end }}
+{{ if and .modules.agents (index .modules "tools-re") }}
+# Replaced upstream REA instructions; the locally owned skill uses the CLI.
+.agents/skills/reverse-engineer-anything/references/connection-and-recovery.md
+.agents/skills/reverse-engineer-anything/references/android-applications.md
+.agents/skills/reverse-engineer-anything/references/environments.md
+.agents/skills/reverse-engineer-anything/references/evidence-workflows.md
+.agents/skills/reverse-engineer-anything/references/javascript-applications.md
+.agents/skills/reverse-engineer-anything/references/runtime-observation.md
+{{ end }}
