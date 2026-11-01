@@ -1,0 +1,11 @@
+{{- if and .bootstrap (index .modules "tools-re") (eq .chezmoi.os "darwin") -}}
+#!/bin/bash
+set -euo pipefail
+
+# hash: {{ include "dot_config/reverse-engineering/Brewfile" | sha256sum }}
+if ! command -v brew >/dev/null 2>&1; then
+  echo "Homebrew is required for tools-re on macOS. Install it from https://brew.sh" >&2
+  exit 1
+fi
+brew bundle --file="$HOME/.config/reverse-engineering/Brewfile" --no-upgrade
+{{- end }}

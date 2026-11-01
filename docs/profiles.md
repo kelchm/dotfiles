@@ -9,7 +9,7 @@ A profile supplies module defaults on initialization. Every resulting switch is 
 | `agents` | Shared instructions/skills and the OpenCode Go provider invariant | On | On |
 | `tools` | mise harnesses, gh, uv, updater environment, harness update task | On | On |
 | `runtimes` | Global Node LTS, Python 3.12, Python environment and Rust version-file settings | On | Off |
-| `tools-re` | REA CLI and shared skill when `agents` is enabled | Off | Off |
+| `tools-re` | REA CLI, Ghidra on macOS, and local skill when `agents` is enabled | Off | Off |
 | `shell` | Bash/Zsh/Fish/PowerShell startup files and shared shell environment | On | Off |
 | `prompt` | Personal Starship configuration | On | Off |
 | `terminal` | Ghostty, iTerm2, Windows Terminal, and T3 theme files | On | Off |
@@ -54,7 +54,7 @@ Changing `profile` alone does not reset persisted module choices. To adopt a new
 
 `bootstrap = true` enables the existing ordered scripts, gated by their modules and OS:
 
-1. Install Homebrew/WinGet packages (`packages`; no Linux package provisioning).
+1. Install Homebrew/WinGet packages (`packages`) and missing Ghidra packages on macOS (`tools-re`; no Linux package provisioning).
 2. Install missing mise tools (`tools`). This does not upgrade existing versions.
 3. Seed the macOS keychain token (`tools`; requires 1Password CLI access).
 4. Select Fish as the macOS login shell (`shell`; may require sudo).
@@ -85,20 +85,25 @@ Skills have one copy in `~/.agents/skills` and relative links for Claude, Codex,
 
 ## Reverse engineering
 
-`tools-re` is off in both profiles. Run `chezmoi init` once to populate the new switch, then set `tools-re = true` under `[data.modules]` with `chezmoi edit-config`. Review `chezmoi diff` and apply. With bootstrap enabled, the existing mise script installs [Reverse Engineer Anything (REA)](https://github.com/morluto/rea). Otherwise, run `mise install` after applying. When `agents` is also enabled, chezmoi installs REA's upstream skill and references, shared by Claude, Codex, and Pi.
+`tools-re` is off in both profiles and requires `tools`. Set `tools-re = true` under `[data.modules]` with `chezmoi edit-config`, review `chezmoi diff`, and apply. Chezmoi owns the declarations and a locally maintained CLI-first skill shared by Claude, Codex, and Pi when `agents` is enabled. Mise installs the pinned [REA CLI](https://github.com/morluto/rea). On macOS, Homebrew installs Ghidra and its matching JDK from `~/.config/reverse-engineering/Brewfile`, independently of the baseline `packages` module.
 
 REA 6.8.0 needs Node `^22.23.4 || ^24.22.1 || >=26.12.1`, and this module doesn't install it. With `runtimes` enabled, run `mise upgrade node` if the installed LTS is older. Otherwise, select a supported global version, for example `mise use -g node@24`. The REA install allows Frida's build script for native instrumentation.
 
-Choose MCP clients explicitly, preview the registrations, then apply them:
+Bootstrap installs tools on first apply and when the corresponding declarations change. To install missing tools with bootstrap disabled, or restore a tool removed since the last bootstrap run, apply the declarations and run:
 
 ```bash
-rea setup --client codex --client claude_code --skill=false --dry-run
-rea setup --client codex --client claude_code --skill=false --yes
+mise install
+# macOS only; installs missing packages without upgrading existing ones:
+brew bundle --file="$HOME/.config/reverse-engineering/Brewfile" --no-upgrade
 ```
 
-Change the `--client` flags to select your agents, or replace them with `--all-detected` to configure every detected agent. Keep `--skill=false` to preserve chezmoi's skill links. The apply command configures MCP without installing Hopper; Ghidra and other analysis engines are installed separately as needed. Restart the selected agents afterward. MCP settings stay local to each machine; disabling the module leaves existing tools, skills, and registrations in place.
+REA is an optional analysis driver, with built-in JavaScript/artifact inspection and structured evidence. Ghidra provides native decompilation and also works directly through its GUI or headless scripting API. `ghidraRun` starts the GUI; the skill's native guide covers headless analysis without changing the machine's global Java environment. Native engine provisioning on Linux and Windows is not implemented by this module.
 
-The CLI and skill use the same `dotfiles.pins.rea` release in `.chezmoidata.toml`. To upgrade, update that pin, apply, repeat the scoped MCP setup above, and restart the agents: registrations point at the versioned installation. On Windows, rerun setup after changing Node too. `harness:update` leaves REA at its pin. See [REA's setup guide](https://github.com/morluto/rea/blob/rea-agents-6.8.0/docs/installation.md) for providers and other clients.
+This module does not register REA MCP globally, including in Pi. No registration or client restart is needed for CLI use. Keep any future MCP opt-in in the project's configuration, using the managed REA installation; verify the chosen harness's project-scoping support first. The locally owned skill replaces the upstream workflow so missing MCP tools do not trigger setup or registration repair. Do not run REA's setup, updater, or uninstaller against this managed installation. Changes to declarations and instructions belong in this repository; mise and Homebrew perform installation. Disabling the module preserves installed tools and deployed files.
+
+Earlier versions documented global REA registration. On a machine that used it, remove only the `rea` server entry with that client's native MCP removal command or a scoped configuration edit; preserve other servers, credentials, and the chezmoi-managed skill.
+
+The REA version belongs in `dotfiles.pins.rea` in `.chezmoidata.toml`; `harness:update` leaves it pinned. Ghidra follows Homebrew's formula. REA 6.8.0 accepts only Ghidra 12.1.x, while Homebrew supplies 12.2. Direct Ghidra analysis remains available; the local skill uses that route when REA rejects the installed version. A newer REA release can be tested and pinned when published. See the [released provider requirements](https://github.com/morluto/rea/blob/rea-agents-6.8.0/docs/installation.md#ghidra).
 
 ## Extending the repo
 

@@ -185,8 +185,9 @@ extra_bins = ["opencode2"]
         self.assertEqual(config["tools"]["node"], "24.22.1")
         self.assertEqual(config["tools"]["ruby"], "3.4")
         skill = self.home / ".agents/skills/reverse-engineer-anything"
-        self.assertIn("name: reverse-engineer-anything", (skill / "SKILL.md").read_text())
-        self.assertTrue((skill / "references/connection-and-recovery.md").is_file())
+        source = ROOT / "home/dot_agents/skills/reverse-engineer-anything"
+        self.assertEqual((skill / "SKILL.md").read_bytes(), (source / "SKILL.md").read_bytes())
+        self.assertTrue((skill / "references/native-and-artifacts.md").is_file())
         for harness in [".claude/skills", ".codex/skills", ".pi/agent/skills"]:
             self.assertEqual((self.home / harness / skill.name).resolve(), skill.resolve())
         self.assertEqual(local.read_bytes(), original)
@@ -200,6 +201,55 @@ extra_bins = ["opencode2"]
         self.assertEqual(mise.read_bytes(), first)
         self.assertTrue((skill / "SKILL.md").is_file())
         self.assertEqual(local.read_bytes(), original)
+
+    def test_tools_re_native_provisioning_is_scoped_to_macos_and_opt_in(self):
+        script = ROOT / "home/.chezmoiscripts/run_onchange_after_01-install-re-tools-darwin.sh.tmpl"
+        target = ".config/reverse-engineering/Brewfile"
+        for platform in ["darwin", "linux", "windows"]:
+            for enabled in [False, True]:
+                for bootstrap in [False, True]:
+                    with self.subTest(platform=platform, enabled=enabled, bootstrap=bootstrap):
+                        self.platform = platform
+                        self.configure("standalone", bootstrap=bootstrap,
+                                       modules={"tools-re": enabled, "packages": False})
+                        managed = self.chezmoi("managed").stdout.splitlines()
+                        self.assertEqual(target in managed, enabled and platform == "darwin")
+                        body = self.chezmoi("execute-template", "-f", str(script)).stdout
+                        self.assertEqual(bool(body.strip()), enabled and bootstrap and platform == "darwin")
+                        if body.strip():
+                            # Execute against a recording brew, never the machine's package manager.
+                            binary = self.base / "bin"
+                            binary.mkdir(exist_ok=True)
+                            calls = self.base / "brew-calls.json"
+                            brew = binary / "brew"
+                            brew.write_text("#!/usr/bin/env python3\nimport json, os, sys\n"
+                                            "with open(os.environ['BREW_CALLS'], 'w') as f:\n"
+                                            "    json.dump(sys.argv[1:], f)\n")
+                            brew.chmod(0o755)
+                            env = dict(os.environ, HOME=str(self.home), BREW_CALLS=str(calls),
+                                       PATH=str(binary) + os.pathsep + os.environ["PATH"])
+                            result = subprocess.run(["bash"], input=body, text=True,
+                                                    capture_output=True, env=env)
+                            self.assertEqual(result.returncode, 0, result.stderr)
+                            self.assertEqual(json.loads(calls.read_text()),
+                                             ["bundle", f"--file={self.home / target}", "--no-upgrade"])
+
+    def test_tools_re_replaces_only_known_upstream_references(self):
+        skill = ".agents/skills/reverse-engineer-anything"
+        stale = self.seed(f"{skill}/references/connection-and-recovery.md", "old upstream setup\n")
+        local = self.seed(f"{skill}/references/local-notes.md", "keep my notes\n")
+        self.configure(modules={"tools-re": False})
+        self.apply()
+        self.assertTrue(stale.is_file())
+        self.configure(modules={"tools-re": True, "agents": False})
+        self.apply()
+        self.assertTrue(stale.is_file())
+        self.configure(modules={"tools-re": True})
+        self.apply()
+        self.assertFalse(stale.exists())
+        self.assertEqual(local.read_text(), "keep my notes\n")
+        self.assertTrue((self.home / skill / "references/native-and-artifacts.md").is_file())
+        self.chezmoi("verify", "--exclude", "scripts")
 
     def test_tools_re_cli_can_be_used_without_agent_configuration(self):
         self.configure(modules={"tools-re": True, "agents": False})
