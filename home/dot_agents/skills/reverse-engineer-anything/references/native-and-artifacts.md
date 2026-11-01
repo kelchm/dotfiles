@@ -8,15 +8,19 @@
 brew bundle --file="$HOME/.config/reverse-engineering/Brewfile" --no-upgrade
 ```
 
-`ghidraRun` launches the GUI with Homebrew's JDK selection. For unattended analysis, choose a task-local project directory and write a Ghidra post-script for the requested output. After creating those paths, locate the headless launcher and set Java only for that invocation:
+Choose a reusable project-storage location with no path component starting with `.`. Ghidra 12.2 rejects hidden components such as `.t3`, `.cache`, or `.local` with `Path element starting with '.' is not permitted`. For a T3 worktree, keep the Ghidra project outside it, for example under `$HOME/ghidra-projects`, and record the project location and name in the investigation's findings. Explicitly selected input binaries and scripts can stay in the worktree.
+
+`ghidraRun` launches the GUI with Homebrew's JDK selection, but its wrapper sets `JAVA_HOME` only for that launch. Calling `support/analyzeHeadless` directly bypasses the wrapper; select the JDK explicitly in each headless shell invocation. After writing a post-script for the requested output, run:
 
 ```sh
 ghidra_install="$(brew --prefix ghidra)/libexec"
 ghidra_java_major="$(sed -n 's/^application.java.min=//p' "$ghidra_install/Ghidra/application.properties")"
 ghidra_java_home="$(brew --prefix "openjdk@$ghidra_java_major")/libexec/openjdk.jdk/Contents/Home"
+ghidra_projects="$HOME/ghidra-projects"
+mkdir -p "$ghidra_projects"
 
 JAVA_HOME="$ghidra_java_home" "$ghidra_install/support/analyzeHeadless" \
-  /absolute/project-directory Investigation \
+  "$ghidra_projects" Investigation \
   -import /absolute/path/to/binary \
   -scriptPath /absolute/script-directory -postScript ExportFindings.java
 ```
