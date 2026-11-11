@@ -13,10 +13,10 @@ while :; do
 done
 ```
 
-**Right:** one connection, with a bounded loop on the host: 30 samples, then it returns.
+**Right:** one connection, with a bounded loop on the host: 30 samples, then it returns. `set -e` stops it if a sample fails.
 
 ```sh
-ssh host 'for i in $(seq 30); do cat /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq; sleep 2; done'
+ssh host 'set -e; for i in $(seq 30); do cat /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq; sleep 2; done'
 ```
 
 ## Several steps
