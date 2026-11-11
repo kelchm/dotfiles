@@ -19,7 +19,7 @@ echo back
 
 ```sh
 boot_id() { timeout 15 ssh -o BatchMode=yes -o ConnectTimeout=5 10.32.21.32 cat /proc/sys/kernel/random/boot_id; }
-before=$(boot_id) || { echo "can't read the boot ID; not rebooting"; exit 1; }
+before=$(boot_id) && [ -n "$before" ] || { echo "can't read the boot ID; not rebooting"; exit 1; }
 ssh -o BatchMode=yes 10.32.21.32 'sudo -n systemctl reboot'
 deadline=$((SECONDS + 900))
 until now=$(boot_id 2>/dev/null) && [ -n "$now" ] && [ "$now" != "$before" ]; do
