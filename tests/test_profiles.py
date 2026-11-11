@@ -362,11 +362,12 @@ signingMethod = "none"
             p.write_bytes(p.read_bytes().replace(b"\n", b"\r\n"))
         self.apply()
         self.assertEqual((self.home / ".gitconfig").read_text().count("# BEGIN dotfiles:"), 1)
-        self.assertEqual((self.home / ".ssh/config").read_text().count("# BEGIN dotfiles:"), 1)
+        self.assertEqual((self.home / ".ssh/config").read_text().count("# BEGIN dotfiles:"), 2)
         self.configure(sshAgent="system")
         self.apply()
-        ssh_config = self.home / ".ssh/config"
-        self.assertFalse(ssh_config.exists())
+        ssh_config = (self.home / ".ssh/config").read_text()
+        self.assertEqual(ssh_config.count("# BEGIN dotfiles:"), 1)
+        self.assertNotIn("IdentityAgent", ssh_config)
 
     def test_init_does_not_pin_an_editor(self):
         self.configure()
@@ -395,7 +396,36 @@ signingMethod = "none"
         self.assertEqual(p.read_text(), text)
         self.configure(sshAgent="system")
         self.apply()
+        text = p.read_text()
+        self.assertTrue(text.startswith(original))
+        self.assertNotIn("IdentityAgent", text)
+        self.apply()
+        self.assertEqual(p.read_text(), text)
+
+    def test_ssh_multiplexing_is_scoped_to_named_hosts(self):
+        self.configure()
+        p = self.seed(".ssh/config", "Host spark-1\n    User admin\n")
+        self.apply()
+        self.assertEqual((self.home / ".ssh/cm").stat().st_mode & 0o777, 0o700)
+        for host in ["spark-1", "spark-2.home.kelch.io", "10.32.21.31", "github.com"]:
+            with self.subTest(host=host):
+                parsed = subprocess.check_output(["ssh", "-G", "-F", str(p), host], text=True, stderr=subprocess.DEVNULL)
+                self.assertIn("controlmaster auto\n", parsed)
+                self.assertIn("/.ssh/cm/", parsed)
+                self.assertIn("serveraliveinterval 15\n", parsed)
+        parsed = subprocess.check_output(["ssh", "-G", "-F", str(p), "spark-1"], text=True, stderr=subprocess.DEVNULL)
+        self.assertIn("user admin\n", parsed)
+        parsed = subprocess.check_output(["ssh", "-G", "-F", str(p), "other.example"], text=True, stderr=subprocess.DEVNULL)
+        self.assertIn("controlmaster false\n", parsed)
+
+    def test_windows_ssh_config_has_no_multiplexing(self):
+        self.platform = "windows"
+        self.configure("standalone")
+        original = "Host github.com\n    User git\n"
+        p = self.seed(".ssh/config", original)
+        self.apply()
         self.assertEqual(p.read_text(), original)
+        self.assertFalse((self.home / ".ssh/cm").exists())
 
     def test_opencode_uses_existing_json_without_creating_jsonc(self):
         self.configure()

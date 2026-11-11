@@ -1,17 +1,27 @@
 {{- /* chezmoi:modify-template */ -}}
-{{- $pattern := `(?ms)^# BEGIN dotfiles: 1Password SSH agent\r?\n.*?^# END dotfiles: 1Password SSH agent\r?\n?` -}}
-{{- $rest := regexReplaceAll $pattern .chezmoi.stdin "" -}}
+{{- $rest := .chezmoi.stdin -}}
+{{- range list "SSH multiplexing" "1Password SSH agent" -}}
+{{-   $rest = regexReplaceAll (printf `(?ms)^# BEGIN dotfiles: %s\r?\n.*?^# END dotfiles: %s\r?\n?` . .) $rest "" -}}
+{{- end -}}
+{{- $blocks := "" -}}
+{{- if ne .chezmoi.os "windows" -}}
+{{- /* Reuse one connection per host: the gateway IDS flags 5 SYNs to port 22 within 120s as an outbound scan. */ -}}
+{{-   $blocks = `# BEGIN dotfiles: SSH multiplexing
+Host spark-1 spark-2 spark-1.home.kelch.io spark-2.home.kelch.io 10.32.21.31 10.32.21.32 github.com
+    ControlMaster auto
+    ControlPersist 10m
+    ControlPath ~/.ssh/cm/%C
+    ServerAliveInterval 15
+    ServerAliveCountMax 3
+# END dotfiles: SSH multiplexing
+` -}}
+{{- end -}}
 {{- if and (eq .sshAgent "1password") (ne .chezmoi.os "windows") -}}
-{{- $socket := "~/.1password/agent.sock" -}}
-{{- if eq .chezmoi.os "darwin" -}}
-  {{- $socket = "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock" -}}
+{{-   $socket := "~/.1password/agent.sock" -}}
+{{-   if eq .chezmoi.os "darwin" -}}
+{{-     $socket = "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock" -}}
+{{-   end -}}
+{{-   $blocks = printf "%s# BEGIN dotfiles: 1Password SSH agent\nHost *\n    IdentityAgent %s\n# END dotfiles: 1Password SSH agent\n" $blocks ($socket | quote) -}}
 {{- end -}}
-{{ $rest }}{{ if and $rest (not (hasSuffix "\n" $rest)) }}
-{{ end -}}
-# BEGIN dotfiles: 1Password SSH agent
-Host *
-    IdentityAgent {{ $socket | quote }}
-# END dotfiles: 1Password SSH agent
-{{ else -}}
-{{ $rest }}
-{{- end -}}
+{{ $rest }}{{ if and $blocks $rest (not (hasSuffix "\n" $rest)) }}
+{{ end }}{{ $blocks -}}

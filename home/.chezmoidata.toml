@@ -125,6 +125,7 @@ windows = [
     "Documents/**",
 ]
 posix = [
+    ".ssh/cm",
     ".config/fish",
     ".config/fish/**",
     ".config/shell",
