@@ -21,29 +21,33 @@ That came to about 1,600 SSH connections an hour from one workstation. Each one 
 **Right:** run the loop on each host, and stream the samples back over one connection.
 
 ```sh
+pids=()
 for n in 1 2; do
-  ssh -o BatchMode=yes kelchm@10.32.21.3$n '
+  ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 kelchm@10.32.21.3$n '
     while :; do
       printf "%s" "$(date -u +%FT%TZ)"
       for p in 0 10 15; do printf ",%s" "$(cat /sys/devices/system/cpu/cpufreq/policy$p/scaling_cur_freq)"; done
       echo; sleep 2
     done' > "clocks-spark-$n.csv" &
+  pids+=($!)
 done
+# … run the benchmark …
+kill "${pids[@]}"
 ```
 
-That's two connections for the whole run, and the timestamps come from the host rather than the workstation.
+That's two connections for the whole run, and the timestamps come from the host rather than the workstation. `-n` keeps the background clients off the terminal's input, and the samplers stop when the benchmark does.
 
 ## Steps that can't be combined
 
 When you need to look at output before choosing the next command, hold one connection open for the job.
 
 ```sh
-sock=/tmp/cm-$$                          # short: macOS caps socket paths at 104 bytes
+dir=$(mktemp -d) && sock=$dir/cm        # private directory; keep the path under macOS's 104-byte limit
 ssh -fNM -S "$sock" kelchm@10.32.21.31
-ssh -S "$sock" -O check kelchm@10.32.21.31  # -S falls back to a fresh connection if the master is gone
+ssh -S "$sock" -O check kelchm@10.32.21.31 || exit 1   # -S falls back to a fresh connection if the master is gone
 ssh -S "$sock" kelchm@10.32.21.31 'docker ps'
 ssh -S "$sock" kelchm@10.32.21.31 'docker logs --tail 50 qwen'
-ssh -S "$sock" -O exit kelchm@10.32.21.31
+ssh -S "$sock" -O exit kelchm@10.32.21.31; rm -rf "$dir"
 ```
 
 Close only a master you opened. Close it before you finish, too, or it outlives the job.

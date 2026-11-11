@@ -24,12 +24,13 @@ root@10.32.30.1: Permission denied (publickey,keyboard-interactive).
 for h in 10.32.30.1 10.32.10.1; do
   if out=$(ssh -o BatchMode=yes root@$h "vtysh -c 'show ip route bgp'"); then
     printf '%s\n' "$out" | head -40; break
+  else
+    echo "$h failed (exit $?)"
   fi
-  echo "$h failed ($?)"
 done
 ```
 
-Or use `set -o pipefail`. An exit status of 255 means SSH itself failed, not the remote command.
+Or use `set -o pipefail`. An exit status of 255 usually means SSH itself failed, though a remote command can also exit 255.
 
 ## A nested ssh swallows the script
 

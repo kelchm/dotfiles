@@ -23,10 +23,10 @@ root@10.32.20.22: Permission denied (publickey,password).
 root@10.32.20.23: Permission denied (publickey,password).
 ```
 
-**Right:** look up how the project reaches the host first. Here the runbooks all use `kelchm@` with `sudo -n`. `ssh -G host | grep -E '^(user|hostname) '` shows what your own config will do.
+**Right:** look up how the project reaches that host first, in its runbooks or inventory, then connect once with that user. `ssh -G host | grep -E '^(user|hostname) '` shows what your own config will do.
 
 ## A host-key mismatch
 
 **Wrong:** connecting by IP after the key was recorded under the host's name, then passing `-o StrictHostKeyChecking=no` to get past the warning.
 
-**Right:** connect by the name the key is pinned under, or compare the fingerprint against one you already trust (`ssh-keygen -F name`). Never turn verification off to make an error go away.
+**Right:** connect by the name the key is pinned under. If the key itself has changed, compare the fingerprint SSH shows against one from a source you trust, such as the host's console. `ssh-keygen -F name` only shows what you already have stored. Never turn verification off to make an error go away.
