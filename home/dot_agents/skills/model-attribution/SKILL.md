@@ -1,7 +1,7 @@
 ---
 name: model-attribution
 description: >
-  Record which model wrote an issue, comment, pull request, or commit. Use before creating or editing any of these on the user's behalf (`gh issue create`, `gh pr create`, a review or issue comment, `git commit`), and for "attribution", "footer", or "co-author" requests.
+  Record which model wrote an issue, comment, pull request, or commit. Use before creating or editing these (`gh issue create`, `gh pr create`, a review or issue comment, `git commit`), before merging PRs (`gh pr merge`, `gh stack merge`), and for "attribution", "footer", or "co-author" requests.
 ---
 
 # Model attribution
@@ -31,5 +31,7 @@ Co-Authored-By: MODEL_ID <noreply@VENDOR_DOMAIN>
 ```
 
 `VENDOR_DOMAIN` is the model vendor's domain. If your harness already adds a co-author trailer for you, that one is enough; don't add a second.
+
+**Merging pull requests.** Keep the hidden attribution block on the PR; never copy it into a commit message. For a squash or merge commit, supply a message without that block and carry forward the change authors' `Co-Authored-By` trailers from the PR's commits. Do not add yourself as a co-author merely for merging. This also applies to stacked PRs. If the merge tool cannot control the message, use another project-permitted path or stop before merging. Do not remove the PR's attribution to make the merge work.
 
 No emoji, no links, no "Generated with" line. Don't attribute text the user wrote. Skip all of this when the user says to.
