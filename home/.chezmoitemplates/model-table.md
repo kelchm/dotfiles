@@ -26,5 +26,6 @@ The user's read of each model as of 2026-10-03. Scores run from 0 to 10, and hig
 | `claudeAgent` | `claude-fable-5-1`         | 0    | 9            | 9     |       |
 
 - Pick the cheapest model whose intelligence and taste clear what the task needs. These are defaults, not limits: judge the output, not the price tag.
+- Keep fast mode off by default. Use it only when the task truly requires lower latency or the user explicitly instructs you to use it.
 - When it is unclear whether a cheaper model clears the bar for something that ships, weigh intelligence first, then taste, then cost.
 - Anything user-facing, including UI, API design, and copy, needs taste of at least 7.
