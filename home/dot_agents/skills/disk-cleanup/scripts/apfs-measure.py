@@ -310,9 +310,10 @@ class Scan:
                 inode.gap = 'replaced_during_scan'
                 return
             sink = self.extents.setdefault(st.st_dev, [])
-            gap = None
+            gap = 'resource_fork_size_unavailable' if rsrc is None else None
             if not compressed:  # compressed data lives in the resource fork or inline in metadata
-                data, gap = map_fork(fd, before.st_size, bsize)
+                data, data_gap = map_fork(fd, before.st_size, bsize)
+                gap = gap or data_gap
                 inode.data_mapped = merged_length(data)
                 sink.extend((lo, hi, iid * 2) for lo, hi in data)
             if has_rsrc:
@@ -447,6 +448,8 @@ class Scan:
                 entry['shared_with_candidates_bytes'] = out['shared_refs'][gid]
             entry['counts'] = self.counts(t, group.directories, group.symlinks, group.other)
             entry.update(self.gaps(t, group.entry_gaps, group.samples, group.kind == 'candidate'))
+            if group.kind == 'candidate' and not entry['complete']['reclaim_if_deleted_bytes']:
+                entry['reclaim_if_deleted_bytes']['at_most'] = None
             results.append((group.kind, entry))
         candidates = [e for kind, e in results if kind == 'candidate']
         cand_groups = self.groups[:self.n]
@@ -464,6 +467,8 @@ class Scan:
         all_entry['counts'] = self.counts(combined, *[sum(getattr(g, a) for g in cand_groups)
                                                       for a in ('directories', 'symlinks', 'other')])
         all_entry.update(self.gaps(combined, entry_gaps, samples, True))
+        if not all_entry['complete']['reclaim_if_deleted_bytes']:
+            all_entry['reclaim_if_deleted_bytes']['at_most'] = None
         return candidates, all_entry, [e for kind, e in results if kind == 'reference']
 
     @staticmethod
@@ -491,13 +496,16 @@ class Scan:
             t['purgeable'] += 1
             t['purgeable_allocated'] += inode.allocated
         if owned:
-            t['at_least'] += inode.private or 0
+            if inode.gap is None:
+                t['at_least'] += inode.private or 0
             t['retained'] += retained
             if inode.gap:
                 t['unmapped_owned'] += inode.allocated
         gaps = []
         if inode.gap:
-            gaps.append((inode.gap, MAPPING))
+            affects = (ALL if inode.gap in ('changed_during_scan', 'replaced_during_scan') else
+                       ('logical_bytes',) + MAPPING if inode.gap == 'resource_fork_size_unavailable' else MAPPING)
+            gaps.append((inode.gap, affects))
         if inode.private is None:
             gaps.append(('private_size_unavailable', PRIVATE))
         if inode.private_partial:
@@ -570,7 +578,7 @@ def volume_context(path):
            'block_size': fs.f_bsize, 'volume_name': None, 'container': None, 'container_size_bytes': None,
            'container_free_bytes': None, 'important_use_available_bytes': None,
            'opportunistic_use_available_bytes': None, 'snapshots': None, 'snapshot_retained_bytes': None}
-    unavailable = {'snapshot_retained_bytes': 'No command-line API reports it. Use Disk Utility or a dedicated '
+    unavailable = {'snapshot_retained_bytes': 'The built-in commands used here do not report it. Use Disk Utility or a dedicated '
                                               'snapshot tool; never derive it from available minus free space.'}
     info = run(['/usr/sbin/diskutil', 'info', '-plist', mount])
     if isinstance(info, bytes):

@@ -4,11 +4,11 @@ Validated on macOS 26 with APFS, on fixture files and an isolated disk image. Co
 
 ## Tools
 
-- **`scripts/apfs-measure.py`** (this skill) is read-only and needs only Python 3.9+, so `/usr/bin/python3` works. `volume` reports container free space, macOS availability estimates, and snapshots. `scan` measures candidates exactly. It never writes, flushes, or deletes files, and never downloads iCloud placeholders.
+- **`scripts/apfs-measure.py`** (this skill) is read-only and needs only Python 3.9+, so `/usr/bin/python3` works. `volume` reports container free space, macOS availability estimates, and snapshots. `scan` reports mapped file-data measurements, reclaim bounds, and explicit coverage gaps. It never writes, flushes, or deletes files, and never downloads iCloud placeholders.
 - **`gdu-go`** (Homebrew `gdu`, renamed to avoid GNU `gdu`) gives a fast coarse inventory: `gdu-go -n -p -x -o <record>.json <root>`. Its `dsize` sums per-file allocation, so clones count in full every time. Without it, `du -xk -d 2 <root>` has the same meaning.
 - **`diskutil`** inventories containers, volumes, and snapshots. The helper wraps the parts it needs.
 - **`tmutil`** shows backup state read-only: `listlocalsnapshots /`, `latestbackup`, `destinationinfo`, `isexcluded <path>`.
-- **Disk Utility** (View > Show APFS Snapshots) shows snapshot sizes. No command-line tool reports snapshot-retained bytes. If a decision depends on them, ask the user to read them there. Don't install commercial snapshot tools unless the user asks.
+- **Disk Utility** (View > Show APFS Snapshots) shows snapshot sizes. The built-in commands wrapped here do not report snapshot-retained bytes. If a decision depends on them, inspect Disk Utility with available UI tools; ask the user for the values only if that surface is inaccessible. A dedicated tool such as DeltaSnap's `dsnap`, if already available, can also report snapshot measurements. Don't install commercial snapshot tools unless the user asks.
 
 ## Workflow
 
@@ -33,7 +33,7 @@ Each candidate, the `combined` set of all candidates, and each reference report:
 | `exclusive_within_coverage_bytes` | Candidate blocks that no other scanned file references. Snapshots and unscanned files are ignored. |
 | `retained_elsewhere_bytes` | A lower bound on candidate data held by unscanned files or snapshots: data-fork blocks that APFS reports as shared but that no scanned file explains. |
 | `reclaim_if_deleted_bytes.at_least` | Private bytes of files whose every hard link is inside the candidate. Deleting the candidate frees these immediately. |
-| `reclaim_if_deleted_bytes.at_most` | Exclusive minus retained bytes, plus the allocation of files that could not be mapped: an upper bound on freed file data, given current snapshots. |
+| `reclaim_if_deleted_bytes.at_most` | Exclusive minus retained bytes: an upper bound on freed file data, given current snapshots. Unknown (`null`) when reclaim coverage is incomplete. |
 | `shared_between_candidates_bytes` | In `combined` only: blocks that several candidates share. |
 | `complete`, `gaps` | Measures that are incomplete, with reasons, counts, affected allocation, and sample paths. |
 | `counts` | Files, directories, hard links, links outside the roots, compression, resource forks, dataless, and purgeable files. |
@@ -41,6 +41,7 @@ Each candidate, the `combined` set of all candidates, and each reference report:
 Interpretation:
 
 - Report reclaim as a range. When the bounds are close, the figure is solid. A wide range usually means clones shared among the candidate's own files, which a snapshot may also hold.
+- If reclaim coverage is incomplete, the upper bound is unknown. The lower bound includes only private bytes from files without measurement gaps; do not turn a partial footprint into a finite saving estimate.
 - When `at_least` is far below `allocated_bytes` and `retained_elsewhere_bytes` is large, snapshots or clones outside the candidate hold the data. Deleting frees little now. Snapshot-held space returns as the snapshots expire.
 - Deleting related clones together frees more than the sum of their individual figures. Use `combined` for a batch.
 - Gaps and what they mean:
@@ -50,6 +51,7 @@ Interpretation:
   - `dataless`, `dataless_directory`: iCloud placeholders with data not on disk. The helper does not open them.
   - `unallocated_range`: data written so recently that it has no blocks yet. Measure again later.
   - `changed_during_scan`: something is writing. This is also a preservation signal.
+  - `resource_fork_size_unavailable`: the attribute query could not establish fork coverage, so logical and physical figures are incomplete.
   - `private_excludes_resource_fork`: private size covers data forks only, so `private_bytes_sum` and `at_least` exclude these files' resource and compressed data.
 - `compressed_in_metadata_files` counts files whose compressed data sits inline in filesystem metadata. Metadata is not measured.
 - Not measured: filesystem metadata, extended attributes other than resource forks (reported as logical `xattr_bytes`), and snapshot space held by files already deleted.
@@ -97,7 +99,7 @@ Caches without an owning command, such as an application's folder under `~/Libra
 ## Snapshots and backups
 
 - List snapshots with `apfs-measure.py volume`, or with `tmutil listlocalsnapshots /`.
-- No command reports how much a snapshot retains. Never derive it from the important-use estimate minus free space.
+- The built-in commands used by this helper do not report how much a snapshot retains. Use Disk Utility or an available dedicated snapshot tool, and never derive it from the important-use estimate minus free space.
 - Deleting a local snapshot is a separate, explicit decision. Before proposing it, confirm a recent backup on another disk with `tmutil latestbackup`. Delete only the named snapshot dates with `tmutil deletelocalsnapshots <date>`. Never pass a mount point, which deletes every local snapshot on the volume, and never delete `com.apple.os.update-*` snapshots.
 - Backup exclusions (`tmutil addexclusion`) change what is protected, so adding one is also a separate decision. Report candidates with `tmutil isexcluded`.
 

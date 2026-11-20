@@ -22,9 +22,9 @@ Without a validated workflow, a coarse inventory is still useful. Label every fi
 Each measure answers a different question. Keep them distinct in notes, records, and reports.
 
 - **Logical size**: the length a reader sees. Sparse files and compression make it exceed storage.
-- **Allocated total**: the sum of each file's allocated blocks, as `du` and most disk-usage tools report. Blocks shared by clones, hard links, or deduplicated stores count once per file, so totals overstate storage.
+- **Allocated total**: the sum of per-file allocated blocks. Clones and deduplicated stores can count the same blocks more than once. Hard-link accounting depends on the tool and scan scope; `du` normally counts each inode once per invocation.
 - **Unique physical footprint**: the distinct blocks a set of files occupies, with shared blocks counted once.
-- **Private bytes**: per file, the bytes no other file or snapshot references. Their sum is the least that deleting all the files frees. It is not the joint saving when the files share blocks with each other.
+- **Private bytes**: per inode, the bytes no other file or snapshot references. A sum can bound immediate reclaim only when every hard link to the counted files will also be removed. It is not the joint saving when the files share blocks with each other; check the platform helper's coverage of forks and compression.
 - **Exclusive within coverage**: blocks that no other scanned file references. It speaks only for the roots actually scanned; unscanned files or snapshots may still hold the data.
 - **Snapshot-retained bytes**: data that deletion cannot free while snapshots or restore points still reference it.
 - **Available estimate**: the operating system's estimate of space it could make available, including purgeable data and expiring snapshots. It is neither free space nor a measure of any of the above.

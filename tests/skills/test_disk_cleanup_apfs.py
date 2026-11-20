@@ -34,8 +34,18 @@ def clone(src, dst):
     subprocess.run(['/bin/cp', '-c', str(src), str(dst)], check=True)
 
 
-def measure(*args, check=True):
+def measure(*args, check=True, unavailable_attributes=False):
     argv = [sys.executable, '-B', str(SCRIPT), *map(str, args)]
+    if unavailable_attributes:
+        driver = '''import importlib.util, sys
+spec = importlib.util.spec_from_file_location("apfs_measure", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.file_attributes = lambda path: (None, None, None)
+sys.argv = sys.argv[1:]
+module.main()
+'''
+        argv = [sys.executable, '-B', '-c', driver, str(SCRIPT), *map(str, args)]
     if os.path.exists(SANDBOX):
         argv = [SANDBOX, '-p', READ_ONLY, *argv]
     result = subprocess.run(argv, capture_output=True, text=True, timeout=120)
@@ -180,7 +190,22 @@ class MeasureTests(unittest.TestCase):
         self.assertFalse(c['complete']['unique_physical_bytes'])
         self.assertFalse(c['complete']['allocated_bytes'])
         self.assertEqual(c['allocated_bytes'], MIB)  # the locked file's own allocation is still known
-        self.assertGreaterEqual(c['reclaim_if_deleted_bytes']['at_most'], MIB)
+        self.assertIsNone(c['reclaim_if_deleted_bytes']['at_most'])
+
+    def test_unavailable_fork_attributes_mark_coverage_incomplete(self):
+        path = self.root / 'fork.bin'
+        path.touch()
+        with open(str(path) + '/..namedfork/rsrc', 'wb') as f:
+            f.write(os.urandom(128 * 1024))
+            f.flush()
+            os.fsync(f.fileno())
+        result = measure('scan', path, unavailable_attributes=True)
+        for c in (result['candidates'][0], result['combined']):
+            self.assertIn('resource_fork_size_unavailable', gap_reasons(c))
+            self.assertFalse(c['complete']['logical_bytes'])
+            self.assertFalse(c['complete']['unique_physical_bytes'])
+            self.assertFalse(c['complete']['reclaim_if_deleted_bytes'])
+            self.assertIsNone(c['reclaim_if_deleted_bytes']['at_most'])
 
     def test_unflushed_data_is_never_silently_zero(self):
         path = self.root / 'busy.bin'
