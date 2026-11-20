@@ -645,12 +645,12 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse(self.dest.exists())
         m.apply(self.journal, data)
 
-    def checkpoint(self, path, ordinal, tree='HEAD^{tree}', parent='HEAD', ref=None, named=None, body=''):
+    def checkpoint(self, path, ordinal, tree='HEAD^{tree}', parent='HEAD', ref=None, named=None, body='', prefix=''):
         """Mimic T3: a commit of the clean HEAD tree, parented on HEAD, under a per-thread ref."""
         ref = ref or f'refs/t3/orchestration-v2/checkpoints/dGhyZWFk/ordinal/{ordinal}'
         tree = self.run_git(path, 'rev-parse', tree).decode().strip()
         parent = self.run_git(path, 'rev-parse', parent).decode().strip()
-        message = f't3 checkpoint ref={named or ref}{body}'
+        message = f'{prefix}t3 checkpoint ref={named or ref}{body}'
         oid = self.run_git(path, 'commit-tree', tree, '-p', parent, '-m', message).decode().strip()
         self.run_git(path, 'update-ref', ref, oid)
         return [ref, oid, str(path)]
@@ -751,6 +751,8 @@ class MigrationTests(unittest.TestCase):
             'prose before trailers': dict(body='\n\nNot a trailer' + trailer),
             'prose after trailers': dict(body=trailer + '\nNot a trailer'),
             'trailer without blank line': dict(body='\nT3-Head-Moved-At: 1794806290 1'),
+            'leading space': dict(prefix=' ', body=trailer),
+            'leading blank line': dict(prefix='\n', body=trailer),
         }
         for name, options in misnamed.items():
             cases[f'name its own ref ({name})'] = lambda options=options: self.checkpoint(self.dest, 3, **options)
