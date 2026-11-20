@@ -46,6 +46,19 @@ jobs:
       - name: Check the move helper
         run: python -m unittest -v tests.skills.test_repo_workspace_migrate
 
+  # The disk-cleanup APFS helper reads real block maps and attaches a private
+  # disk image, so its fixtures only run on macOS. Linux skips them.
+  apfs-helper:
+    name: APFS measurement helper
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check the APFS measurement helper
+        run: python -m unittest -v tests.skills.test_disk_cleanup_apfs
+
   # Run a real standalone apply, scripts included, on each native platform.
   # Package installs (brew bundle, winget import) stay off: runner images
   # differ from personal machines and the imports are slow.
