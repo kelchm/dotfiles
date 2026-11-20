@@ -25,6 +25,8 @@ class Refused(RuntimeError):
 
 # T3 records a checkpoint commit per provider turn, even a read-only one.
 CHECKPOINT_REF = re.compile(r'refs/t3/orchestration-v2/checkpoints/[A-Za-z0-9_-]+=*/ordinal/(?:0|[1-9][0-9]*)')
+# Its message is `t3 checkpoint ref=<ref>`, optionally followed by a blank line and trailers.
+CHECKPOINT_TRAILER = re.compile(r'[A-Za-z0-9][A-Za-z0-9-]*: \S.*')
 OBJECT_ID = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
 WINDOWS = sys.platform == 'win32'
 
@@ -541,8 +543,10 @@ def record_checkpoints(journal, data, claims):
         head = checkouts[checkpoint['checkout']]['head']
         oid = checkpoint['oid']
         require(git(base, 'cat-file', '-t', oid).strip() == b'commit', f"Checkpoint is not a commit: {checkpoint['ref']}")
-        message = git(base, 'show', '-s', '--format=%B', oid).decode(errors='replace').strip()
-        require(message == f"t3 checkpoint ref={checkpoint['ref']}",
+        lines = git(base, 'show', '-s', '--format=%B', oid).decode(errors='replace').rstrip('\n').split('\n')
+        require(lines[0] == f"t3 checkpoint ref={checkpoint['ref']}"
+                and (len(lines) == 1 or len(lines) > 2 and lines[1] == ''
+                     and all(CHECKPOINT_TRAILER.fullmatch(line) for line in lines[2:])),
                 f"Checkpoint commit does not name its own ref: {checkpoint['ref']}")
         require(git(base, 'rev-list', '--parents', '-n', '1', oid).split()[1:] == [head.encode()],
                 f"Checkpoint parent is not its checkout's HEAD: {checkpoint['ref']}")

@@ -645,12 +645,12 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse(self.dest.exists())
         m.apply(self.journal, data)
 
-    def checkpoint(self, path, ordinal, tree='HEAD^{tree}', parent='HEAD', ref=None, named=None):
+    def checkpoint(self, path, ordinal, tree='HEAD^{tree}', parent='HEAD', ref=None, named=None, body='', prefix=''):
         """Mimic T3: a commit of the clean HEAD tree, parented on HEAD, under a per-thread ref."""
         ref = ref or f'refs/t3/orchestration-v2/checkpoints/dGhyZWFk/ordinal/{ordinal}'
         tree = self.run_git(path, 'rev-parse', tree).decode().strip()
         parent = self.run_git(path, 'rev-parse', parent).decode().strip()
-        message = f't3 checkpoint ref={named or ref}'
+        message = f'{prefix}t3 checkpoint ref={named or ref}{body}'
         oid = self.run_git(path, 'commit-tree', tree, '-p', parent, '-m', message).decode().strip()
         self.run_git(path, 'update-ref', ref, oid)
         return [ref, oid, str(path)]
@@ -695,6 +695,13 @@ class MigrationTests(unittest.TestCase):
             m.rollback(self.journal, data)
         self.assertTrue(self.dest.exists())
 
+    def test_checkpoint_messages_may_carry_trailers(self):
+        data, wt = self.moved_with_task_worktree()
+        claims = [self.checkpoint(self.dest, 2, body='\n\nT3-Head-Moved-At: 1794806290 1'),
+                  self.checkpoint(wt, 5, body='\n\nT3-Head-Moved-At: 1794806290 1\nT3-Other: value\n')]
+        m.record_checkpoints(self.journal, data, claims)
+        m.verify_data(m.load(self.journal), True)
+
     def test_checkpoint_recording_refuses_changed_or_deleted_old_refs(self):
         data, _ = self.moved_with_task_worktree()
         claim = self.checkpoint(self.dest, 3)
@@ -735,10 +742,25 @@ class MigrationTests(unittest.TestCase):
             'name its own ref': lambda: self.checkpoint(
                 self.dest, 3, named='refs/t3/orchestration-v2/checkpoints/b3RoZXI/ordinal/7'),
         }
+        other = 'refs/t3/orchestration-v2/checkpoints/b3RoZXI/ordinal/7'
+        trailer = '\n\nT3-Head-Moved-At: 1794806290 1'
+        misnamed = {
+            'other ref with trailers': dict(named=other, body=trailer),
+            'extra first-line text': dict(body=' extra' + trailer),
+            'prose body': dict(body='\n\nNot a trailer'),
+            'prose before trailers': dict(body='\n\nNot a trailer' + trailer),
+            'prose after trailers': dict(body=trailer + '\nNot a trailer'),
+            'trailer without blank line': dict(body='\nT3-Head-Moved-At: 1794806290 1'),
+            'leading space': dict(prefix=' ', body=trailer),
+            'trailing space': dict(body=' '),
+            'leading blank line': dict(prefix='\n', body=trailer),
+        }
+        for name, options in misnamed.items():
+            cases[f'name its own ref ({name})'] = lambda options=options: self.checkpoint(self.dest, 3, **options)
         for pattern, make in cases.items():
             with self.subTest(pattern=pattern):
                 claim = make()
-                self.assert_record_refused(data, [claim], pattern)
+                self.assert_record_refused(data, [claim], pattern.split(' (')[0])
                 self.run_git(self.dest, 'update-ref', '-d', claim[0])
         claim = self.checkpoint(wt, 3)
         self.assert_record_refused(data, [[claim[0], claim[1], str(self.dest)]], 'parent')
