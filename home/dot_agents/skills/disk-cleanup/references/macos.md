@@ -1,110 +1,39 @@
 # macOS (APFS)
 
-Validated on macOS 26 with APFS, on fixture files and an isolated disk image. Contents: tools, workflow, reading `scan` output, APFS behavior, preservation checks, cleanup commands, snapshots and backups, after cleanup.
+Use `/usr/bin/python3` or Python 3.9+ with `scripts/apfs-measure.py` from this skill. The helper is read-only. It disables dataless file materialization, stays within each root's volume and skips symlinks below the roots.
 
-## Tools
+## Answer “what is using space?”
 
-- **`scripts/apfs-measure.py`** (this skill) is read-only and needs only Python 3.9+, so `/usr/bin/python3` works. `volume` reports container free space, macOS availability estimates, and snapshots. `scan` reports mapped file-data measurements, reclaim bounds, and explicit coverage gaps. It never writes, flushes, or deletes files, and never downloads iCloud placeholders.
-- **`gdu-go`** (Homebrew `gdu`, renamed to avoid GNU `gdu`) gives a fast coarse inventory: `gdu-go -n -p -x -o <record>.json <root>`. Its `dsize` sums per-file allocation, so clones count in full every time. Without it, `du -xk -d 2 <root>` has the same meaning.
-- **`diskutil`** inventories containers, volumes, and snapshots. The helper wraps the parts it needs.
-- **`tmutil`** shows backup state read-only: `listlocalsnapshots /`, `latestbackup`, `destinationinfo`, `isexcluded <path>`.
-- **Disk Utility** (View > Show APFS Snapshots) shows snapshot sizes. The built-in commands wrapped here do not report snapshot-retained bytes. If a decision depends on them, inspect Disk Utility with available UI tools; ask the user for the values only if that surface is inaccessible. A dedicated tool such as DeltaSnap's `dsnap`, if already available, can also report snapshot measurements. Don't install commercial snapshot tools unless the user asks.
+1. Run `apfs-measure.py volume /System/Volumes/Data` (or pass the path in question). Read `container_free_bytes`, `container_size_bytes` and `container_volumes[].used_bytes` from `diskutil`. APFS volumes share container free space. The important and opportunistic availability estimates are separate OS estimates. Snapshot names and purgeable flags establish their presence, not their retained bytes. `CapacityInUse` for the Data volume includes data the live file walk cannot see.
+2. Discover large paths with `/usr/bin/du -xk -d 1 <root>`, extending by a level only where it helps attribution. Keep stderr even with usable stdout. `gdu-go -n -p -x --no-prefix --depth 1 --log-file <log> <root>` is another option. Inspect the log or JSON `read_error` flags even on exit 0. On startup volumes cover Data, then drill into home, app/container state, project workspaces, VM disks and package data as warranted. The discovery bytes count APFS clones repeatedly. Use the paths as inputs to step 3.
+3. Run `apfs-measure.py footprint <root> ...` on the largest plausible contributors, including ones to preserve. Use disjoint paths in a single invocation for a combined figure. Split generic directories by project or application. For example, measure the music working directory and VM storage directly before reporting how much space they occupy. When measuring a project's children instead, pass the children together and use `combined` for their union. Never add the rows, including rows from separate runs.
+4. Report `mapped_file_data_bytes` for measured roots. The command sorts complete measurements first and ranks by mapped bytes within each group. When `complete` is false, report only the mapped portion with its gaps, or report the full size as unknown. `allocation_without_map_bytes` is a per-inode discrepancy within the scanned files, may include shared blocks, and cannot be added to the footprint. There may also be entirely inaccessible files. The combined footprint covers the selected roots, excludes filesystem metadata, and is not a partition of the Data volume.
 
-## Workflow
+Typical invocation, with output retained as evidence:
 
-1. **Volume context.** Run `python3 <skill>/scripts/apfs-measure.py volume` and save the output. When `container_free_bytes` is far below `important_use_available_bytes`, snapshots or purgeable data hold the difference. That is a separate decision (see [Snapshots and backups](#snapshots-and-backups)), and the difference is not their measured size.
-2. **Coarse inventory.** Run `gdu-go -x` over likely roots: home, the development root, agent and T3 data (`~/.t3`, `~/.claude`, `~/.codex`), `~/Library/Caches`, `~/.cache`, package stores, and VM storage. Directories that need Full Disk Access (Mail, Messages, Photos libraries) can fail. Record such failures as unknown, not small.
-3. **Attribute.** Map large entries to projects and purposes. Signals include the path (development root alias, T3 worktree path), `git -C <dir> rev-parse --show-toplevel`, `git check-ignore -q <path>`, marker files beside the directory (`Cargo.toml` with `target/`, `package.json` with `node_modules/`, `go.mod`, `.venv`), cache owners (`~/Library/Caches/<bundle id>`), and VM images (`Docker.raw`, OrbStack and Colima disks, `.utm` bundles).
-4. **Measure candidates** with `apfs-measure.py scan <candidate>... --reference <root>...` before stating any saving. References are roots that might share blocks with the candidates: sibling worktrees and the primary checkout for build output, the package store for `node_modules` (`pnpm store path`), and the source for anything copied with `cp -c` or Finder's Duplicate. A reference may contain candidates. No other roots may overlap. A scan processes roughly 5,000 files a second, so measure targeted trees rather than whole disks, and run large scans in the background with output to a file.
-5. **Check, authorize, clean.** Run the [preservation checks](#preservation-checks), confirm the scope is authorized, and use the owning tool's [cleanup command](#cleanup-commands).
-6. **Verify.** See [After cleanup](#after-cleanup).
+```sh
+/usr/bin/python3 "$skill/scripts/apfs-measure.py" volume /System/Volumes/Data > volume.json
+/usr/bin/python3 "$skill/scripts/apfs-measure.py" footprint "$media" "$vm_storage" "$project" > footprint.json
+```
 
-## Reading `scan` output
+Avoid a full extent walk of millions of files when named roots answer the question. Start a costly root separately if necessary and name it as pending or unmeasured until it returns. If headline sizes are unavailable, report container figures and the paths to investigate without attaching discovery sizes to the usage breakdown.
 
-Each candidate, the `combined` set of all candidates, and each reference report:
+## Answer “how much would this action free?”
 
-| Field | Meaning |
-|---|---|
-| `logical_bytes` | Data and resource fork lengths. Compressed files count their uncompressed length. |
-| `allocated_bytes` | Sum of `st_blocks` over distinct inodes: the allocated total. |
-| `unique_physical_bytes` | Union of the device ranges holding data forks, resource forks, and compressed streams. Holes are excluded and shared blocks count once. |
-| `private_bytes_sum` | Sum of `ATTR_CMNEXT_PRIVATESIZE`, which Apple defines as bytes "not trapped inside a clone or snapshot, and which would be freed immediately if the file were deleted". It covers data forks only. |
-| `shared_with_references_bytes` | Candidate blocks that a reference also holds. References report the same overlap as `shared_with_candidates_bytes`. |
-| `exclusive_within_coverage_bytes` | Candidate blocks that no other scanned file references. Snapshots and unscanned files are ignored. |
-| `retained_elsewhere_bytes` | A lower bound on candidate data held by unscanned files or snapshots: data-fork blocks that APFS reports as shared but that no scanned file explains. |
-| `reclaim_if_deleted_bytes.at_least` | Private bytes of files whose every hard link is inside the candidate. Deleting the candidate frees these immediately. |
-| `reclaim_if_deleted_bytes.at_most` | Exclusive minus retained bytes: an upper bound on freed file data, given current snapshots. Unknown (`null`) when reclaim coverage is incomplete. |
-| `shared_between_candidates_bytes` | In `combined` only: blocks that several candidates share. |
-| `complete`, `gaps` | Measures that are incomplete, with reasons, counts, affected allocation, and sample paths. |
-| `counts` | Files, directories, hard links, links outside the roots, compression, resource forks, dataless, and purgeable files. |
+Use `scan <candidate> ... [--reference <root>]` once you have a concrete deletion set. Optional repeatable references expose sharing with specific data that will stay, such as a sibling checkout or a package store. A reference can contain candidates, which the helper excludes from that reference's walk. Compare `combined` for a batch, where clones or hard links across candidates may change the result.
 
-Interpretation:
+- `allocated_bytes` is summed `st_blocks` over distinct inodes. Clones count repeatedly. `unique_physical_bytes` is the mapped block union used by `footprint`.
+- `exclusive_within_coverage_bytes` is mapped data held entirely by the deletion set among scanned files, subject to inode link counts. This includes clones shared within the set. Snapshots and unscanned clones can still retain blocks.
+- `reclaim_if_deleted_bytes` is a file-data estimate for unlinking the measured set. Its lower estimate uses APFS private data-fork sizes where every inode link is in scope. The upper estimate accounts for known sharing and private-size evidence of retention. It is unknown if reclaim coverage is incomplete. Null endpoints are unknown. A zero estimate applies to the measured action and current retention, and can change after snapshots expire or sharing changes. It does not estimate VM guest cleanup or compaction.
+- Resource forks and compressed streams are mapped where possible. APFS private size covers the data fork, excludes those streams, and is not a joint saving for a set of clones. The helper checks allocated bytes against mapped bytes per inode, probes stable preallocated tails beyond EOF, and flags unexplained differences. It excludes detected changing files' extents and suppresses inconsistent estimates. Concurrent changes can still make a live scan stale.
+- The walk does not measure filesystem metadata, ordinary xattr physical storage, or blocks held only by snapshots. `retained_elsewhere_bytes` cannot distinguish unscanned file references from snapshots. Review `complete` and `gaps` for the measure you use.
 
-- Report reclaim as a range. When the bounds are close, the figure is solid. A wide range usually means clones shared among the candidate's own files, which a snapshot may also hold.
-- If reclaim coverage is incomplete, the upper bound is unknown. The lower bound includes only private bytes from files without measurement gaps; do not turn a partial footprint into a finite saving estimate.
-- When `at_least` is far below `allocated_bytes` and `retained_elsewhere_bytes` is large, snapshots or clones outside the candidate hold the data. Deleting frees little now. Snapshot-held space returns as the snapshots expire.
-- Deleting related clones together frees more than the sum of their individual figures. Use `combined` for a batch.
-- Gaps and what they mean:
-  - `open_failed:EPERM` or `EACCES`: privacy protection or permissions. Grant the terminal Full Disk Access or leave it unmeasured.
-  - `unreadable_directory`: the subtree is unmeasured.
-  - `other_filesystem`: a mount inside the candidate. Deleting the candidate would cross into it.
-  - `dataless`, `dataless_directory`: iCloud placeholders with data not on disk. The helper does not open them.
-  - `unallocated_range`: data written so recently that it has no blocks yet. Measure again later.
-  - `changed_during_scan`: something is writing. This is also a preservation signal.
-  - `resource_fork_size_unavailable`: the attribute query could not establish fork coverage, so logical and physical figures are incomplete.
-  - `private_excludes_resource_fork`: private size covers data forks only, so `private_bytes_sum` and `at_least` exclude these files' resource and compressed data.
-- `compressed_in_metadata_files` counts files whose compressed data sits inline in filesystem metadata. Metadata is not measured.
-- Not measured: filesystem metadata, extended attributes other than resource forks (reported as logical `xattr_bytes`), and snapshot space held by files already deleted.
+## Follow the biggest actionable leads
 
-## APFS behavior that changes the answer
+- **VM and container storage:** map sparse images on the host, then inventory by profile and match disks to the manager's inventory (for example, `colima list`, `limactl disk list` with the right `LIMA_HOME`, or the installed manager's equivalent). An unlisted disk is a lead to reconcile with old profiles and project history. For a running Docker context check `docker system df -v` and builder-specific usage. A stopped guest needs a separate start decision before guest measurements. Use scoped cleanup within the guest, then the supported trim or compaction path, and remeasure host allocation.
+- **Package stores:** resolve the manager/version in a consuming project. For pnpm, project `node_modules/.modules.yaml` can reveal the store path even when a global shim fails. Inspect store versions and live project references before proposing cleanup. Installed tools or runtimes may still be selected by project config. Example previews include `brew cleanup --dry-run` and `mise prune --dry-run`. Read the applicable tool's help before choosing a command.
+- **Build outputs:** identify the project and build configuration first. Check `git check-ignore`, `git ls-files` through the exact target, current build processes and recent writes. Use the owning command with an explicit scope (for example `cargo clean --target-dir <dir>` or Go cache cleanup with the intended `GOCACHE` or `GOMODCACHE`). Prefer `lsof -nP +D <dir>` for small candidates and process-level checks for large trees.
+- **Research, working libraries, model weights and agent history:** identify the actual project or application and what can be regenerated. A directory under `.cache` can contain unique evidence. Report meaningful usage even when preservation is the correct decision.
+- **Snapshots and backups:** `diskutil apfs listSnapshots` and `tmutil listlocalsnapshots` inventory restore points. Use Disk Utility's APFS snapshot view for its size fields, or an available dedicated tool. Check what the size field measures. Never derive retained bytes from available minus free or from the difference between Data volume usage and a file inventory. A snapshot request needs exact scope and current `tmutil latestbackup` context. To audit backup coverage, use `tmutil isexcluded <path>`. Adding exclusions changes protection and is a separate decision.
 
-- **Clones** share blocks until either copy is modified. `cp -c`, Finder's Duplicate, pnpm (clone import by default), Bun (`clonefile` backend), and uv (`clone` link mode on macOS) all create them. Allocated totals count every clone in full.
-- **Hard links** keep data until the last link goes. `files_with_links_outside_roots` counts files that something outside the scanned roots keeps alive.
-- **Sparse files**: VM and container disk images report huge logical sizes, and only their allocation is stored. Space freed inside a guest returns to macOS only after the guest trims or the manager compacts the image. Compare the image's allocated size before and after.
-- **Compression**: system files and many app bundles are transparently compressed, so their logical size exceeds their allocation.
-- **Snapshots**: Time Machine local snapshots (`com.apple.TimeMachine.*.local`) and OS update snapshots (`com.apple.os.update-*`). Deleting a file that a snapshot references frees nothing until that snapshot is gone. macOS removes purgeable Time Machine snapshots after about a day, or sooner under space pressure. The important-use estimate already counts them as available.
-- **Purgeable files** count toward availability estimates but not toward free space.
-- `/Users` is a firmlink into the Data volume. The sealed system volume is never a cleanup target.
-
-## Preservation checks
-
-- **Open files**: `lsof -nP +D <dir>` for small trees. For large ones, run `lsof -nP -Fn 2>/dev/null | grep -F 'n<dir>/'`.
-- **Processes**: `pgrep -lf <tool-or-path>`, and the VM or container manager's own list or status command.
-- **Recent writes**: `find <dir> -mmin -120 -print -quit`.
-- **Git**, run against the repository that contains the path:
-  - `git check-ignore -q <path>` succeeds only for ignored paths, such as build output.
-  - `git status --porcelain --untracked-files=all` lists uncommitted and untracked work.
-  - `git log --branches --not --remotes --oneline` lists unpushed commits.
-  - `git stash list` and `git worktree list` show other local work.
-- **Kept-data fingerprint**: `find <dir> -type f -print0 | xargs -0 stat -f '%N%t%z%t%m' | LC_ALL=C sort | shasum -a 256`, plus a file count.
-
-## Cleanup commands
-
-Run a preview first where one exists, and keep the command's output in the action record.
-
-| Owner | Preview or inventory | Cleanup |
-|---|---|---|
-| Homebrew | `brew cleanup --dry-run` | `brew cleanup`. Add `--prune=all` only if clearing every cached download is authorized. |
-| pnpm | `pnpm store path` | `pnpm store prune` removes packages no project references. |
-| Bun | | `bun pm cache rm` |
-| uv | `uv cache dir` | `uv cache prune` (unused entries) or `uv cache clean` (everything) |
-| Go | `go env GOCACHE GOMODCACHE` | `go clean -cache`, `go clean -modcache`. For a project-local module cache, set `GOMODCACHE=<dir>`. Module files are read-only, so use this rather than `rm`. |
-| Rust | | `cargo clean` in the project removes `target/`. |
-| mise | `mise prune --dry-run` | `mise prune` removes unused tool versions. `mise cache clear` clears mise's cache. |
-| Xcode | | `xcrun simctl delete unavailable`. Remove `~/Library/Developer/Xcode/DerivedData` only while Xcode is closed. |
-| Docker and other VMs | `docker system df` | `docker builder prune`, `docker image prune`. These free space inside the VM disk first. Then confirm that the image's allocation shrank. |
-
-Caches without an owning command, such as an application's folder under `~/Library/Caches`, can be removed directly once the application is closed and the scope is authorized.
-
-## Snapshots and backups
-
-- List snapshots with `apfs-measure.py volume`, or with `tmutil listlocalsnapshots /`.
-- The built-in commands used by this helper do not report how much a snapshot retains. Use Disk Utility or an available dedicated snapshot tool, and never derive it from the important-use estimate minus free space.
-- Deleting a local snapshot is a separate, explicit decision. Before proposing it, confirm a recent backup on another disk with `tmutil latestbackup`. Delete only the named snapshot dates with `tmutil deletelocalsnapshots <date>`. Never pass a mount point, which deletes every local snapshot on the volume, and never delete `com.apple.os.update-*` snapshots.
-- Backup exclusions (`tmutil addexclusion`) change what is protected, so adding one is also a separate decision. Report candidates with `tmutil isexcluded`.
-
-## After cleanup
-
-- Run `volume` again. Report the change in `container_free_bytes` beside the removed allocation and the reclaim bounds. Name concurrent activity such as builds, VMs, and backups. If a Time Machine snapshot predates the deletion, explain that the space returns when it expires.
-- Repeat the kept-data fingerprints and confirm they match.
-- Save the action record: authorization, items with project, purpose, and class, preservation evidence, commands with exit codes and log paths, volume context before and after, and the observed change.
+After an authorized action, record `volume` again. Use container free-space change to describe observed recovery. Check the VM image again after trim, or retained files near the cleanup where relevant. Large allocation removed with little free-space change is evidence to investigate retention, open handles and guest-to-host reclamation.

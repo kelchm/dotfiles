@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -90,6 +91,34 @@ class MeasureTests(unittest.TestCase):
         self.assertEqual(c['logical_bytes'], 64 * MIB)
         self.assertEqual(c['unique_physical_bytes'], allocated)
         self.assertTrue(all(c['complete'].values()), c['gaps'])
+
+    def test_preallocation_past_eof_is_mapped(self):
+        import fcntl
+
+        path = self.root / 'reserved.bin'
+        write(path, os.urandom(4096))
+        with path.open('r+b') as f:
+            # F_PREALLOCATE, F_ALLOCATEALL, F_PEOFPOSMODE: reserve 8 MiB past EOF.
+            fcntl.fcntl(f.fileno(), 42, struct.pack('=Iiqqq', 4, 3, 0, 8 * MIB, 0))
+            os.fsync(f.fileno())
+            c = self.scan(path)['candidates'][0]
+            allocated = os.fstat(f.fileno()).st_blocks * 512
+        self.assertEqual(c['logical_bytes'], 4096)
+        self.assertGreaterEqual(allocated, 8 * MIB)
+        self.assertEqual(c['unique_physical_bytes'], allocated)
+        self.assertEqual(c['reclaim_if_deleted_bytes'], {'at_least': allocated, 'at_most': allocated})
+        self.assertTrue(c['complete']['reclaim_if_deleted_bytes'], c['gaps'])
+
+    def test_footprint_ranks_by_mapped_data(self):
+        pair, larger = self.root / 'clones', self.root / 'larger'
+        write(pair / 'original', os.urandom(4 * MIB))
+        clone(pair / 'original', pair / 'copy')
+        write(larger / 'unique', os.urandom(6 * MIB))
+        result = measure('footprint', pair, larger)
+        self.assertEqual([row['path'] for row in result['roots']], [str(larger), str(pair)])
+        self.assertEqual([row['mapped_file_data_bytes'] for row in result['roots']], [6 * MIB, 4 * MIB])
+        self.assertEqual(result['combined']['mapped_file_data_bytes'], 10 * MIB)
+        self.assertTrue(result['combined']['complete'])
 
     def test_resource_fork_data_is_mapped(self):
         path = self.root / 'fork.bin'
@@ -191,6 +220,9 @@ class MeasureTests(unittest.TestCase):
         self.assertFalse(c['complete']['allocated_bytes'])
         self.assertEqual(c['allocated_bytes'], MIB)  # the locked file's own allocation is still known
         self.assertIsNone(c['reclaim_if_deleted_bytes']['at_most'])
+        footprint = measure('footprint', self.root / 'c')['roots'][0]
+        self.assertFalse(footprint['complete'])
+        self.assertIn('unreadable_directory:EACCES', gap_reasons(footprint))
 
     def test_unavailable_fork_attributes_mark_coverage_incomplete(self):
         path = self.root / 'fork.bin'
