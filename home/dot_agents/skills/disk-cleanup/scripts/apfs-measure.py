@@ -16,6 +16,7 @@ import struct
 import subprocess
 import sys
 import time
+import unicodedata
 
 SCHEMA = 'disk-cleanup/apfs-measure/3'
 
@@ -197,6 +198,7 @@ class Inode:
 class Group:
     def __init__(self, kind, path, given):
         self.kind, self.path, self.given = kind, path, given
+        self.volume = None
         self.directories = self.symlinks = self.other = 0
         self.entry_gaps = {}  # reason -> count
         self.samples = {}  # reason -> paths
@@ -207,14 +209,11 @@ class Group:
             paths.append(path)
 
 
-def same_or_inside(path, root):
-    return path == root or path.startswith(root.rstrip('/') + '/')
-
-
 class Scan:
     def __init__(self, candidates, references, samples, footprint=False):
-        self.groups = [Group('candidate', p, g) for g, p in candidates] + [
-            Group('reference', p, g) for g, p in references]
+        self.roots = candidates + references
+        self.groups = [Group(r.kind, r.path, r.given) for r in self.roots]
+        self.candidate_files = {r.inode: r.entry for r in candidates if r.directory is None}
         self.n = len(candidates)
         self.limit = samples
         self.footprint = footprint
@@ -222,25 +221,36 @@ class Scan:
         self.extents = {}  # st_dev -> [(lo, hi, inode * 2 + fork)]
 
     def run(self):
-        candidate_dirs, candidate_paths = set(), {g.path for g in self.groups[:self.n]}
-        for group in self.groups[:self.n]:
-            st = os.lstat(group.path)
-            if stat.S_ISDIR(st.st_mode):
-                candidate_dirs.add((st.st_dev, st.st_ino))
+        candidate_dirs = {r.directory for r in self.roots[:self.n] if r.directory}
         for gid, group in enumerate(self.groups):
-            skip = (set(), set()) if gid < self.n else (candidate_dirs, candidate_paths)
-            self.walk(gid, group, *skip)
+            self.walk(gid, group, candidate_dirs if gid >= self.n else set())
 
-    def walk(self, gid, group, skip_dirs, skip_paths):
-        st = os.lstat(group.path)
-        fs = statfs(group.path)
+    def is_candidate_file(self, path, st):
+        """Whether a file met by a reference walk is a candidate root, under any spelling."""
+        key = self.candidate_files.get((st.st_dev, st.st_ino))
+        if key is None:
+            return False
+        parent = os.path.dirname(path)
+        try:
+            p = os.lstat(parent)
+        except OSError:
+            return False
+        return entry_key((p.st_dev, p.st_ino), parent, os.path.basename(path)) == key
+
+    def walk(self, gid, group, skip_dirs):
+        try:
+            st = os.lstat(group.path)
+            fs = statfs(group.path)
+        except OSError as e:
+            self.entry_gap(group, 'root_unavailable:' + errname(e.errno), group.path)
+            return
         group.volume = fs.f_mntonname.decode()
         if fs.f_fstypename != b'apfs':
             self.entry_gap(group, 'not_apfs', group.path)
             return
         bsize, root_dev = fs.f_bsize, st.st_dev
         stack = []
-        self.visit(gid, group, group.path, st, root_dev, bsize, stack, skip_dirs, skip_paths)
+        self.visit(gid, group, group.path, st, root_dev, bsize, stack, skip_dirs)
         while stack:
             directory = stack.pop()
             try:
@@ -251,7 +261,7 @@ class Scan:
                         except OSError as e:
                             self.entry_gap(group, 'lstat_failed:' + errname(e.errno), entry.path)
                             continue
-                        self.visit(gid, group, entry.path, st, root_dev, bsize, stack, skip_dirs, skip_paths)
+                        self.visit(gid, group, entry.path, st, root_dev, bsize, stack, skip_dirs)
             except OSError as e:
                 self.entry_gap(group, 'unreadable_directory:' + errname(e.errno), directory)
 
@@ -259,8 +269,10 @@ class Scan:
         group.entry_gaps[reason] = group.entry_gaps.get(reason, 0) + 1
         group.sample(reason, path, self.limit)
 
-    def visit(self, gid, group, path, st, root_dev, bsize, stack, skip_dirs, skip_paths):
-        if path in skip_paths or (stat.S_ISDIR(st.st_mode) and (st.st_dev, st.st_ino) in skip_dirs):
+    def visit(self, gid, group, path, st, root_dev, bsize, stack, skip_dirs):
+        if stat.S_ISDIR(st.st_mode) and (st.st_dev, st.st_ino) in skip_dirs:
+            return
+        if gid >= self.n and stat.S_ISREG(st.st_mode) and self.is_candidate_file(path, st):
             return
         if stat.S_ISDIR(st.st_mode):
             if st.st_dev != root_dev:
@@ -304,7 +316,8 @@ class Scan:
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
         except OSError as e:
-            inode.gap = 'open_failed:' + errname(e.errno)
+            # An unknown resource fork also leaves logical size incomplete, so it takes precedence.
+            inode.gap = 'resource_fork_size_unavailable' if rsrc is None else 'open_failed:' + errname(e.errno)
             return
         try:
             before = os.fstat(fd)
@@ -649,33 +662,66 @@ def header(command):
             'host': {'os': 'macOS ' + platform.mac_ver()[0], 'machine': platform.machine()}}
 
 
+PC_CASE_SENSITIVE = 11  # <sys/unistd.h> _PC_CASE_SENSITIVE
+
+
+def entry_key(parent_id, parent, name):
+    """A directory entry as the volume compares names: always normalization-insensitive, usually case-insensitive."""
+    try:
+        sensitive = os.pathconf(parent, PC_CASE_SENSITIVE) == 1
+    except OSError:
+        sensitive = False  # the looser match only rejects more argument pairs
+    name = unicodedata.normalize('NFD', name)
+    return parent_id, name if sensitive else name.casefold()
+
+
+class Root:
+    """Identity of a root by inode, so case variants and firmlinked spellings of one path compare equal."""
+
+    def __init__(self, kind, given, path):
+        self.kind, self.given, self.path = kind, given, path
+        st = os.lstat(path)
+        self.ancestors, parent = [], os.path.dirname(path)
+        while True:
+            a = os.lstat(parent)
+            self.ancestors.append((a.st_dev, a.st_ino))
+            if parent == '/':
+                break
+            parent = os.path.dirname(parent)
+        self.directory = (st.st_dev, st.st_ino) if stat.S_ISDIR(st.st_mode) else None
+        self.inode = (st.st_dev, st.st_ino)
+        self.entry = self.directory or entry_key(self.ancestors[0], os.path.dirname(path), os.path.basename(path))
+
+    def contains(self, other):
+        return self.directory is not None and self.directory in other.ancestors
+
+
 def resolve(paths, kind):
-    resolved = []
+    roots = []
     for given in paths:
         path = os.path.realpath(given)
-        if not os.path.lexists(path):
-            sys.exit(f'apfs-measure: {kind} does not exist: {given}')
-        resolved.append((given, path))
-    return resolved
+        try:
+            roots.append(Root(kind, given, path))
+        except OSError as e:
+            sys.exit(f'apfs-measure: cannot read {kind} {given}: {e.strerror}')
+    return roots
+
+
+def check_overlap(roots):
+    for i, a in enumerate(roots):
+        for b in roots[i + 1:]:
+            if a.entry == b.entry:
+                sys.exit(f'apfs-measure: {a.kind} {a.given} and {b.kind} {b.given} name the same entry.')
+            for outer, inner in ((a, b), (b, a)):
+                if outer.contains(inner) and not (outer.kind == 'reference' and inner.kind == 'candidate'):
+                    sys.exit(f'apfs-measure: {inner.kind} {inner.given} is inside {outer.kind} {outer.given}. '
+                             'Only a reference root may contain candidates.')
 
 
 def scan(args):
     candidates = resolve(args.candidates, 'candidate')
     references = resolve(args.reference, 'reference')
-    roots = [('candidate', p) for _, p in candidates] + [('reference', p) for _, p in references]
-    for i, (kind_a, a) in enumerate(roots):
-        for kind_b, b in roots[i + 1:]:
-            outer, inner = (a, b) if same_or_inside(b, a) else (b, a) if same_or_inside(a, b) else (None, None)
-            if outer is None:
-                continue
-            outer_kind = kind_a if outer == a else kind_b
-            inner_kind = kind_b if outer == a else kind_a
-            if not (outer_kind == 'reference' and inner_kind == 'candidate' and outer != inner):
-                sys.exit(f'apfs-measure: {inner_kind} {inner} overlaps {outer_kind} {outer}. Only a reference '
-                         'root may contain candidates.')
-    # Never trigger downloads of dataless (cloud placeholder) files. Their flag is also checked before opening.
-    if libc.setiopolicy_np(3, 0, 1) != 0:  # VFS_MATERIALIZE_DATALESS_FILES, PROCESS, OFF
-        sys.exit('apfs-measure: cannot disable dataless file materialization')
+    check_overlap(candidates + references)
     started = time.monotonic()
     result = header(args.command)
     result['method'] = ('lstat; getattrlist; SEEK_DATA/SEEK_HOLE; F_LOG2PHYS_EXT on data and resource '
@@ -685,7 +731,15 @@ def scan(args):
     footprint = args.command == 'footprint'
     measure = Scan(candidates, references, args.samples, footprint=footprint)
     if not footprint:
-        result['volumes'] = [volume_context(p) for p in {statfs(p).f_mntonname.decode(): p for _, p in roots}.values()]
+        mounts = []
+        for root in candidates + references:
+            try:
+                mount = statfs(root.path).f_mntonname.decode()
+            except OSError:
+                continue  # the walk reports the missing root
+            if mount not in mounts:
+                mounts.append(mount)
+        result['volumes'] = [volume_context(m) for m in mounts]
     measure.run()
     rows, combined, refs = measure.report()
     if footprint:
@@ -742,6 +796,9 @@ def main():
     args = parser.parse_args()
     if sys.platform != 'darwin':
         sys.exit('apfs-measure: macOS only')
+    # Never download cloud placeholders, even while resolving arguments. Their flag is also checked before opening.
+    if libc.setiopolicy_np(3, 0, 1) != 0:  # IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, PROCESS, OFF
+        sys.exit('apfs-measure: cannot disable dataless file materialization')
     json.dump(volume(args) if args.command == 'volume' else scan(args), sys.stdout, indent=2)
     sys.stdout.write('\n')
 

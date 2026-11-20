@@ -2,7 +2,9 @@
 """APFS fixtures for the disk-cleanup measurement helper. macOS only.
 
 Scans run under a sandbox that denies writes and network access. The reclaim
-test uses its own disk image, so no real volume or snapshot is touched.
+test uses its own disk image, so no real volume or snapshot is touched. Set
+APFS_REQUIRE_DISK_IMAGE=1 (as CI does) to fail instead of skip when the image
+cannot be attached.
 """
 
 import json
@@ -47,8 +49,7 @@ sys.argv = sys.argv[1:]
 module.main()
 '''
         argv = [sys.executable, '-B', '-c', driver, str(SCRIPT), *map(str, args)]
-    if os.path.exists(SANDBOX):
-        argv = [SANDBOX, '-p', READ_ONLY, *argv]
+    argv = [SANDBOX, '-p', READ_ONLY, *argv]
     result = subprocess.run(argv, capture_output=True, text=True, timeout=120)
     if check:
         if result.returncode:
@@ -62,6 +63,7 @@ def gap_reasons(entry):
 
 
 @unittest.skipUnless(sys.platform == 'darwin', 'APFS measurement is macOS only')
+@unittest.skipUnless(os.path.exists(SANDBOX), 'needs sandbox-exec to prove the helper is read-only')
 class MeasureTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='apfs-measure-')
@@ -246,7 +248,8 @@ class MeasureTests(unittest.TestCase):
             f.flush()  # Python buffer only; the kernel may not have allocated blocks yet.
             c = self.scan(path)['candidates'][0]
         if c['unique_physical_bytes'] < MIB:
-            self.assertIn('unallocated_range', gap_reasons(c))
+            incomplete = {'unallocated_range', 'changed_during_scan', 'allocated_blocks_not_mapped'}
+            self.assertTrue(incomplete & gap_reasons(c), c['gaps'])
             self.assertFalse(c['complete']['unique_physical_bytes'])
 
     def test_scan_leaves_fixtures_unchanged(self):
@@ -263,35 +266,73 @@ class MeasureTests(unittest.TestCase):
         (self.root / 'a/b').mkdir(parents=True)
         result = measure('scan', self.root / 'a', self.root / 'a/b', check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('overlaps', result.stderr)
+        self.assertIn('is inside', result.stderr)
         result = measure('scan', self.root / 'a/b', '--reference', self.root / 'a', check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_case_aliases_of_one_hard_link_are_rejected(self):
+        drop, keep = self.root / 'drop/blob', self.root / 'keep/blob'
+        write(drop, os.urandom(MIB))
+        keep.parent.mkdir()
+        os.link(drop, keep)
+        if not (self.root / 'drop/BLOB').exists():
+            self.skipTest('volume is case-sensitive')
+        # Counting drop/blob twice would match its link count and credit bytes that keep/blob retains.
+        # A searchable but unlistable parent must not hide the alias.
+        drop.parent.chmod(0o111)
+        result = measure('scan', drop, self.root / 'drop/BLOB', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('same entry', result.stderr)
+        drop.parent.chmod(0o755)
+        result = measure('scan', self.root / 'DROP', '--reference', self.root / 'drop', check=False)
+        self.assertIn('same entry', result.stderr)
+
+    def test_reference_skips_candidate_spelled_differently(self):
+        path = self.root / 'drop/blob'
+        write(path, os.urandom(MIB))
+        if not (self.root / 'DROP/BLOB').exists():
+            self.skipTest('volume is case-sensitive')
+        result = self.scan(self.root / 'DROP/BLOB', '--reference', self.root / 'drop')
+        c, ref = result['candidates'][0], result['references'][0]
+        self.assertEqual(ref['allocated_bytes'], 0)
+        self.assertEqual(c['reclaim_if_deleted_bytes'], {'at_least': MIB, 'at_most': MIB})
+
 
 @unittest.skipUnless(sys.platform == 'darwin' and shutil.which('hdiutil'), 'needs macOS disk images')
+@unittest.skipUnless(os.path.exists(SANDBOX), 'needs sandbox-exec to prove the helper is read-only')
 class IsolatedVolumeTests(unittest.TestCase):
     """Compare the predicted reclaim with the container's observed free-space change on a private volume."""
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='apfs-volume-')
-        work = Path(self.temporary.name).resolve()
-        self.mount = work / 'mnt'
+        # mkdtemp, not TemporaryDirectory: its finalizer would delete through a mount that failed to detach.
+        self.work = Path(tempfile.mkdtemp(prefix='apfs-volume-')).resolve()
+        self.mount = self.work / 'mnt'
         self.mount.mkdir()
         try:
             subprocess.run(['hdiutil', 'create', '-size', '128m', '-fs', 'APFS', '-volname', 'dcfixture',
-                            '-type', 'SPARSE', str(work / 'fixture')], check=True, capture_output=True, timeout=60)
+                            '-type', 'SPARSE', str(self.work / 'fixture')], check=True, capture_output=True, timeout=60)
             subprocess.run(['hdiutil', 'attach', '-nobrowse', '-noautoopen', '-owners', 'on', '-mountpoint',
-                            str(self.mount), str(work / 'fixture.sparseimage')],
+                            str(self.mount), str(self.work / 'fixture.sparseimage')],
                            check=True, capture_output=True, timeout=60)
         except (subprocess.SubprocessError, OSError) as e:
-            self.temporary.cleanup()
+            self.cleanup()
+            if os.environ.get('APFS_REQUIRE_DISK_IMAGE'):
+                raise
             self.skipTest(f'cannot attach a disk image: {e}')
+        self.addCleanup(self.cleanup)
 
-    def tearDown(self):
-        for args in (['hdiutil', 'detach', str(self.mount)], ['hdiutil', 'detach', '-force', str(self.mount)]):
-            if subprocess.run(args, capture_output=True, timeout=60).returncode == 0:
-                break
-        self.temporary.cleanup()
+    def cleanup(self):
+        if os.path.ismount(self.mount):
+            for args in (['hdiutil', 'detach', str(self.mount)], ['hdiutil', 'detach', '-force', str(self.mount)]):
+                try:
+                    subprocess.run(args, capture_output=True, timeout=60)
+                except subprocess.TimeoutExpired:
+                    pass
+                if not os.path.ismount(self.mount):
+                    break
+            else:
+                self.fail(f'could not detach {self.mount}; left {self.work} in place')
+        shutil.rmtree(self.work)
 
     def free(self):
         return measure('volume', self.mount)['volumes'][0]['container_free_bytes']
@@ -323,7 +364,7 @@ class IsolatedVolumeTests(unittest.TestCase):
         observed = None
         for _ in range(20):  # APFS can release freed blocks shortly after the unlink returns
             observed = self.free() - before
-            if observed >= bounds['at_least']:
+            if observed >= bounds['at_most'] - 64 * 1024:
                 break
             time.sleep(0.25)
         # Deleting also frees a little filesystem metadata, which the file-data bounds exclude.
