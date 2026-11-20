@@ -543,7 +543,7 @@ def record_checkpoints(journal, data, claims):
         head = checkouts[checkpoint['checkout']]['head']
         oid = checkpoint['oid']
         require(git(base, 'cat-file', '-t', oid).strip() == b'commit', f"Checkpoint is not a commit: {checkpoint['ref']}")
-        lines = git(base, 'show', '-s', '--format=%B', oid).decode(errors='replace').rstrip().split('\n')
+        lines = git(base, 'show', '-s', '--format=%B', oid).decode(errors='replace').rstrip('\n').split('\n')
         require(lines[0] == f"t3 checkpoint ref={checkpoint['ref']}"
                 and (len(lines) == 1 or len(lines) > 2 and lines[1] == ''
                      and all(CHECKPOINT_TRAILER.fullmatch(line) for line in lines[2:])),

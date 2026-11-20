@@ -752,6 +752,7 @@ class MigrationTests(unittest.TestCase):
             'prose after trailers': dict(body=trailer + '\nNot a trailer'),
             'trailer without blank line': dict(body='\nT3-Head-Moved-At: 1794806290 1'),
             'leading space': dict(prefix=' ', body=trailer),
+            'trailing space': dict(body=' '),
             'leading blank line': dict(prefix='\n', body=trailer),
         }
         for name, options in misnamed.items():
