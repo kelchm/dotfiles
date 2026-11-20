@@ -42,7 +42,7 @@ def measure(*args, check=True, unavailable_attributes=False):
 spec = importlib.util.spec_from_file_location("apfs_measure", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-module.file_attributes = lambda path: (None, None, None)
+module.file_attributes = lambda path: (None, None)
 sys.argv = sys.argv[1:]
 module.main()
 '''

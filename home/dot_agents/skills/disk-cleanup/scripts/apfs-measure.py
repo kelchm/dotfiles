@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only APFS storage measurement for the disk-cleanup skill (macOS only).
-
-`volume` reports container capacity and snapshots. `footprint` ranks live
-roots by mapped file data. `scan` investigates a specific deletion set with lstat,
-getattrlist (ATTR_CMNEXT_PRIVATESIZE, EXT_FLAGS), SEEK_DATA/SEEK_HOLE and
-F_LOG2PHYS_EXT on data and resource forks. It never writes, flushes, deletes
-or materializes files. Field meanings are in references/macos.md.
-"""
+"""Read-only APFS measurements for disk cleanup. See references/macos.md."""
 
 from __future__ import annotations
 
@@ -24,32 +17,27 @@ import subprocess
 import sys
 import time
 
-SCHEMA = 'disk-cleanup/apfs-measure/2'
+SCHEMA = 'disk-cleanup/apfs-measure/3'
 
-# <sys/fcntl.h>, <sys/attr.h>, <sys/stat.h>, <sys/xattr.h>, <sys/resource.h>
+# <sys/fcntl.h>, <sys/attr.h>, <sys/stat.h>, <sys/resource.h>
 F_LOG2PHYS_EXT = 65
 LOG2PHYS = struct.Struct('=Iqq')  # pack(4): flags, contigbytes, devoffset
 ATTR_CMN_RETURNED_ATTRS = 0x80000000
 ATTR_FILE_LINKCOUNT = 0x00000001
 ATTR_FILE_RSRCLENGTH = 0x00001000
 ATTR_CMNEXT_PRIVATESIZE = 0x00000008
-ATTR_CMNEXT_EXT_FLAGS = 0x00000200
 FSOPT_NOFOLLOW, FSOPT_PACK_INVAL_ATTRS, FSOPT_ATTR_CMN_EXTENDED = 0x1, 0x8, 0x20
-ATTR_REPLY = struct.Struct('=I5IqqQ')  # length, returned attribute_set_t, rsrc length, private size, ext flags
+ATTR_REPLY = struct.Struct('=I5Iqq')  # length, returned attribute_set_t, rsrc length, private size
 LINK_COUNT_REPLY = struct.Struct('=I5II')
 MAX_STAT_LINKS = (1 << 16) - 1  # Darwin's nlink_t
-EF_MAY_SHARE_BLOCKS, EF_NO_XATTRS, EF_IS_PURGEABLE = 0x1, 0x2, 0x8
 UF_COMPRESSED, SF_DATALESS = 0x20, 0x40000000
-XATTR_NOFOLLOW = 0x1
-RESOURCE_FORK_XATTR = b'com.apple.ResourceFork'
 
 ALL = ('logical_bytes', 'allocated_bytes', 'unique_physical_bytes', 'private_bytes_sum',
-       'exclusive_within_coverage_bytes', 'reclaim_if_deleted_bytes', 'xattr_bytes')
+       'exclusive_within_coverage_bytes', 'reclaim_if_deleted_bytes')
 RECLAIM = ('exclusive_within_coverage_bytes', 'reclaim_if_deleted_bytes')
 MAPPING = ('unique_physical_bytes',) + RECLAIM
 PRIVATE = ('private_bytes_sum', 'reclaim_if_deleted_bytes')
 OTHER, MULTI = -2, -1  # inode labels besides "every link is in candidate i"
-COMPRESSED, DATALESS, INLINE = 0x100, 0x200, 0x400  # Inode.flags bits alongside the EF_* flags kept
 
 NOT_MEASURED = [
     'Filesystem metadata: inodes, directory records, inline extended attributes, extent trees.',
@@ -77,11 +65,6 @@ class StatFS(ctypes.Structure):
 libc = ctypes.CDLL(None, use_errno=True)
 libc.getattrlist.argtypes = [ctypes.c_char_p, ctypes.POINTER(AttrList), ctypes.c_void_p, ctypes.c_size_t,
                             ctypes.c_uint32]
-libc.listxattr.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_int]
-libc.listxattr.restype = ctypes.c_ssize_t
-libc.getxattr.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32,
-                          ctypes.c_int]
-libc.getxattr.restype = ctypes.c_ssize_t
 try:  # Intel builds export the 64-bit-inode layout under a suffixed name.
     _statfs = libc['statfs$INODE64']
 except AttributeError:
@@ -101,17 +84,16 @@ def statfs(path):
 
 
 def file_attributes(path):
-    """(resource fork length, private size, ext flags); None where the volume did not return one."""
+    """Resource-fork length and private size. Missing attributes are None."""
     request = AttrList(5, 0, ATTR_CMN_RETURNED_ATTRS, 0, 0, ATTR_FILE_RSRCLENGTH,
-                       ATTR_CMNEXT_PRIVATESIZE | ATTR_CMNEXT_EXT_FLAGS)
+                       ATTR_CMNEXT_PRIVATESIZE)
     buf = ctypes.create_string_buffer(ATTR_REPLY.size)
     if libc.getattrlist(os.fsencode(path), ctypes.byref(request), buf, ATTR_REPLY.size,
                         FSOPT_NOFOLLOW | FSOPT_PACK_INVAL_ATTRS | FSOPT_ATTR_CMN_EXTENDED) != 0:
-        return None, None, None
-    _, _, _, _, file_ret, fork_ret, rsrc, private, ext = ATTR_REPLY.unpack(buf.raw)
+        return None, None
+    _, _, _, _, file_ret, fork_ret, rsrc, private = ATTR_REPLY.unpack(buf.raw)
     return (rsrc if file_ret & ATTR_FILE_RSRCLENGTH else None,
-            private if fork_ret & ATTR_CMNEXT_PRIVATESIZE else None,
-            ext if fork_ret & ATTR_CMNEXT_EXT_FLAGS else None)
+            private if fork_ret & ATTR_CMNEXT_PRIVATESIZE else None)
 
 
 def full_link_count(path):
@@ -123,26 +105,6 @@ def full_link_count(path):
         return None
     _, _, _, _, file_ret, _, count = LINK_COUNT_REPLY.unpack(buf.raw)
     return count if file_ret & ATTR_FILE_LINKCOUNT and count >= MAX_STAT_LINKS else None
-
-
-def xattr_bytes(path):
-    """Logical size of extended attributes other than the resource fork, or None if unreadable."""
-    raw = os.fsencode(path)
-    size = libc.listxattr(raw, None, 0, XATTR_NOFOLLOW)
-    if size <= 0:
-        return 0 if size == 0 else None
-    names = ctypes.create_string_buffer(size)
-    size = libc.listxattr(raw, names, size, XATTR_NOFOLLOW)
-    if size < 0:
-        return None
-    total = 0
-    for name in names.raw[:size].split(b'\0'):
-        if name and name != RESOURCE_FORK_XATTR:
-            length = libc.getxattr(raw, name, None, 0, 0, XATTR_NOFOLLOW)
-            if length < 0:
-                return None
-            total += length
-    return total
 
 
 def map_fork(fd, size, bsize):
@@ -203,27 +165,32 @@ def map_preallocated_tail(fd, size, bsize, missing):
     return ranges
 
 
-def merged_length(ranges):
-    total, cur_lo, cur_hi = 0, None, None
+def merge_ranges(ranges):
+    """Normalize one fork so it has at most one active range at any offset."""
+    merged = []
     for lo, hi in sorted(ranges):
-        if cur_hi is None or lo > cur_hi:
-            if cur_hi is not None:
-                total += cur_hi - cur_lo
-            cur_lo, cur_hi = lo, hi
+        if merged and lo <= merged[-1][1]:
+            last_lo, last_hi = merged[-1]
+            merged[-1] = last_lo, max(hi, last_hi)
         else:
-            cur_hi = max(cur_hi, hi)
-    return total + (cur_hi - cur_lo if cur_hi is not None else 0)
+            merged.append((lo, hi))
+    return merged
+
+
+def range_bytes(ranges):
+    return sum(hi - lo for lo, hi in ranges)
 
 
 class Inode:
-    __slots__ = ('nlink', 'links', 'logical', 'allocated', 'private', 'flags', 'xattr', 'data_mapped', 'gap',
-                 'private_partial', 'xattr_failed', 'allocation_without_map')
+    __slots__ = ('nlink', 'links', 'logical', 'allocated', 'private', 'flags', 'data_mapped', 'gap',
+                 'private_partial', 'allocation_without_map')
 
     def __init__(self, st):
         self.nlink, self.links = st.st_nlink, []
         self.allocated = st.st_blocks * 512
-        self.logical, self.private, self.flags, self.xattr, self.data_mapped = st.st_size, None, 0, 0, 0
-        self.gap, self.private_partial, self.xattr_failed = None, False, False
+        self.logical, self.flags = st.st_size, st.st_flags
+        self.private, self.gap = None, None
+        self.private_partial, self.data_mapped = False, 0
         self.allocation_without_map = 0
 
 
@@ -315,8 +282,7 @@ class Scan:
                 self.inodes.append(inode)
                 self.measure(iid, inode, path, st, bsize)
                 for reason in (inode.gap, 'private_size_unavailable' if inode.private is None else None,
-                               'private_excludes_resource_fork' if inode.private_partial else None,
-                               'xattr_list_failed' if inode.xattr_failed else None):
+                               'private_excludes_resource_fork' if inode.private_partial else None):
                     if reason:
                         group.sample(reason, path, self.limit)
             self.inodes[iid].links.append(gid)
@@ -326,15 +292,9 @@ class Scan:
             group.other += 1
 
     def measure(self, iid, inode, path, st, bsize):
-        rsrc, inode.private, ext = file_attributes(path)
-        ext = ext or 0
+        rsrc, inode.private = file_attributes(path)
         compressed = bool(st.st_flags & UF_COMPRESSED)
         inode.logical += rsrc or 0
-        inode.flags = (ext & (EF_MAY_SHARE_BLOCKS | EF_IS_PURGEABLE) | (COMPRESSED if compressed else 0)
-                       | (DATALESS if st.st_flags & SF_DATALESS else 0))
-        if not self.footprint and not ext & EF_NO_XATTRS:
-            size = xattr_bytes(path)
-            inode.xattr, inode.xattr_failed = size or 0, size is None
         if st.st_flags & SF_DATALESS:  # opening could download it; any local blocks stay unmapped
             if inode.allocated:
                 inode.gap = 'dataless'
@@ -362,7 +322,6 @@ class Scan:
                 except OSError as e:
                     rgap = 'resource_fork_open_failed:' + errname(e.errno)
                     if compressed and e.errno == errno.ENOENT:  # data is inline in the decmpfs attribute
-                        inode.flags |= INLINE
                         rgap = 'compressed_without_resource_stream' if inode.allocated else None
                 else:
                     try:
@@ -373,13 +332,14 @@ class Scan:
                     finally:
                         os.close(rfd)
                 gap = gap or rgap
-            inode.data_mapped = merged_length(data)
-            mapped = inode.data_mapped + merged_length(resource)
+            data, resource = merge_ranges(data), merge_ranges(resource)
+            inode.data_mapped = range_bytes(data)
+            mapped = inode.data_mapped + range_bytes(resource)
             if not gap and not compressed and not has_rsrc and mapped < inode.allocated:
                 tail = map_preallocated_tail(fd, before.st_size, bsize, inode.allocated - mapped)
                 if tail:
-                    data.extend(tail)
-                    inode.data_mapped = mapped = merged_length(data)
+                    data = merge_ranges(data + tail)
+                    inode.data_mapped = mapped = range_bytes(data)
             after = os.fstat(fd)
             if (after.st_size, after.st_blocks, after.st_mtime_ns, after.st_ctime_ns) != (
                     st.st_size, st.st_blocks, st.st_mtime_ns, st.st_ctime_ns):
@@ -418,27 +378,21 @@ class Scan:
                 events.append((lo, 1, key))
                 events.append((hi, -1, key))
             events.sort()
-            keys, inodes, present, active_groups = {}, {}, [0] * groups, set()
+            active_forks, active_groups = set(), set()
+            present = [0] * groups
             cand_label, other, active, prev = [0] * n, 0, 0, None
             for pos, delta, key in events:
                 if active and pos != prev:
-                    self.segment(out, shared_data, pos - prev, keys, active, active_groups, cand_label, other)
+                    self.segment(out, shared_data, pos - prev, active_forks, active, active_groups, cand_label, other)
                 prev = pos
-                count = keys.get(key, 0) + delta
-                if count:
-                    keys[key] = count
+                if delta > 0:
+                    active_forks.add(key)
                 else:
-                    del keys[key]
-                if count != (1 if delta > 0 else 0):
+                    active_forks.remove(key)
+                # An inode stays present until both of its forks leave the segment.
+                if (key ^ 1) in active_forks:
                     continue
                 iid = key >> 1
-                icount = inodes.get(iid, 0) + delta
-                if icount:
-                    inodes[iid] = icount
-                else:
-                    del inodes[iid]
-                if icount != (1 if delta > 0 else 0):
-                    continue
                 active += delta
                 for g in presence[iid]:
                     present[g] += delta
@@ -453,7 +407,7 @@ class Scan:
                     other += delta
         return out, shared_data
 
-    def segment(self, out, shared_data, length, keys, active, active_groups, cand_label, other):
+    def segment(self, out, shared_data, length, active_forks, active, active_groups, cand_label, other):
         cands = [g for g in active_groups if g < self.n]
         refs = len(cands) < len(active_groups)
         for g in active_groups:
@@ -471,7 +425,7 @@ class Scan:
             if len(cands) == 1 and cand_label[cands[0]] == active:
                 out['exclusive'][cands[0]] += length
         if active > 1 and not self.footprint:
-            for key in keys:
+            for key in active_forks:
                 if not key & 1:
                     shared_data[key >> 1] = shared_data.get(key >> 1, 0) + length
 
@@ -541,9 +495,8 @@ class Scan:
 
     @staticmethod
     def blank():
-        counters = ('files', 'logical', 'allocated', 'private', 'xattr', 'hardlinked', 'links_outside', 'compressed',
-                    'dataless', 'inline', 'rsrc', 'may_share', 'purgeable', 'purgeable_allocated', 'at_least',
-                    'retained', 'allocation_without_map')
+        counters = ('files', 'logical', 'allocated', 'private', 'hardlinked', 'links_outside', 'compressed',
+                    'dataless', 'at_least', 'retained', 'allocation_without_map')
         return {**dict.fromkeys(counters, 0), 'gaps': {}}
 
     @staticmethod
@@ -551,19 +504,12 @@ class Scan:
         t['files'] += 1
         t['logical'] += inode.logical
         t['allocated'] += inode.allocated
-        t['xattr'] += inode.xattr
         t['allocation_without_map'] += inode.allocation_without_map
         t['private'] += inode.private or 0
         t['hardlinked'] += inode.nlink is None or inode.nlink > 1
         t['links_outside'] += inode.nlink is not None and len(inode.links) < inode.nlink
-        t['compressed'] += bool(inode.flags & COMPRESSED)
-        t['dataless'] += bool(inode.flags & DATALESS)
-        t['inline'] += bool(inode.flags & INLINE)
-        t['rsrc'] += inode.private_partial
-        t['may_share'] += bool(inode.flags & EF_MAY_SHARE_BLOCKS)
-        if inode.flags & EF_IS_PURGEABLE:
-            t['purgeable'] += 1
-            t['purgeable_allocated'] += inode.allocated
+        t['compressed'] += bool(inode.flags & UF_COMPRESSED)
+        t['dataless'] += bool(inode.flags & SF_DATALESS)
         if owned:
             if inode.gap is None and inode.private is not None and inode.private <= inode.data_mapped:
                 t['at_least'] += inode.private
@@ -579,8 +525,6 @@ class Scan:
             gaps.append(('private_exceeds_mapped_data', PRIVATE))
         if inode.private_partial:
             gaps.append(('private_excludes_resource_fork', ('private_bytes_sum',)))
-        if inode.xattr_failed:
-            gaps.append(('xattr_list_failed', ('xattr_bytes',)))
         if inode.nlink is None:
             gaps.append(('link_count_unavailable', RECLAIM))
         elif len(inode.links) > inode.nlink:
@@ -593,7 +537,7 @@ class Scan:
     @staticmethod
     def measures(t, physical):
         return {'logical_bytes': t['logical'], 'allocated_bytes': t['allocated'], 'unique_physical_bytes': physical,
-                'private_bytes_sum': t['private'], 'xattr_bytes': t['xattr'],
+                'private_bytes_sum': t['private'],
                 'allocation_without_map_bytes': t['allocation_without_map']}
 
     @staticmethod
@@ -607,10 +551,7 @@ class Scan:
     def counts(t, directories, symlinks, other):
         return {'files': t['files'], 'directories': directories, 'symlinks': symlinks, 'other': other,
                 'hardlinked_files': t['hardlinked'], 'files_with_links_outside_roots': t['links_outside'],
-                'files_that_may_share_blocks': t['may_share'], 'compressed_files': t['compressed'],
-                'compressed_in_metadata_files': t['inline'], 'dataless_files': t['dataless'],
-                'files_with_resource_or_compressed_stream': t['rsrc'], 'purgeable_files': t['purgeable'],
-                'purgeable_allocated_bytes': t['purgeable_allocated']}
+                'compressed_files': t['compressed'], 'dataless_files': t['dataless']}
 
     @staticmethod
     def gaps(t, entry_gaps, samples, candidate):
