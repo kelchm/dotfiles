@@ -1,8 +1,8 @@
 # Linux
 
-## Identify the storage layer
+Commands assume GNU coreutils and util-linux. On minimal systems, use `df -Pk`, `du -xk` and `/proc/self/mountinfo`, and report KiB.
 
-Start at the path that is running out of room. On Linux with GNU coreutils and util-linux:
+## 1. Find the filesystem
 
 ```sh
 findmnt -T "$path" -o TARGET,SOURCE,FSTYPE,FSROOT,OPTIONS
@@ -11,26 +11,48 @@ df -B1 -P -- "$path"
 df -i -- "$path"
 ```
 
-`df` reports filesystem space. Quotas can constrain the caller further. Check inode pressure where the filesystem reports useful inode counts. On minimal systems use `df -Pk` and `/proc/self/mountinfo`. Group mounts of the same filesystem or pool rather than adding their totals. For Btrfs, group subvolumes by filesystem UUID and read `btrfs filesystem usage --raw "$path"` for pool usage and estimated free. For ZFS use `zpool list -p` and `zfs list -p -o space` to separate pool from dataset and snapshot accounting. For thin LVM use `lvs -o lv_name,lv_size,pool_lv,data_percent,metadata_percent` where accessible. Identify guest, container and network filesystems before attributing their space to the host.
+- Several mounts can share one filesystem or pool, such as bind mounts, Btrfs subvolumes and ZFS datasets. Group them by source or UUID before adding totals.
+- Full inodes look like a full disk. Check `df -i` where the filesystem reports meaningful counts. Btrfs and ZFS do not.
+- **Btrfs:** `btrfs filesystem usage --raw "$path"` shows allocation by profile and estimated free space.
+- **ZFS:** `zpool list -p` for the pool and `zfs list -p -o space` for each dataset, split into live data, snapshots and children.
+- **Thin LVM:** `lvs -o lv_name,lv_size,pool_lv,data_percent,metadata_percent`.
+- User and project quotas can block writes while `df` still shows free space.
+- Identify container, guest and network filesystems before charging their space to the host.
 
-## Rank and attribute
+## 2. Rank directories
 
-Inspect mounts below the chosen root first. `du -x` stays on its starting device and can still enter same-device bind mounts. Scan each intended view once and exclude nested mounts or snapshot trees from the live inventory. Keep output, errors and exit status:
+Write the output to a fresh directory, and keep errors and the exit status:
 
 ```sh
-du -a -P -x -B1 -d1 -- "$root" > inventory.tsv 2> inventory-errors.log
-status=$?
-sort -nr inventory.tsv | head -n 25
+out=$(mktemp -d "${TMPDIR:-/tmp}/disk-audit.XXXXXX")
+du -a -P -x -B1 -d1 -- "$root" > "$out/inventory.tsv" 2> "$out/errors.log"
+echo "exit $?" >> "$out/errors.log"
+sort -nr "$out/inventory.tsv" | head -25
 ```
 
-`-d1` limits the output depth and still walks the tree. The root row includes its children. If only portable flags are available, use `du -axk` on smaller scopes and report KiB. Keep partial results labeled, including zero rows for inaccessible paths. Drill into the largest leads in home, workspaces, `/var`, application data and temporary directories. Attribute each to a project, package manager, service or application. `journalctl --disk-usage` can explain journal storage and `docker system df -v` can break down the current Docker context. Check access and confirm that context before using its figures.
+- `-x` stays on one filesystem but still enters bind mounts of the same filesystem. Check `findmnt -rn -o TARGET,SOURCE | awk -v r="${root%/}/" 'index($1"/", r) == 1'` first for mounts at or below the root.
+- `-d1` limits output, not the walk. The root row includes everything below it.
+- `du` reports allocation and counts each hard-linked inode once per run. `--apparent-size` reports logical size. A large gap between the two points to sparse files or compression.
+- Inaccessible directories show up in `errors.log` and are missing from the totals. Report the result as partial.
 
-`du` reports inode allocation and normally counts a hard-linked inode once per invocation. `du --apparent-size` reports logical size, useful for identifying sparse images. Rows can share reflinked storage. Give the byte measure and scan scope, and keep clone-inflated totals out of physical footprint and reclaim claims. [GNU `du` manual](https://www.gnu.org/software/coreutils/manual/html_node/du-invocation.html)
+Drill into the largest children, usually `/home`, workspaces, `/var` (logs, containers, package caches), `/opt` and `/tmp`. Useful owner reports:
 
-## Verify footprint and reclaim
+- `journalctl --disk-usage` for the systemd journal.
+- `docker system df -v` or `podman system df -v` for the current engine and context.
+- `snap list --all` shows disabled revisions kept on disk. `flatpak uninstall --unused` lists unused runtimes and asks before it removes anything.
+- `~/.cache`, language toolchains (`~/.cargo`, `~/go`, `~/.local/share/mise`) and IDE caches.
 
-- **Hard links:** for a specific deletion set, inspect `stat -c '%d:%i links=%h length=%s blocks=%b block_bytes=%B %n' -- <paths>`. Compare the number of distinct links being removed with the inode link count. On Btrfs identify the inode by filesystem UUID, subvolume ID and inode number, and avoid counting bind aliases as extra links. A surviving link keeps its file data.
-- **Shared extents:** `filefrag -v -b1` can diagnose sparse and reflinked extents on supported local filesystems. For mapped file data, union valid, unencoded ranges within the same filesystem only. Skip unknown, delayed, inline or otherwise unmappable ranges and label the result partial. Btrfs addresses are filesystem logical addresses. `btrfs filesystem du --raw -s <paths>` reports sharing for each argument using FIEMAP file-side lengths. Compressed extent lengths cannot establish physical bytes. Keep any reported bounds confined to the bytes actually mapped. [FIEMAP flags](https://docs.kernel.org/filesystems/fiemap.html) · [Btrfs usage and sharing](https://btrfs.readthedocs.io/en/stable/btrfs-filesystem.html)
-- **Retention:** use the snapshot manager to list snapshots and report their size where supported. For example, use `btrfs subvolume list -s` or ZFS `usedbysnapshots`. Permission errors and missing counters mean unknown. A gap between `df` and the file inventory can be snapshots, filesystem overhead, inaccessible trees or deleted files still held open. Check `lsof +L1` where available and visible to the caller.
+## 3. Check what keeps data after deletion
 
-Use the owning tool's preview or exact deletion list. Give a reclaim estimate only for the supported, measured scope and explain hard links, snapshots, shared data and open handles that could keep it. Report unknown when the evidence is insufficient. After authorized cleanup, repeat `df` on the same filesystem. For guests or thin storage, remeasure the relevant backing allocation too.
+- **Hard links:** `stat -c '%h %i %n' -- <paths>`. If the inode's link count is higher than the number of links you are deleting, the data stays.
+- **Reflinks (Btrfs, XFS):** `du` counts shared extents in full for each file. `btrfs filesystem du -s --raw <paths>` splits each argument into exclusive and shared bytes. It counts compressed extents at their uncompressed length, so use `compsize` for on-disk size of compressed data. `filefrag -v` shows the extents of a single file.
+- **Snapshots:** `btrfs subvolume list -s "$path"`, or ZFS `usedbysnapshots` from `zfs list -o space`. Deleting a file that a snapshot still holds frees nothing until the snapshot goes.
+- **Deleted but still open:** `lsof +L1` lists unlinked files that a process still holds open. The space returns when the process closes them or restarts.
+
+If `df` shows much more used space than the inventory found, the difference is usually snapshots, inaccessible trees, deleted-but-open files or filesystem overhead. Name which ones you checked.
+
+## 4. After cleanup
+
+Rerun `df` (and `btrfs filesystem usage` or `zpool list` where relevant) on the same filesystem. For a guest or thin-provisioned volume, also remeasure the backing image or pool on the host. It shrinks only after trim or compaction.
+
+References: [GNU du](https://www.gnu.org/software/coreutils/manual/html_node/du-invocation.html) · [Btrfs filesystem](https://btrfs.readthedocs.io/en/stable/btrfs-filesystem.html) · [FIEMAP](https://docs.kernel.org/filesystems/fiemap.html)

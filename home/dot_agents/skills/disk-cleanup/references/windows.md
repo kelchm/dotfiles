@@ -1,25 +1,28 @@
 # Windows
 
-## Identify the volume
+Work in native PowerShell, including when the lead is a WSL or VM disk image.
 
-Start in native PowerShell, including when the lead is a WSL disk image. Find the volume that contains the path. Include volumes mounted in folders and look up drive mappings before treating the same storage as two volumes.
+## 1. Find the volume
 
 ```powershell
 Get-Volume | Select-Object DriveLetter, Path, FileSystem, Size, SizeRemaining
 Get-Partition | Select-Object DiskNumber, PartitionNumber, AccessPaths
 ```
 
-Record bytes and label GiB (bytes divided by `1GB` in PowerShell) or decimal GB. `SizeRemaining` is a volume reading. A caller quota, a thin pool and Windows Storage Reserve can affect availability. Use `GetDiskSpaceInformationW` if you need the separate actual, caller, used and reserved counters. The volume storage reserve is part of total reserve. Treat VSS usage as unknown when `vssadmin list shadowstorage` or `vssadmin list shadows` needs permissions you lack. [Windows disk-space counters](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-disk_space_information)
+- A volume can be mounted in a folder as well as at a drive letter, and `subst` or mapped drives can point at the same storage. Match on `Path` before treating two letters as two volumes.
+- Report bytes and say whether you converted to GiB (PowerShell's `1GB`) or decimal GB.
+- Per-user quotas, the Windows storage reserve and thin provisioning can make usable space differ from `SizeRemaining`. `GetDiskSpaceInformationW` reports the caller, used and reserved counters separately. [Disk-space counters](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-disk_space_information)
+- Shadow copies (`vssadmin list shadowstorage`) need elevation. Without it, treat VSS usage as unknown.
 
-## Rank and attribute
+## 2. Rank directories
 
-Use Storage settings for a broad breakdown and follow its large items to actual directories, apps or services. Select bounded roots such as user profiles, project workspaces, application data, package stores and temporary directories. Preserve read errors. Check junctions, reparse points and offline/cloud entries before descent to avoid duplicate trees, other volumes and hydration.
+Start with Settings > System > Storage for a broad breakdown, then follow its large categories to real folders: user profiles, `AppData`, project workspaces, package caches and `C:\ProgramData`.
 
-For a quick discovery pass without extra tools, rank the immediate children of an ordinary local folder by logical length. Choose a small enough root first and verify that its ancestors are in the intended volume and outside reparse or cloud paths. The skip mask covers reparse, offline and recall flags. Skipped entries and errors mean partial coverage.
+Watch for junctions, symbolic links and OneDrive placeholders. Following them double-counts trees, crosses volumes or downloads cloud files. The script below ranks the children of a local folder by logical size and does not follow any of them below `$root`. It cannot tell whether `$root` itself is reached through a junction, so first check that none of its ancestors has the `ReparsePoint` attribute and that `Get-Volume -FilePath $root` is the volume you mean. Skipped entries and errors mean partial coverage.
 
 ```powershell
 $root = 'C:\path\to\inspect'
-$skip = 0x441400
+$skip = 0x441400  # ReparsePoint, Offline, RecallOnOpen, RecallOnDataAccess
 $base = Get-Item -LiteralPath $root -Force -ErrorAction Stop
 if (-not $base.PSIsContainer -or ([int]$base.Attributes -band $skip)) {
     throw 'Choose an ordinary local directory'
@@ -43,12 +46,23 @@ Get-ChildItem -LiteralPath $root -Force -ErrorAction Continue | ForEach-Object {
 } | Sort-Object LogicalBytes -Descending
 ```
 
-A `Length` sum counts names and represents logical bytes. Compression, sparse files, hard links, alternate streams and shared clusters can change the storage figure. For selected ordinary trees, use an available allocation report and check its scope. Sysinternals `du.exe -c -l 1 <path>` (if already installed) reports logical and on-disk columns. `-u` counts every hard link. Built-in `diskusage.exe` can help where installed and permitted. Use its local help and retain access errors. [Sysinternals Disk Usage](https://learn.microsoft.com/en-us/sysinternals/downloads/du)
+It works in Windows PowerShell 5.1 and PowerShell 7. `Length` is logical size, so NTFS compression, sparse files and hard links make it differ from allocation. For allocation, Sysinternals `du.exe -c -l 1 <path>` (if installed) reports logical and on-disk columns. Its `-u` flag counts each hard link separately. Recent Windows builds also include `diskusage.exe`; read its built-in help first. [Sysinternals Disk Usage](https://learn.microsoft.com/en-us/sysinternals/downloads/du)
 
-## Verify a cleanup lead
+## 3. Check what keeps data after deletion
 
-- **Specific files:** check hard-link names with `fsutil hardlink list <path>` where permitted and look for alternate streams with `Get-Item -LiteralPath $file -Stream *`. A handle-based tool can measure stream allocation and deduplicate hard links by volume and file ID. Compare distinct names being removed with link count. ReFS clones can share clusters between different file IDs. Per-file allocation and a directory inventory do not establish joint reclaim. [File identity](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_info) · [Volume extent mapping](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_get_retrieval_pointers)
-- **Windows and application storage:** use the owning tool. For example, Storage settings identifies system-managed cleanup, and `Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore` reports WinSxS sharing when elevated analysis is authorized. Treat user data, backups, installer state and project files separately. [Component store accounting](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/determine-the-actual-size-of-the-winsxs-folder)
-- **WSL and VMs:** identify WSL distributions with `wsl --list --verbose` where available. Measure the backing image on the host and guest filesystem usage separately. Starting a stopped guest changes state. Use the guest/container owner to inspect or clean it. Verify host allocation after any supported trim or compaction. [WSL disk space](https://learn.microsoft.com/en-us/windows/wsl/vhd-size)
+- **Hard links:** `fsutil hardlink list <file>` (where permitted). Data stays while any other name remains.
+- **Alternate data streams:** `Get-Item -LiteralPath $file -Stream *`. They are excluded from `Length`.
+- **ReFS block clones and Dev Drive:** clones share clusters between files, so per-file allocation overstates what deleting one copy frees.
+- **Shadow copies and the Recycle Bin** keep deleted data until they are cleared.
+- **Open handles** keep a file in use. Sysinternals `handle.exe <path>` finds the process.
 
-If allocation or retained references remain unknown, say which and keep the estimate unknown. After authorized cleanup, repeat the same volume measurement. Consider VSS, the Recycle Bin, open handles and backing images when little space returns.
+## Common large owners
+
+- **Windows itself:** Storage settings > Temporary files lists what Windows can clean safely. Much of WinSxS's apparent size is hard links to files elsewhere in Windows. `Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore` (elevated) reports the store's actual size, the number of reclaimable packages and whether cleanup is recommended. It does not say how many bytes cleanup will free, so leave that unknown. [WinSxS size](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/determine-the-actual-size-of-the-winsxs-folder)
+- **WSL and VMs:** `wsl --list --verbose` lists distributions. Each one's `ext4.vhdx` grows as the guest writes, and unless it is set to sparse mode it does not shrink when guest files are deleted. Measure guest usage and the host image separately, check the sparse setting before recommending compaction, and remeasure the image afterward. [WSL disk space](https://learn.microsoft.com/en-us/windows/wsl/vhd-size)
+- **Docker Desktop, Hyper-V and other VM images:** use the owning tool to inspect and clean them. Starting a stopped VM changes its state.
+- **Package and build caches:** npm, pnpm, NuGet (`%USERPROFILE%\.nuget\packages`), Cargo, Gradle, Visual Studio and project build output. Use the owning tool's cleanup command.
+
+## After cleanup
+
+Repeat the same `Get-Volume` measurement. If less space returned than expected, check shadow copies, the Recycle Bin, open handles and VM images that still need compaction.

@@ -5,8 +5,21 @@ description: Find what occupies disk space, estimate what could be reclaimed, an
 
 # Disk cleanup
 
-Read the reference for [macOS (APFS)](references/macos.md), [Linux](references/linux.md), or [Windows](references/windows.md).
+Explain where the space went, what could be freed and how confident the estimate is, then clean up only what the user authorizes. Read the guide for the platform first: [macOS (APFS)](references/macos.md), [Linux](references/linux.md), or [Windows](references/windows.md).
 
-1. **Audit.** Start with free and used space at the relevant volume or pool. Use a cheap inventory to find leads, then verify the largest roots with the strongest measurement the filesystem supports. Include data worth keeping and attribute results by project, application and purpose. Label logical size, allocation and mapped file data separately. Use a measured union for totals that may share blocks, and explain the largest gaps in coverage.
-2. **Decide.** Follow large cleanup leads to the owning tool. Give the user a concrete action with its measured or unknown savings and the evidence needed to proceed. Protect unique data, agent history and local work. Snapshot deletion, backup exclusions, VM retirement and checkout retirement each need their own scope.
-3. **Act and verify.** Check recent writes, open files and running jobs as appropriate. For build output in Git, verify the exact path is ignored and contains no tracked or local work to preserve. Prefer the owner's scoped preview and cleanup command within the user's authorization. Compare the same pool's free space before and after, and report the observed change separately from the data removed. Keep a dated record of scope, measurements, gaps and commands when it helps future comparison.
+## Measuring
+
+- **Start at the volume or pool.** Its free space is the number cleanup changes. Several mounts, subvolumes or APFS volumes can share one pool, so group them before adding anything up.
+- **Name the size you report.** *Logical* is file length. *Allocated* is the blocks charged to each file. *Physical* is the blocks actually in use after counting clones, reflinks and hard links once. Discovery tools report logical or allocated sizes, and a sum of them can count the same blocks more than once.
+- **Use cheap tools to find leads and strong tools to confirm them.** `du`, Storage settings and similar inventories rank directories quickly. Use the stronger measurement in the platform guide only on the largest leads.
+- **Partial coverage is a finding.** Keep permission errors, skipped mounts and unreadable entries in the report. Leave an estimate unknown when the evidence cannot support a number.
+- **Measuring must not change state.** Don't download cloud placeholders, start stopped VMs or containers, or elevate privileges just to measure.
+
+## Workflow
+
+1. **Audit.** Record volume usage, rank the top-level directories, and drill into the largest ones. Attribute each lead to its owner: a project, application, package manager, VM or service. Include data worth keeping so the user sees the whole picture.
+2. **Recommend.** For each actionable lead, give the owner's cleanup command, the estimated savings and how they were measured, what is lost (rebuild or redownload cost, history, local work), and the risk. Separate reproducible caches and build output from leads that need a decision (VMs, snapshots, old projects, unique data).
+3. **Act on what the user authorized.** Prefer the owner's command, previewed first (for example `brew cleanup --dry-run`). Before deleting a directory, check for open files and running jobs. For build output inside Git, confirm the exact path is ignored and holds no tracked or local work. Snapshot deletion, backup exclusions and VM retirement each need their own explicit approval. Repositories and worktrees go through `repo-workspace`.
+4. **Verify.** Remeasure the same volume or pool. Report the observed change next to the estimate, and explain any shortfall. Common causes are snapshots, open handles, hard links or clones kept elsewhere, and guest disk images that need trim or compaction.
+
+Report sizes in bytes or binary units (GiB, MiB) and say which. When a later comparison would help, keep a dated note of what was measured, the commands used and the gaps.
