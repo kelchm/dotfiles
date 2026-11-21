@@ -1,6 +1,6 @@
 # Contribution checkouts
 
-Read this when setting up or normalizing a Contribute checkout, starting a contribution worktree, or publishing a contribution.
+Read this when setting up or normalizing a Contribute checkout, starting a contribution worktree, publishing a contribution, or choosing Actions settings for a fork.
 
 ## Git settings
 
@@ -23,6 +23,15 @@ Find the target's actual default or release branch rather than assuming `main`, 
 These settings do not guarantee everything. `remote.pushDefault` does not stop a push of the baseline branch to `origin`, and `pull.ff=only` does not keep the baseline pristine. Make ordinary contribution edits in topic worktrees. Do not add a general push-hook framework. Leave an effective `push.autoSetupRemote` as it is: the first publication is explicit either way.
 
 Do not change project or environment preferences, such as a project's `autoPull`, while normalizing a checkout.
+
+## GitHub Actions on forks
+
+Disable scheduled workflows on the user's forks by default. Keep a schedule when the user wants it, and decide anything else case by case, when it causes noise or the user asks.
+
+- Turn off each scheduled workflow (`gh workflow disable <workflow> --repo <fork owner/repo>`) unless it also runs on pushes to branches the user works on. Name the fork explicitly, since `gh` defaults to upstream in a Contribute checkout. A disabled workflow creates no runs, and the user can turn it back on later. A fork's `pull_request` triggers fire only for pull requests opened against the fork, not for the user's upstream contributions.
+- Don't exclude `schedule` with an Actions policy. Each blocked run is recorded as a startup failure and emails the user.
+
+An audit of a fork's Actions is read-only. Changing its settings is a separate step the user approves.
 
 ## Starting work
 

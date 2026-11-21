@@ -32,6 +32,7 @@ Layout:
 - **Personal**: `origin` is the maintained repository, and the baseline tracks its maintained line. An `upstream` remote for the ancestral project is optional. Never point a downstream's maintained branch at `upstream` just because GitHub calls it a fork.
 - Verify a contribution target against GitHub's fork-parent metadata and the task. A configured `upstream` remote is evidence, not proof.
 - Forking is normal once contribution publication is authorized. Local-only, no-fork, and no-push instructions mean no fork, push, or PR. Setup, a project title, or a directory never grants publication authority.
+- When setting up a GitHub fork or looking into its workflow runs, follow the [fork Actions guidance](references/contribution.md#github-actions-on-forks).
 
 ## T3 projects
 
