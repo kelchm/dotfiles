@@ -5,7 +5,7 @@ description: Decide where a repository checkout lives (Personal, Contribute, or 
 
 # Repository workspaces
 
-Repository identity, the local path and alias, remote forks, and T3 projects and their history are separate decisions. Changing or retiring one never implies the same for the others. `scripts/audit.py` inventories checkouts read-only. `scripts/migrate.py` moves one checkout that a user explicitly authorized. `scripts/t3_snapshot.py` records and compares T3 projects and threads around a move, read-only. None of them changes T3 state.
+Repository identity, the local path and alias, remote forks, and T3 projects and their history are separate decisions. Changing or retiring one never implies the same for the others. `scripts/audit.py` inventories checkouts read-only. `scripts/migrate.py` moves one checkout that a user explicitly authorized. Neither one changes T3 state.
 
 ## Where a checkout lives
 

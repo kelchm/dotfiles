@@ -483,48 +483,28 @@ class MigrationTests(unittest.TestCase):
             with self.assertRaises(m.Refused):
                 m.prepare(self.source, self.dest, journal)
 
-    def test_ancestor_repo_that_does_not_ignore_the_path_is_refused(self):
-        self.run_git(self.dest.parent, 'init', '-b', 'main')
-        (self.dest.parent / '.gitignore').write_text('/other/\n')
-        with self.assertRaisesRegex(m.Refused, 'does not ignore it'):
-            self.prepare()
-        self.assertFalse(self.journal.exists())
-
-    def test_ancestor_repo_that_tracks_the_path_is_refused(self):
+    def test_workspace_must_ignore_and_not_track_the_path(self):
         workspace = self.dest.parent
         self.run_git(workspace, 'init', '-b', 'main')
-        self.dest.mkdir()
-        (self.dest / 'tracked').write_text('tracked by the workspace\n')
-        self.run_git(workspace, 'add', 'repo/tracked')
-        (self.dest / 'tracked').unlink()
-        self.dest.rmdir()
-        (workspace / '.gitignore').write_text('/repo/\n')
-        with self.assertRaisesRegex(m.Refused, 'does not ignore it'):
-            self.prepare()
-
-    def test_ancestor_repo_tracking_the_path_in_another_case_is_refused(self):
-        workspace = self.dest.parent
-        self.run_git(workspace, 'init', '-b', 'main')
-        other = workspace / 'Other'
-        other.mkdir()
-        (other / 'tracked').write_text('tracked by the workspace\n')
-        self.run_git(workspace, 'add', 'Other/tracked')
-        (other / 'tracked').unlink()
-        other.rmdir()
-        (workspace / '.gitignore').write_text('/repo/\n/other/\n')
-        dest = workspace / 'other'
-        with self.assertRaisesRegex(m.Refused, 'tracks .* in some letter case'):
-            m.prepare(self.source, dest, self.journal)
-
-    def test_ancestor_repo_tracking_a_file_at_the_path_is_refused(self):
-        workspace = self.dest.parent
-        self.run_git(workspace, 'init', '-b', 'main')
-        self.dest.write_text('a tracked file, not a directory\n')
-        self.run_git(workspace, 'add', 'repo')
-        self.dest.unlink()
-        (workspace / '.gitignore').write_text('/repo/\n')
-        with self.assertRaisesRegex(m.Refused, 'tracks'):
-            self.prepare()
+        # Each case ignores the destination's directory form; the workspace's index decides the rest.
+        cases = {'unignored': (None, 'does not ignore it'), 'tracked directory': ('repo/tracked', 'does not ignore it'),
+                 'tracked in another case': ('Repo/tracked', 'tracks'), 'tracked file': ('repo', 'tracks')}
+        for name, (tracked, message) in cases.items():
+            with self.subTest(name):
+                self.run_git(workspace, 'rm', '-rq', '--cached', '--ignore-unmatch', '--', '.')
+                (workspace / '.gitignore').write_text('' if tracked is None else '/repo/\n')
+                if tracked:
+                    file = workspace / tracked
+                    file.parent.mkdir(exist_ok=True)
+                    file.write_text('tracked by the workspace\n')
+                    self.run_git(workspace, 'add', '-f', '--', tracked)
+                    file.unlink()
+                    if file.parent != workspace:
+                        file.parent.rmdir()
+                journal = self.root / f'{name}.json'
+                with self.assertRaisesRegex(m.Refused, message):
+                    m.prepare(self.source, self.dest, journal)
+                self.assertFalse(journal.exists())
 
     def test_rollback_refuses_a_return_into_a_workspace_that_no_longer_ignores_it(self):
         workspace = self.source.parent
@@ -538,43 +518,27 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(data['phase'], 'applied')
         self.assertTrue(self.dest.exists())
 
-    def test_moves_into_and_out_of_a_workspace_that_ignores_the_checkout(self):
-        workspace = self.dest.parent
-        self.run_git(workspace, 'init', '-b', 'main')
-        (workspace / '.gitignore').write_text('/repo/\n')
+    def test_documented_workspace_sequence_in_and_out(self):
+        """The checkout at the workspace path hops to a sibling, joins the cloned workspace, then leaves."""
         wt = self.linked()
-        data = self.prepare()
-        m.apply(self.journal, data)
-        m.verify_data(data, True)
-        self.assertEqual(self.run_git(workspace, 'status', '--porcelain'), b'?? .gitignore\n')
-        self.assertEqual(self.run_git(wt, 'rev-parse', '--path-format=absolute', '--git-common-dir').decode().strip(),
-                         (self.dest / '.git').as_posix())
-        back = self.root / 'move-out.json'
-        out = m.prepare(self.dest, self.source, back)
-        m.apply(back, out)
-        m.verify_data(out, True)
-        self.assertFalse(self.dest.exists())
-
-    def test_documented_workspace_creation_with_an_overlapping_checkout(self):
-        """The checkout at the workspace path hops to a sibling, then joins the cloned workspace."""
-        wt = self.linked()
+        common_dir = lambda: self.run_git(wt, 'rev-parse', '--path-format=absolute', '--git-common-dir').decode().strip()
         origin = self.root / 'workspace-origin'
         self.run_git(self.root, 'init', '-b', 'main', str(origin))
         (origin / '.gitignore').write_text('/repo/\n')
         self.run_git(origin, 'add', '.gitignore')
         self.run_git(origin, '-c', 'user.name=Fixture', '-c', 'user.email=f@example.invalid',
                      'commit', '-m', 'Ignore the checkouts')
-        hop = self.source.with_name('repo-moving')
-        first = m.prepare(self.source, hop, self.root / '1-hop.json')
-        m.apply(self.root / '1-hop.json', first)
-        self.run_git(self.source.parent, 'clone', str(origin), str(self.source))
-        final = self.source / 'repo'
-        second = m.prepare(hop, final, self.root / '2-into-workspace.json')
-        m.apply(self.root / '2-into-workspace.json', second)
-        m.verify_data(second, True)
-        self.assertEqual(self.run_git(self.source, 'status', '--porcelain'), b'')
-        self.assertEqual(self.run_git(wt, 'rev-parse', '--path-format=absolute', '--git-common-dir').decode().strip(),
-                         (final / '.git').as_posix())
+        hop, inside, out = self.source.with_name('repo-moving'), self.source / 'repo', self.dest
+        for step, (source, destination) in enumerate(((self.source, hop), (hop, inside), (inside, out))):
+            if step == 1:
+                self.run_git(self.source.parent, 'clone', str(origin), str(self.source))
+            journal = self.root / f'{step}.json'
+            data = m.prepare(source, destination, journal)
+            m.apply(journal, data)
+            m.verify_data(data, True)
+            self.assertEqual(common_dir(), (destination / '.git').as_posix())
+            if step:  # The workspace sees nothing of the checkouts inside it.
+                self.assertEqual(self.run_git(self.source, 'status', '--porcelain'), b'')
 
     def test_stash_list_is_preserved(self):
         for text in ('first', 'second'):
