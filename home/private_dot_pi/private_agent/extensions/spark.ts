@@ -24,7 +24,13 @@ type LevelMap = Record<Level, string | null>;
 
 // contextWindow and thinkingLevelMap apply only when the server reports none;
 // maxContextWindow caps whatever it reports.
-type Entry = { name?: string; contextWindow?: number; maxContextWindow?: number; thinkingLevelMap?: LevelMap };
+type Entry = {
+	name?: string;
+	contextWindow?: number;
+	maxContextWindow?: number;
+	thinkingLevelMap?: LevelMap;
+	compat?: { supportsMidConvoSystemMessages?: boolean };
+};
 
 // TensorFold reports the window and thinking levels in /v1/models, so only
 // what it cannot know is kept here.
@@ -38,6 +44,12 @@ const KNOWN: Record<string, Entry> = {
 		// renders medium exactly like max, so the other Pi levels are hidden.
 		thinkingLevelMap: { off: "none", minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" },
 	},
+	// Pi folds a changed prompt section (an edited AGENTS.md, a new skill) into the
+	// leading system message unless the model takes system messages mid-conversation,
+	// so the whole cached conversation is prefilled again: about 9 minutes at 800K
+	// tokens. GLM's template renders a later system message as its own <|system|>
+	// turn, and on November 21 the model followed one with the prefix still cached.
+	"GLM-5.3-Flash": { compat: { supportsMidConvoSystemMessages: true } },
 	// The Qwen kit serves a 1,048,576 window, but a 999,874-token prompt stalled
 	// both ranks on October 8 where 524,135 completed, so Pi compacts below that.
 	"Qwen3.8-Flash-Next": { name: "Qwen3.8-Flash-Next", maxContextWindow: 512000 },
@@ -92,6 +104,7 @@ function describe(served: Served & { id: string }) {
 		// reduced to fit the room left in the window.
 		maxTokens: 0,
 		cost: FREE,
+		...(known.compat && { compat: known.compat }),
 	};
 }
 
