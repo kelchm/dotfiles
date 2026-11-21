@@ -177,6 +177,9 @@ def check_enclosing(path):
         require(git(parent, 'check-ignore', '--', relative, ok=(0, 1)),
                 f"{path} is inside the checkout {parent}, which does not ignore it; "
                 f"add /{relative} to its .gitignore first")
+        # check-ignore passes a tracked path whose case differs, so ask the index directly.
+        require(not git(parent, 'ls-files', '-z', '--', f':(literal,icase){relative}'),
+                f"{parent} tracks files under {path}, in some letter case")
 
 
 def check_layout(source, destination, journal):
@@ -491,6 +494,8 @@ def rollback(journal, data):
     base = destination if moved else source
     # Ignore only the pointers that this operation is responsible for repairing.
     verify_data(data, moved, check_links=False)
+    if moved:
+        check_enclosing(source)  # A workspace may have stopped ignoring the old path since.
     check_processes([Path(s['path']) for s in expected(data, moved)['checkouts']])
     require(not busy_locks(base), 'Git lock file exists')
     record(journal, data, 'rolling_back')

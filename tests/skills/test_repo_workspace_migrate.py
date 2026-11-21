@@ -502,6 +502,32 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, 'does not ignore it'):
             self.prepare()
 
+    def test_ancestor_repo_tracking_the_path_in_another_case_is_refused(self):
+        workspace = self.dest.parent
+        self.run_git(workspace, 'init', '-b', 'main')
+        other = workspace / 'Other'
+        other.mkdir()
+        (other / 'tracked').write_text('tracked by the workspace\n')
+        self.run_git(workspace, 'add', 'Other/tracked')
+        (other / 'tracked').unlink()
+        other.rmdir()
+        (workspace / '.gitignore').write_text('/repo/\n/other/\n')
+        dest = workspace / 'other'
+        with self.assertRaisesRegex(m.Refused, 'tracks files'):
+            m.prepare(self.source, dest, self.journal)
+
+    def test_rollback_refuses_a_return_into_a_workspace_that_no_longer_ignores_it(self):
+        workspace = self.source.parent
+        self.run_git(workspace, 'init', '-b', 'main')
+        (workspace / '.gitignore').write_text('/repo/\n')
+        data = self.prepare()
+        m.apply(self.journal, data)
+        (workspace / '.gitignore').write_text('')
+        with self.assertRaisesRegex(m.Refused, 'does not ignore it'):
+            m.rollback(self.journal, data)
+        self.assertEqual(data['phase'], 'applied')
+        self.assertTrue(self.dest.exists())
+
     def test_moves_into_and_out_of_a_workspace_that_ignores_the_checkout(self):
         workspace = self.dest.parent
         self.run_git(workspace, 'init', '-b', 'main')
