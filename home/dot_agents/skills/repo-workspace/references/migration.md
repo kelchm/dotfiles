@@ -1,78 +1,96 @@
 # Moving an established checkout
 
-Use `scripts/migrate.py --help` for one explicitly authorized move. Treat an older audit manifest as a candidate list, then refresh its evidence. The helper performs Git/filesystem operations only; the acting agent coordinates T3 through live tools. Never edit T3 databases or provider session files.
+`scripts/migrate.py` moves one explicitly authorized checkout; see `--help`. It changes Git and the filesystem only. The acting agent coordinates T3 through live tools and never edits T3's database or provider session files. Treat an older audit manifest as a candidate list and refresh its evidence.
 
-## Supported boundary
+## What the helper supports
 
-The helper supports a primary clone with an internal `.git` directory, committed HEAD, and healthy external linked worktrees that remain at their existing paths. Source and destination must be real paths on the same filesystem, with existing components spelled exactly as on disk; the destination parent already exists and is outside another checkout. The helper uses the platform's atomic exclusive rename API (live-tested on macOS, Linux, and Windows), preserves the directory inode, and runs Git's `worktree repair` with absolute pointers enforced.
+It moves a primary clone with an internal `.git` directory and a committed HEAD. Its healthy linked worktrees stay where they are, and `git worktree repair` rewrites their pointers as absolute paths. Source and destination are real paths on one filesystem, spelled exactly as on disk, and the destination's parent already exists. The rename is atomic and never overwrites anything (live-tested on macOS, Linux, and Windows), so the directory keeps its inode.
 
-It refuses uncommitted tracked or untracked changes unless prepared with `--allow-dirty` (below), index flags that can hide edits, submodules, nested repositories or worktrees, missing/locked worktrees, Git lock files or unfinished Git operations (`gh stack`'s empty `gh-stack.lock` and `gh-stack-operation.lock` in the Git directory are allowed while no process holds them open; on Windows a held one makes the rename fail), separate Git directories, explicit `core.worktree`, and object alternates. Preparation also refuses effective config values containing the source path, naming the keys but withholding their values; resolve these consumers through a separate reviewed change before a move. Ignored files move with the directory; the helper does not delete or inventory their contents. Other path-sensitive configuration, external tools, processes without a cwd handle, and activity on other machines require the agent's investigation. Cwd inspection uses `lsof` for the current user, suppresses unrelated mount warnings, and refuses command errors or empty results; it cannot prove universal quiescence. Windows has no such listing. There the rename itself fails while any process has its cwd or an open file inside the primary checkout, but processes in retained worktrees go unchecked, so confirm they are idle yourself.
+Either path may sit inside another checkout, such as a [workspace](#workspaces), only where that checkout ignores it. `git check-ignore` decides, and the helper refuses a path the enclosing checkout tracks as a file or directory in any letter case. Rollback checks the old path again before moving back.
 
-Uncommitted work is common and is not a reason to stash, commit, reset, or delete anything. When `prepare` refuses a dirty checkout, it lists the changed and untracked paths. Review them, confirm nothing is still writing to the checkout, then run `prepare` again with `--allow-dirty`. The journal then fingerprints the status and the content of every listed path, in the primary checkout and each retained worktree, and `apply`, `verify`, and `rollback` require it unchanged, so an edit during the move is refused or undone like any other drift. The rename carries the files as they are. A T3 checkpoint taken in a dirty checkout snapshots that dirty tree rather than HEAD, so `record-checkpoints` refuses it, and every later `verify` and `rollback` refuses on the unrecorded ref. For a dirty checkout with T3 threads, run `verify` before the continuation test, and plan any later reversal as a new move. Threads bound to clean checkouts in the same move are unaffected.
+It refuses what it can't move losslessly: submodules, nested repositories or worktrees, missing or locked worktrees, separate Git directories, explicit `core.worktree`, object alternates, index flags that hide edits, Git lock files, and unfinished Git operations. `gh stack`'s empty `gh-stack.lock` and `gh-stack-operation.lock` are allowed while no process holds them. It also refuses config values that contain the source path, naming the keys but not the values; resolve those in a separate reviewed change first.
 
-Some states look alarming but are harmless. Each needs its own narrow handling, never a blanket ignore:
+Uncommitted work is common and is never a reason to stash, commit, reset, or delete. `prepare` lists the changed and untracked paths. Review them, confirm nothing is still writing, and prepare again with `--allow-dirty`. The journal then fingerprints that work in every checkout, and any change to it during the move is refused or undone like other drift. Ignored files move with the directory, unexamined.
 
-- **macOS provenance.** The kernel stamps `com.apple.provenance` onto the renamed root and onto the worktree pointer files Git rewrites in place. This helper does not compare extended attributes. Any tool that does should skip that attribute by exact name and keep comparing the others.
-- **Vendored `.gitmodules`.** The submodule check reads only the checkout's top-level `.gitmodules` and `git submodule status`. A `.gitmodules` inside a package directory such as `node_modules` declares nothing and moves with the directory.
-- **Stale `AUTO_MERGE`.** Git can leave an `AUTO_MERGE` file in a Git directory after a conflicted merge, sometimes naming an object that no longer exists. It is not an operation in progress. It moves unchanged; don't delete it.
-- **Broken evidence.** Dangling links, missing worktree attachments, and stale markers that existed before the move are preserved as they are, not pruned or repaired as a side effect.
+Processes are checked with `lsof` for the current user's cwd handles; a refusal names the process and its command. That check can't prove that nothing else is using the checkout. On Windows there is no cwd listing. The rename itself fails while anything holds the primary checkout, but nothing checks retained worktrees, so settle every thread bound to them and confirm they're idle yourself. Other path-sensitive tools and other machines are yours to investigate.
 
-The config fingerprint includes repository, user, and system configuration and expanded includes. A path-conditional include that changes configuration at the destination is deliberately unsupported: `apply` restores the original path and reports the mismatch. Do not weaken the check to silently change identity, signing, hooks, or push behavior. A global config change after a successful move also blocks standalone rollback until investigated. The helper compares index entries (mode/object/stage/path), not cache bytes; routine `git status` cache refreshes are allowed.
+The config fingerprint covers repository, user, and system config with includes expanded. A path-conditional include that changes config at the destination makes `apply` move back and report it; never weaken that check, since it guards identity, signing, hooks, and push behavior. Index entries are compared, not cache bytes, so routine `git status` refreshes are fine.
 
-Keep the journal in a private, persistent directory outside every affected checkout. It stores paths and preservation fingerprints, not config values or conversation bodies. It must be a newly named file; existing destinations, journals, and journal locks are never overwritten. A stale `.lock` after a crash needs inspection of its recorded PID before removal.
+Keep the journal in a new file in a private, persistent directory outside every affected path. It holds paths and fingerprints, not config values or conversations. Nothing overwrites an existing destination, journal, or lock; inspect a stale `.lock`'s recorded PID before removing it.
 
-## Prepare the coordinated move
+These look alarming but are harmless. Handle each narrowly, never with a blanket ignore:
 
-1. Verify repository/upstream/fork identity, the category and alias of the destination, and the exact old and new paths. Inspect path consumers such as setup scripts, absolute configuration, shell sessions, editors, agents, external worktrees, and the [state keyed by the old path](#state-keyed-by-the-old-path). Do not change remotes as part of a path migration. On Windows, don't set `GIT_SSH_COMMAND` to a bare `ssh` while checking remotes: it overrides `core.sshCommand` (for example Windows OpenSSH, which can reach the 1Password agent) with Git's bundled ssh and produces false "Permission denied (publickey)" results.
-2. Read the live project and **all** its threads, including archived threads and review children. The native project thread listing currently returns active threads only. List archived and deleted records with the `t3-thread-search` skill's `--include-deleted --path <primary checkout>` lookup and check for truncation (`truncated` with `--json`, or `(truncated)` after the result count), then read surviving IDs natively. Record the original project ID/root/title/scripts, thread IDs/parents/branches/worktree bindings, run/provider metadata, settled/archive state, and ordered history item IDs. Classify each thread by provider and root versus retained-worktree binding. Before a batch, run an explicitly authorized bounded pilot for any provider/binding combination whose resumption must remain usable but is not yet proven. Known live proof covers root-bound Grok, Claude, and Codex after a root change, and Codex and Claude in an unchanged external worktree. Keep the snapshot outside affected paths. Paginate metadata reads; avoid exporting message bodies or credentials. Preserve IDs rather than recreating projects or transferring threads.
-3. Confirm affected runs and tools are idle, and keep them idle during cutover. Do not move an active provider process. An existing cwd beneath any affected checkout blocks the helper. Use a coordinating thread whose cwd is outside all affected paths. On macOS, an idle T3 integrated terminal whose cwd is in a retained worktree is enough to make `prepare` refuse; ask the owner to close it, and never kill it. On Linux, unreadable `/proc/<pid>/cwd` entries for other users' processes and for your own `systemd --user` and `(sd-pam)` are expected, not blockers.
-4. Create or inspect the destination category directory. Claude Code's `Agent` tool with `isolation: "worktree"` leaves worktrees under the main checkout at `.claude/worktrees/agent-*`, even when the parent session ran in a T3 worktree, and never removes them, so `prepare` refuses them as nested worktrees. Move each one out first with `git worktree move` to a uniquely named folder under an existing worktree area; a live move of 21, one with uncommitted edits, preserved all their state. Then prepare:
+- **macOS provenance.** The kernel stamps `com.apple.provenance` on the renamed root and on worktree pointer files Git rewrites. Any tool comparing extended attributes should skip exactly that one.
+- **Vendored `.gitmodules`.** Only the top-level `.gitmodules` declares submodules; one inside `node_modules` moves with the directory.
+- **Stale `AUTO_MERGE`.** Left after a conflicted merge, sometimes naming a missing object. It isn't an operation in progress; leave it.
+- **Broken evidence.** Dangling links, missing worktree attachments, and stale markers from before the move are preserved, never pruned or repaired.
+
+## Prepare
+
+1. Verify the repository, its upstream and fork, the destination category and alias, and the exact paths. Inspect path consumers: setup scripts, absolute config, shells, editors, agents, external worktrees, and the [state keyed by the old path](#state-keyed-by-the-old-path). Don't change remotes during a move. On Windows, don't set `GIT_SSH_COMMAND` to a bare `ssh` while checking remotes: it bypasses `core.sshCommand` and produces false "Permission denied (publickey)" results.
+2. Record T3's state for every affected project, including a workspace's, and keep the record outside affected paths:
+   - the project's ID, root, title, and scripts
+   - every thread, including archived ones and review children. Native listings return active threads only, so add archived and deleted ones with the `t3-thread-search` skill's `--include-deleted --path <checkout>` lookup and check that it wasn't truncated.
+   - for each thread: parent, provider, branch, root or worktree binding, settled and archived state, and its item count and latest item ID
+
+   Record IDs and counts, not message text or credentials. Never recreate a project or transfer a thread to "fix" a move.
+3. Before a batch, pilot any provider and binding combination not yet proven, with explicit authorization. Proven so far: root-bound Grok, Claude, and Codex after a root change, and Claude and Codex in an unchanged external worktree.
+4. Make affected runs idle and keep them idle. Work from a thread whose cwd is outside every affected path. Idle provider sessions hold a cwd too: `claude` processes, and Codex `node_repl` children of `codex app-server`. Settling the owning thread releases one within about 5 seconds; never kill it. An idle T3 integrated terminal in a retained worktree also blocks `prepare`; ask its owner to close it. On Linux, unreadable `/proc/<pid>/cwd` entries for other users and for your own `systemd --user` and `(sd-pam)` are expected.
+5. Move Claude Code's `Agent` worktrees out first. `isolation: "worktree"` leaves them at `.claude/worktrees/agent-*` under the main checkout, where `prepare` refuses them as nested. Use `git worktree move` to a uniquely named folder under an existing worktree area. Then prepare:
 
 ```sh
 python3 scripts/migrate.py prepare --source /real/old/path/talos \
   --destination /real/dev-root/Contribute/talos --journal /private/evidence/move.json
 ```
 
-Preparation writes a snapshot but does not relocate anything. Review the exact paths and retained worktrees, T3 update, continuation test, and rollback plan. Existing user authorization for that concrete move suffices; an audit request alone does not authorize applying it.
+`prepare` only records. Review the paths, retained worktrees, T3 update, continuation test, and rollback plan. User authorization for this concrete move is enough; an audit request is not.
 
-## Cut over and prove continuation
+## Cut over
 
-1. Refresh live T3 run state immediately before applying. Run:
+1. Refresh live T3 run state, then:
 
 ```sh
 python3 scripts/migrate.py apply --journal /private/evidence/move.json
 ```
 
-The helper rechecks its snapshot, moves the primary directory without overwriting a destination, repairs worktree pointers, and verifies all refs, HEADs/branches, index entries, configuration, registration paths, and inodes. If repair/verification fails within this call, it checks ownership of the moved inode, attempts to move it back without overwriting anything, repairs the old pointers, then verifies preservation. It does not reset any content, refs, or configuration. This immediate undo differs from a later standalone rollback, which requires the saved state to match before moving.
+`apply` rechecks the snapshot, renames, repairs worktree pointers, and verifies refs, the stash list, every HEAD and branch, index entries, config, registrations, and the inode. If repair or verification fails, it moves the checkout back within the same call, without resetting anything. After an error, read the journal's phase: `prepared` means nothing moved, `rolled_back` means the original state is back, and `recovery_required` means inspect both paths. Never retry an interrupted operation blindly. A successful `apply` is safe to repeat.
 
-Read the journal phase after any error: `prepared` after a rename refusal means the source inode never moved; `rolled_back` means original Git state was restored; `recovery_required` requires inspection of both paths. A competing destination is preserved and leaves the journal `prepared`. If concurrent changes or a recovery failure prevent full verification, the helper reports the incomplete recovery rather than claiming success. Never retry an interrupted operation blindly. A successful `apply` can be repeated safely while the saved state still matches; after rollback, prepare a new journal for another attempt.
+2. Update the **existing** project's root and title through the live API, keeping its ID and scripts. Compare its threads with your record: every thread present, bindings and lineage unchanged, and nothing lost from any history. A workspace project can take a few seconds to list its tracked folders after a re-root; re-read it for up to about 30 seconds before calling that a failure.
+3. Trust the new path's `mise` config, then continue an existing thread with a read-only test. Have it report `pwd`, Git top-level and common directory, HEAD, branch, and status, and recall its prior task. Don't tell it the expected cwd or let it `cd`: that would hide a stale binding. Check the command output, not just the agent's claim. The test must not edit, fetch, build, delegate, or publish. Its history only grows; restore settled or archived state if it changed.
+4. Record the continuation's checkpoints (below), run `verify`, and compare T3 with your record again. Finish only when Git, T3 history, and continuation all pass, the old path is gone, and no duplicate project exists.
 
-2. Update the **existing** T3 project root/title through the live project API, retaining its ID and scripts. Linked worktree paths remain unchanged. Compare saved thread bindings, lineage, run metadata, and history IDs before continuing any thread; no unexplained loss or replacement is acceptable.
-3. Trust the new path's `mise` configs (see [below](#state-keyed-by-the-old-path)), then continue the relevant existing conversation with a tightly scoped, read-only test. Have it report `pwd`, Git top-level/common directory, HEAD, branch, and status, and recall its prior task. Do not supply the expected cwd or let it use `cd`/an explicit workdir: that would conceal a stale binding. Inspect actual command output, not just the agent's claim. This test appends history; verify the original ordered prefix survives and restore prior settled/archive state where appropriate. It must not edit, fetch, build, delegate, or publish.
-4. Run `verify` against the journal and confirm Git still matches, the old path is absent, and no duplicate project was created. Finish only when filesystem, project/history preservation, and continuation have passed.
+### Checkpoint refs
 
-### Checkpoint refs from the continuation
-
-T3 records a checkpoint commit for each provider turn, even a read-only one, so after the continuation `verify` refuses with `refs` changed. Do not weaken the check, delete the refs, or edit the journal. Instead:
-
-1. List the new refs with `git for-each-ref refs/t3` and match each name to its thread and the continuation run: the ordinal is that thread's run ordinal. Anything you cannot account for that way is a blocker to inspect.
-2. Record exactly those refs, each with its full object ID and the checkout its thread is bound to:
+T3 commits a checkpoint for every provider turn, so after the continuation `verify` refuses with `refs` changed. Don't weaken the check, delete the refs, or edit the journal. List them with `git for-each-ref refs/t3`, match each to its thread (the ordinal is the thread's run ordinal), treat any you can't account for as a blocker, and record exactly those:
 
 ```sh
 python3 scripts/migrate.py record-checkpoints --journal /private/evidence/move.json \
   --checkpoint refs/t3/orchestration-v2/checkpoints/<thread>/ordinal/<n> <oid> /real/dev-root/Contribute/talos
 ```
 
-The helper accepts only `refs/t3/orchestration-v2/checkpoints/<id>/ordinal/<n>` names. Each must be a commit whose message names that same ref (`t3 checkpoint ref=<ref>`, optionally followed by a blank line and trailer lines), whose parent is its checkout's saved HEAD, and whose tree equals that clean HEAD tree. The helper cannot see T3 lineage: when two checkouts share a HEAD, their checkpoints are indistinguishable by content, so the checkout you name comes from the thread binding you verified in step 1. Every other ref, as well as HEAD, branch, index, config, worktree pointer, and inode, must still match the saved snapshot, and no unlisted ref may appear. The original snapshot is kept unchanged; the accepted refs are added to the journal, and later `verify` runs account for them. Refusal leaves the journal untouched.
+The helper checks that each is a T3 checkpoint of its checkout's clean saved HEAD and that nothing else changed. It can't tell two checkouts with the same HEAD apart, so name the checkout from the thread binding you verified. A checkpoint taken in a dirty checkout snapshots the dirty tree and is refused; for a dirty move with T3 threads, run `verify` before the continuation.
 
 ### State keyed by the old path
 
-Some tools key state by the checkout path, outside Git and T3:
+- **`mise` trust.** The new path starts untrusted, and a provider launched through a `mise` wrapper then fails with "The provider could not start this turn". The old path's entry would silently trust whatever is cloned there later, and `mise trust --untrust` refuses a missing path, so untrust the old path just before `apply` and trust it again on rollback. In a workspace, trust each checkout inside it; new T3 worktrees start untrusted too.
+- **Claude auto-memory** is keyed to the main checkout's path, so a move orphans it. The key spells `/` and `.` as `-`: `…/ritornel/lab` and `…/ritornel-lab` share a key, while `…/ritornel` to `…/ritornel/ritornel` changes it. Ask the owner which checkout keeps it; moving its `memory/` folder under `~/.claude/projects` is fine.
+- **Claude transcripts** stay under the old key. Moved root-bound threads still resume and keep writing there, so whatever later lands at the old path inherits them in `claude --resume`.
+- **T3's GitHub identity** is cached by path for about 15 minutes. Avoid its PR features until it refreshes after a remote change or a reused path.
 
-- **`mise` trust.** The new path's `mise.toml` starts untrusted. Where a provider such as `claude` launches through a `mise` command wrapper, it then exits 1 and T3 reports "The provider could not start this turn". The old path's trust entry would remain and silently trust whatever is later cloned there, and `mise trust --untrust` refuses a path that no longer exists, so untrust the old path just before `apply` (and trust it again if you roll back).
-- **Claude auto-memory** is keyed to the main checkout's path and shared by all its worktrees, so the move orphans it. Ask the owner which checkout keeps it. Moving the `memory/` folder to the new path's project folder under `~/.claude/projects` is fine; it is not a provider session file.
-- **Claude session transcripts** stay under the old path's project folder. Root-bound Claude threads still resumed at the new path on macOS, Linux, and Windows (Claude Code 2.1.327 and 2.1.328) and keep writing there, so whatever is later checked out at the old path inherits them, for example in `claude --resume`.
-- **T3's GitHub identity** for a project is cached by path for about 15 minutes. After a remote change, or when the old path is reused for a different repository, the project shows the old `owner/repo` until the cache expires. Don't use its PR features until it refreshes.
+## Workspaces
+
+A [workspace](../SKILL.md#where-a-checkout-lives) checkout ignores the checkouts inside it, so the helper moves one in or out like any other move once the `.gitignore` entry exists. It never moves a workspace with its checkouts as one unit.
+
+To create one from existing checkouts:
+
+1. Make sure the workspace repository has `/<alias>/` in its `.gitignore` for each checkout.
+2. If a checkout occupies the workspace path, as the app at `Personal/ritornel` did, move it to a temporary sibling such as `Personal/ritornel-moving` first. A directory can't be renamed into itself, and two ordinary moves are easier to recover than one with a hidden intermediate step. Leave its T3 project alone until the second move.
+3. Clone the workspace repository at the workspace path.
+4. Move each checkout in, one journal each.
+5. Create the workspace's T3 project at the folder, or reuse a workspace project already rooted there. Never turn a checkout's own project into it: its root-bound threads would resume in the workspace folder. Re-root each checkout's project to its new path, check it, and archive it. Never delete one.
+6. Trust each checkout's `mise` config and run the continuation test in each.
+
+To move a checkout out, move it, verify it, then remove it from the workspace's `.gitignore`, guidance, and setup steps. Rollback refuses once the workspace stops ignoring the old path. To relocate a workspace, clone it at the new path, move each checkout in, and retire the old clone under the usual rules once it holds nothing unpushed.
 
 ## Recovery
 
@@ -81,20 +99,12 @@ python3 scripts/migrate.py verify --journal /private/evidence/move.json
 python3 scripts/migrate.py rollback --journal /private/evidence/move.json
 ```
 
-Standalone rollback restores the original path and Git pointers **only when the saved Git state still matches**, before any provider work resumes, ignoring solely the pointer changes owned by this move. It refuses later edits, new refs, configuration changes, an occupied old path, or active cwd processes. It can also recover an interrupted rename/repair when that state still matches. Inspect recovery failures instead of deleting paths, pruning records, resetting refs, or creating a compatibility symlink.
+Rollback moves the checkout back only while the saved Git state still matches, ignoring just the pointers this move changed, and before any provider work resumes. It refuses later edits, new refs, config changes, an occupied old path, and active cwd processes, and it can finish an interrupted move or rollback. Once checkpoints are recorded it refuses outright, since threads have new history. From then on the journal is evidence, and reversing the move means a new move with its own journal and T3 checks. Inspect any failure; never delete paths, prune, reset refs, or add a compatibility symlink.
 
-Once a continuation's checkpoints are recorded, the journal refuses rollback: the threads have new history that moving the directory back cannot undo. After that, or after any later legitimate work, the journal is evidence rather than a live invariant, and `verify` will refuse once ordinary work changes the checkout. To revert such a move, plan a new move in the reverse direction with a new journal and its own T3 update and continuation check.
-
-If the T3 update or continuation fails after Git moved, keep affected threads idle, roll back Git when eligible, and restore the saved project root/title through the API. Verify original bindings/history and their usability. If the API reply is ambiguous, read the current project before retrying. A failure to restore either side remains an incomplete migration; the helper journal alone does not claim T3 success.
+If the T3 update or continuation fails, keep threads idle, roll back Git if eligible, restore the project's saved root and title, and confirm the threads work. Read the project before retrying an ambiguous API call. Either side failing to restore is an incomplete migration.
 
 ## Evidence and tests
 
-The fixture tests live in the dotfiles repository, not in the deployed skill. Run `python3 -m unittest tests.skills.test_repo_workspace_migrate` from the repository root, which is `git -C "$(chezmoi source-path)" rev-parse --show-toplevel`. They create disposable local Git fixtures, including temporary commits, and never move real checkouts. They exercise the real exclusive rename and Git repair, the failure and recovery paths, and checkpoint recording, including refusals for changed or extra refs, wrong objects, and unrelated drift. Cross-device refusal is simulated, so no second mounted filesystem is needed.
+Fixture tests live in the dotfiles repository, not the deployed skill: run `python3 -m unittest tests.skills.test_repo_workspace_migrate` from `git -C "$(chezmoi source-path)" rev-parse --show-toplevel`. They use disposable repositories and cover the real rename and repair, failure and recovery, workspace moves including the creation sequence above, and checkpoint recording.
 
-Live macOS moves proved continuations at a changed root for Grok, Claude, and Codex, and Codex and Claude continuations in retained external worktrees, with prior context and all original thread history intact. A Codex thread bound to a moved non-Git workspace also resumed. The root-bound Codex test supplied no cwd and did not change directories. `record-checkpoints` reconciled the live journals after those continuations once it accepted the first checkpoint's `ordinal/0`. A later move of a dirty checkout, prepared with `--allow-dirty`, continued a root-bound Claude thread and a worktree-bound Codex thread.
-
-On Windows, with Microsoft's VFS build of Git, this helper round-tripped a disposable repository with a retained worktree, a fresh clone with a retained worktree, and a clean checkout registered as a T3 project. Each returned with the same file ID, HEAD, refs, and stashes, and the project and its threads were unchanged. A process with its cwd inside the checkout made `apply` refuse with the journal still `prepared`. A real checkout with 3 retained worktrees, one with 41 uncommitted changes, then moved live with `--allow-dirty`.
-
-On Linux, a real checkout on btrfs with 2 retained worktrees moved live, and Claude and Codex threads continued.
-
-Unborn, nested, and submodule checkouts, and checkouts with missing worktree registrations, were moved live by one-off tooling outside this skill, so this helper's refusals for those cases still stand. Moving active processes and cross-filesystem moves are untested. Run a fresh bounded pilot before expanding into any of these cases.
+Live moves on macOS, Linux (btrfs), and Windows (Microsoft's VFS Git) kept every ref, stash, and thread, including dirty checkouts with up to 41 changes and one with more than 70 retained worktrees, and their threads continued afterwards. On 2026-11-21 the Ritornel checkouts moved into a new workspace on all three, before the helper accepted workspace destinations, so the `git check-ignore` route is so far proven by fixtures only. Unborn, nested, submodule, and cross-filesystem moves are untested here; pilot before expanding into them.

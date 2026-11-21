@@ -132,18 +132,21 @@ def check_processes(paths):
         return
     # Suppress warnings about unrelated unmounted/network volumes. Errors still
     # fail the command; this remains a best-effort guard, not a process lock.
-    result = subprocess.run(['lsof', '-nP', '-w', '-a', '-u', str(os.getuid()), '-d', 'cwd', '-Fpn'],
+    result = subprocess.run(['lsof', '-nP', '-w', '-a', '-u', str(os.getuid()), '-d', 'cwd', '-Fpcn'],
                             capture_output=True, text=True, timeout=30)
     require(result.returncode == 0 and not result.stderr.strip() and result.stdout.startswith('p'),
             'Could not inspect cwd handles; resolve lsof errors before moving')
-    process = '?'
+    process = command = '?'
     for line in result.stdout.splitlines():
         if line.startswith('p'):
-            process = line[1:]
+            process, command = line[1:], '?'
+        elif line.startswith('c'):
+            command = line[1:]
         elif line.startswith('n'):
             cwd = Path(line[1:]).resolve()
+            # Idle T3 provider sessions (claude, Codex node_repl) hold one until their thread is settled.
             require(not any(inside(cwd, p) for p in paths),
-                    f"Process {process} has a cwd in an affected checkout")
+                    f"Process {process} ({command}) has a cwd in an affected checkout: {cwd}")
 
 
 def idle_gh_stack_lock(lock, common):
@@ -162,6 +165,24 @@ def busy_locks(base):
     return [lock for lock in common.rglob('*.lock') if not idle_gh_stack_lock(lock, common)]
 
 
+def check_enclosing(path):
+    """A checkout may sit inside another one, such as a workspace repository, only where that one ignores it."""
+    for parent in path.parents:
+        if not os.path.lexists(parent / '.git'):
+            continue
+        require(output_path(git(parent, 'rev-parse', '--show-toplevel')) == parent,
+                f"Organizer directory is inside an unexpected Git layout: {parent}")
+        # The trailing slash lets Git match directory patterns for a destination that doesn't exist yet.
+        relative = path.relative_to(parent).as_posix() + '/'
+        require(git(parent, 'check-ignore', '--', relative, ok=(0, 1)),
+                f"{path} is inside the checkout {parent}, which does not ignore it; "
+                f"add /{relative} to its .gitignore first")
+        # check-ignore passes a tracked path whose case differs, or a tracked file at the path
+        # itself, so ask the index directly. Without the slash, this matches both.
+        require(not git(parent, 'ls-files', '-z', '--', f':(literal,icase){relative[:-1]}'),
+                f"{parent} tracks {path} or files under it, in some letter case")
+
+
 def check_layout(source, destination, journal):
     for path in (source, destination, journal):
         path_arg(path)
@@ -177,9 +198,8 @@ def check_layout(source, destination, journal):
     require(not os.path.lexists(destination), 'Destination is already occupied')
     require(source.stat().st_dev == destination.parent.stat().st_dev,
             'Cross-filesystem moves are outside this helper scope')
-    for parent in (source.parent, destination.parent):
-        require(not any(os.path.lexists(p / '.git') for p in (parent, *parent.parents)),
-                f"Organizer directory is inside another checkout: {parent}")
+    for path in (source, destination):
+        check_enclosing(path)
     require(journal.parent.is_dir(), 'Journal parent must already exist')
     paths = worktrees(source)
     require(paths and paths[0] == source, 'Unexpected primary worktree registration')
@@ -321,7 +341,9 @@ def capture(base, specs=None, check_links=True, checkpoints=(), allow_dirty=Fals
         line = f"{checkpoint['ref']} {checkpoint['oid']}\n".encode()
         require(line in refs, f"Recorded checkpoint is missing or moved: {checkpoint['ref']}")
         refs.remove(line)
+    # The refs cover the newest stash; its reflog holds the rest.
     return {'checkouts': states, 'refs': digest(b''.join(refs)),
+            'stashes': digest(git(base, 'stash', 'list', '--format=%H')),
             'config': file_hash(common / 'config'), 'worktrees': worktree_listing(base).hex()}
 
 
@@ -473,6 +495,8 @@ def rollback(journal, data):
     base = destination if moved else source
     # Ignore only the pointers that this operation is responsible for repairing.
     verify_data(data, moved, check_links=False)
+    if moved:
+        check_enclosing(source)  # A workspace may have stopped ignoring the old path since.
     check_processes([Path(s['path']) for s in expected(data, moved)['checkouts']])
     require(not busy_locks(base), 'Git lock file exists')
     record(journal, data, 'rolling_back')
