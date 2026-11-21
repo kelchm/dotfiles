@@ -1,69 +1,58 @@
 # macOS (APFS)
 
-APFS clones share blocks between files, and all volumes in a container share its free space. Summed per-file allocation from `du`, Finder or `gdu` can count cloned data more than once. `scripts/apfs-measure.py` reads block maps to count each block once. It runs with `/usr/bin/python3` or any Python 3.9+, is read-only, never downloads cloud placeholders, and stays on the starting volume.
-
-Keep its JSON in a fresh directory so later runs don't overwrite earlier evidence:
-
-```sh
-out=$(mktemp -d "${TMPDIR:-/tmp}/disk-audit.XXXXXX")
-helper="$skill_dir/scripts/apfs-measure.py"  # this skill's directory
-```
+APFS volumes in one container share its free space, and APFS clones share blocks between files. `du`, Finder's Get Info and most disk-map apps charge every clone its full size. Package managers clone on macOS (pnpm, bun and uv by default), and so do Finder copies, `cp -c` and Xcode simulators. A `node_modules` or virtualenv that `du` reports at several GB can therefore free almost nothing when deleted.
 
 ## 1. Find the volume
 
 ```sh
-python3 "$helper" volume "$target" > "$out/volume-before.json"
+diskutil info "$target" | grep -E 'Container (Total|Free) Space|Volume Used Space|APFS Container'
+diskutil apfs list            # every volume in the container and its usage
+tmutil listlocalsnapshots /   # local snapshots
 ```
 
-Pass a path on the volume you are cleaning (`/System/Volumes/Data` for the startup disk). Report these separately:
-
-- `container_free_bytes`: free space shared by every volume in the container. Cleanup changes this.
-- `container_volumes[].used_bytes`: usage per volume, including system, VM and backup volumes.
-- `important_use_available_bytes`: capacity macOS considers available for important writes. It is free space plus whatever purgeable data macOS could evict, so it is never an amount that cleanup will free.
-- `snapshots`: local snapshots and whether they are purgeable. The space a snapshot retains is not reported here. Use Disk Utility or a dedicated tool for that. Don't infer it from available minus free.
+Pass a path on the volume you are cleaning (`/` for the startup disk). *Container Free Space* is the number cleanup changes. Finder's "available" figure includes purgeable data macOS can evict on its own, so it is not free space and not something cleanup frees. The space a snapshot retains is not reported by these commands. Use Disk Utility's snapshot list for it, and don't infer it from available minus free.
 
 ## 2. Rank directories
 
 ```sh
+out=$(mktemp -d "${TMPDIR:-/tmp}/disk-audit.XXXXXX")
 du -xk -d 1 /System/Volumes/Data 2> "$out/du-errors.log" | sort -nr | head -25
 ```
 
-Drill into the largest children, usually the home directory, workspaces, `/private/var` and `/Library`. These are allocation totals, good for finding leads but inflated by clones. If you use `gdu`, check its JSON `read_error` flags even when it exits 0.
+Drill into the largest children, usually the home directory, workspaces, `/private/var` and `/Library`. These totals are fine for finding leads but inflated by clones.
 
-## 3. Measure the largest leads
+## 3. Count clones once
+
+[dua-cli](https://github.com/Byron/dua-cli) 3.0.3+ counts fully shared clones once with `--deduplicate-apfs-clones`. Run it without installing anything globally:
 
 ```sh
-python3 "$helper" footprint ~/Library ~/Development ~/.cache > "$out/footprint.json"
+dua() { mise x aqua:Byron/dua-cli@3.0.3 -- dua "$@"; }
+dua aggregate -x --deduplicate-apfs-clones ~/Library ~/Development ~/.cache
 ```
 
-Pass disjoint roots in one call. Each row's `mapped_file_data_bytes` counts each block once within that root. `combined` counts each block once across all of them, and `shared_between_roots_bytes` shows the overlap. Rows with `complete: false` list their `gaps` and are only lower bounds. The walk excludes filesystem metadata, extended attributes other than resource forks, and blocks held only by snapshots.
+- Within one run, each clone family is charged to a single path, and the total is their real combined footprint. A large drop compared with `du` means the lead is mostly clones.
+- It does not let you choose which path a clone family is charged to. A small result for one directory does not prove that deleting it frees that amount.
+- A clone that has since been modified counts in full again, so partially shared files are still overstated.
 
 ## 4. Estimate a specific deletion
 
+For the bytes that deleting a file would free, macOS reports a per-file *private size*: data shared with no clone or snapshot. gdu's `--exclusive-size` reports it on macOS in releases after 5.39.0:
+
 ```sh
-python3 "$helper" scan <candidate>... --reference <kept-root>... > "$out/scan.json"
+mise x aqua:dundee/gdu@<version> -- gdu --exclusive-size --non-interactive <candidate>
 ```
 
-Add a `--reference` for each place that likely holds clone partners you will keep, such as sibling worktrees or a package store. A reference may contain the candidates, and its walk skips them. Read `combined` for a batch.
+Summing private sizes undercounts when the candidate holds several clones of the same file, since none of them is private. Files compressed by APFS report their full allocation instead. Treat the result as a lower bound on what the deletion frees.
 
-| Field | Meaning |
-|---|---|
-| `reclaim_if_deleted_bytes` | `at_least` / `at_most` range for file data freed by deleting the candidates. `null` means unknown. This is the number to report. |
-| `unique_physical_bytes` | Blocks used by the candidates, each counted once. |
-| `allocated_bytes` | Sum of per-file allocation, as `du` would count it. |
-| `shared_with_references_bytes` | Blocks the candidates share with the reference roots, which stay after deletion. |
-| `retained_elsewhere_bytes` | Blocks held by something unscanned: a clone outside the references or a snapshot. |
-| `complete`, `gaps` | Which figures are exact and why the others are not. |
-
-A hard link outside the candidates keeps its data, and the helper counts that. Snapshots can still hold deleted blocks, so the observed gain may be smaller than estimated until they expire.
+For reproducible data such as caches and build output, the free-space change after deletion is the most reliable measurement. For data that cannot be recreated, the decision is whether to keep it, and a byte estimate rarely changes that.
 
 ## Common large owners
 
 - **VMs and containers:** Docker Desktop, Colima, OrbStack, UTM and Parallels keep large disk images. Match each image to a registered machine (`colima list`, `docker context ls`) and, for a running engine, inspect `docker system df -v`. Guest cleanup frees host space only after the guest trims or the image is compacted. Remeasure the image afterward.
 - **Package and toolchain caches:** Homebrew, mise, pnpm, npm, Cargo, Go, Xcode `DerivedData` and simulators. Use the owner's preview, such as `brew cleanup --dry-run` or `mise prune --dry-run`. For pnpm, `pnpm store path` (or a project's `node_modules/.modules.yaml`) locates the store.
 - **Build output:** `target/`, `node_modules/`, `.build/`, `dist/`. Confirm with `git check-ignore` and `git ls-files` on the exact path. Use scoped commands such as `cargo clean --target-dir <dir>`. Check `lsof -nP +D <dir>` on small trees.
-- **Snapshots and backups:** `tmutil listlocalsnapshots /`. Check `tmutil latestbackup` before deleting a local snapshot, and `tmutil isexcluded <path>` when deciding whether data is backed up.
+- **Snapshots and backups:** Check `tmutil latestbackup` before deleting a local snapshot, and `tmutil isexcluded <path>` when deciding whether data is backed up.
 
 ## After cleanup
 
-Rerun `volume` on the same path and compare `container_free_bytes`. If less space returned than estimated, check snapshots, open handles (`lsof +L1`) and guest images.
+Rerun `diskutil info` on the same path and compare *Container Free Space*. If less space returned than expected, the usual causes are clones of the deleted data kept elsewhere, snapshots, files still held open (`lsof +L1`), and guest images that have not been trimmed or compacted.
