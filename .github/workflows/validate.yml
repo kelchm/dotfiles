@@ -30,7 +30,7 @@ jobs:
         run: python3 -m unittest discover -s tests
 
   # The repo-workspace move helper uses each platform's own rename and Git
-  # builds, so its fixtures run natively too. Linux runs them in profiles.
+  # builds, so its fixtures, and the T3 snapshot's, run natively too. Linux runs them in profiles.
   move-helper:
     name: move helper (${{ matrix.os }})
     strategy:
@@ -44,7 +44,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Check the move helper
-        run: python -m unittest -v tests.skills.test_repo_workspace_migrate
+        run: python -m unittest -v tests.skills.test_repo_workspace_migrate tests.skills.test_repo_workspace_t3_snapshot
 
   # Run a real standalone apply, scripts included, on each native platform.
   # Package installs (brew bundle, winget import) stay off: runner images

@@ -483,10 +483,71 @@ class MigrationTests(unittest.TestCase):
             with self.assertRaises(m.Refused):
                 m.prepare(self.source, self.dest, journal)
 
-    def test_ancestor_repo_is_refused(self):
+    def test_ancestor_repo_that_does_not_ignore_the_path_is_refused(self):
         self.run_git(self.dest.parent, 'init', '-b', 'main')
-        with self.assertRaisesRegex(m.Refused, 'Organizer'):
+        (self.dest.parent / '.gitignore').write_text('/other/\n')
+        with self.assertRaisesRegex(m.Refused, 'does not ignore it'):
             self.prepare()
+        self.assertFalse(self.journal.exists())
+
+    def test_ancestor_repo_that_tracks_the_path_is_refused(self):
+        workspace = self.dest.parent
+        self.run_git(workspace, 'init', '-b', 'main')
+        self.dest.mkdir()
+        (self.dest / 'tracked').write_text('tracked by the workspace\n')
+        self.run_git(workspace, 'add', 'repo/tracked')
+        (self.dest / 'tracked').unlink()
+        self.dest.rmdir()
+        (workspace / '.gitignore').write_text('/repo/\n')
+        with self.assertRaisesRegex(m.Refused, 'does not ignore it'):
+            self.prepare()
+
+    def test_moves_into_and_out_of_a_workspace_that_ignores_the_checkout(self):
+        workspace = self.dest.parent
+        self.run_git(workspace, 'init', '-b', 'main')
+        (workspace / '.gitignore').write_text('/repo/\n')
+        wt = self.linked()
+        data = self.prepare()
+        m.apply(self.journal, data)
+        m.verify_data(data, True)
+        self.assertEqual(self.run_git(workspace, 'status', '--porcelain'), b'?? .gitignore\n')
+        self.assertEqual(self.run_git(wt, 'rev-parse', '--path-format=absolute', '--git-common-dir').decode().strip(),
+                         (self.dest / '.git').as_posix())
+        back = self.root / 'move-out.json'
+        out = m.prepare(self.dest, self.source, back)
+        m.apply(back, out)
+        m.verify_data(out, True)
+        self.assertFalse(self.dest.exists())
+
+    def test_documented_workspace_creation_with_an_overlapping_checkout(self):
+        """The checkout at the workspace path hops to a sibling, then joins the cloned workspace."""
+        wt = self.linked()
+        origin = self.root / 'workspace-origin'
+        self.run_git(self.root, 'init', '-b', 'main', str(origin))
+        (origin / '.gitignore').write_text('/repo/\n')
+        self.run_git(origin, 'add', '.gitignore')
+        self.run_git(origin, '-c', 'user.name=Fixture', '-c', 'user.email=f@example.invalid',
+                     'commit', '-m', 'Ignore the checkouts')
+        hop = self.source.with_name('repo-moving')
+        first = m.prepare(self.source, hop, self.root / '1-hop.json')
+        m.apply(self.root / '1-hop.json', first)
+        self.run_git(self.source.parent, 'clone', str(origin), str(self.source))
+        final = self.source / 'repo'
+        second = m.prepare(hop, final, self.root / '2-into-workspace.json')
+        m.apply(self.root / '2-into-workspace.json', second)
+        m.verify_data(second, True)
+        self.assertEqual(self.run_git(self.source, 'status', '--porcelain'), b'')
+        self.assertEqual(self.run_git(wt, 'rev-parse', '--path-format=absolute', '--git-common-dir').decode().strip(),
+                         (final / '.git').as_posix())
+
+    def test_stash_list_is_preserved(self):
+        for text in ('first', 'second'):
+            (self.source / 'tracked').write_text(text + '\n')
+            self.run_git(self.source, 'stash', 'push', '-m', text)
+        data = self.prepare()
+        self.run_git(self.source, 'stash', 'drop', 'stash@{1}')  # The newest stash ref stays put.
+        with self.assertRaisesRegex(m.Refused, 'stashes'):
+            m.verify_data(data, False)
 
     def test_nested_worktree_is_refused(self):
         nested = self.source / 'cache' / 'nested'
@@ -612,7 +673,7 @@ class MigrationTests(unittest.TestCase):
         self.process_guard.stop()
         process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], cwd=self.source)
         try:
-            with self.assertRaisesRegex(m.Refused, 'Process [0-9]+ has a cwd'):
+            with self.assertRaisesRegex(m.Refused, r'Process [0-9]+ \([^)]+\) has a cwd'):
                 m.check_processes([self.source])
             m.check_processes([self.dest])
         finally:
