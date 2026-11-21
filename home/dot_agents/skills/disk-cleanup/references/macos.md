@@ -48,7 +48,7 @@ For reproducible data such as caches and build output, the free-space change aft
 
 ## Common large owners
 
-- **VMs and containers:** Docker Desktop, Colima, OrbStack, UTM and Parallels keep large disk images. Match each image to a registered machine (`colima list`, `docker context ls`) and, for a running engine, inspect `docker system df -v`. Guest cleanup frees host space only after the guest trims or the image is compacted. Remeasure the image afterward.
+- **VMs and containers:** Docker Desktop, Colima, OrbStack, UTM and Parallels keep large disk images. Match each image to a registered machine (`colima list`, `docker context ls`) and, for a running engine, inspect `docker system df -v`. Guest cleanup frees host space only after the guest trims (for Colima, `colima ssh -- sudo fstrim -av`) or the image is compacted. Remeasure the image afterward.
 - **Package and toolchain caches:** Homebrew, mise, pnpm, npm, Cargo, Go, Xcode `DerivedData` and simulators. Use the owner's preview, such as `brew cleanup --dry-run` or `mise prune --dry-run`. For pnpm, `pnpm store path` (or a project's `node_modules/.modules.yaml`) locates the store.
 - **Build output:** `target/`, `node_modules/`, `.build/`, `dist/`. Confirm with `git check-ignore` and `git ls-files` on the exact path. Use scoped commands such as `cargo clean --target-dir <dir>`. Check `lsof -nP +D <dir>` on small trees.
 - **Snapshots and backups:** Check `tmutil latestbackup` before deleting a local snapshot, and `tmutil isexcluded <path>` when deciding whether data is backed up.
