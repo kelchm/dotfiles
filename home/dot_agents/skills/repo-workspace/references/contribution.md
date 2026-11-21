@@ -28,7 +28,7 @@ Do not change project or environment preferences, such as a project's `autoPull`
 
 Disable scheduled workflows on the user's forks by default. Keep a schedule when the user wants it, and decide anything else case by case, when it causes noise or the user asks.
 
-- Turn off each scheduled workflow (`gh workflow disable --repo <fork owner/repo>`) unless it also runs on pushes to branches the user works on. Name the fork explicitly, since `gh` defaults to upstream in a Contribute checkout. A disabled workflow creates no runs, and the user can turn it back on later. A fork's `pull_request` triggers fire only for pull requests opened against the fork, not for the user's upstream contributions.
+- Turn off each scheduled workflow (`gh workflow disable <workflow> --repo <fork owner/repo>`) unless it also runs on pushes to branches the user works on. Name the fork explicitly, since `gh` defaults to upstream in a Contribute checkout. A disabled workflow creates no runs, and the user can turn it back on later. A fork's `pull_request` triggers fire only for pull requests opened against the fork, not for the user's upstream contributions.
 - Don't exclude `schedule` with an Actions policy. Each blocked run is recorded as a startup failure and emails the user.
 
 An audit of a fork's Actions is read-only. Changing its settings is a separate step the user approves.
