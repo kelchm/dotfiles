@@ -177,9 +177,10 @@ def check_enclosing(path):
         require(git(parent, 'check-ignore', '--', relative, ok=(0, 1)),
                 f"{path} is inside the checkout {parent}, which does not ignore it; "
                 f"add /{relative} to its .gitignore first")
-        # check-ignore passes a tracked path whose case differs, so ask the index directly.
-        require(not git(parent, 'ls-files', '-z', '--', f':(literal,icase){relative}'),
-                f"{parent} tracks files under {path}, in some letter case")
+        # check-ignore passes a tracked path whose case differs, or a tracked file at the path
+        # itself, so ask the index directly. Without the slash, this matches both.
+        require(not git(parent, 'ls-files', '-z', '--', f':(literal,icase){relative[:-1]}'),
+                f"{parent} tracks {path} or files under it, in some letter case")
 
 
 def check_layout(source, destination, journal):

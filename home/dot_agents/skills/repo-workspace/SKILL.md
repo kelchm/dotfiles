@@ -39,7 +39,7 @@ Layout:
 - Title a contribution project with the verified upstream `owner/repo` (for example `siderolabs/talos`), whatever the local alias or fork is called. Title a Personal project with a recognizable name and no prefix.
 - Reuse existing projects and keep their IDs, history, icons, scripts, and settings. Don't create projects per branch, worktree, PR, or fork. Pass `workspaceRoot` explicitly, and don't start a new top-level thread unless asked.
 - Planning can stay in an existing parent conversation, but source work runs in the repository it changes. An attachment from another project doesn't show that repository's Git state.
-- A workspace gets one project, rooted at the workspace folder. T3 discovers the checkouts inside it as tracked folders, so they get no projects of their own. When a repository joins a workspace, re-root its existing project to the checkout's new path and archive it; never delete it, since its threads stay readable and resumable there.
+- A workspace gets one project, rooted at the workspace folder. T3 discovers the checkouts inside it as tracked folders, so they get no projects of their own. When a repository joins a workspace, re-root its existing project to the checkout's new path and archive it; never delete it, since its threads stay readable and resumable there. Don't reuse a repository's project as the workspace's, because its root-bound threads would move to the workspace folder.
 - Let T3 and other agent hosts create and manage the worktrees they own. Name any manual worktree meaningfully and uniquely under an existing worktree area.
 
 ## Audit, move, and retire

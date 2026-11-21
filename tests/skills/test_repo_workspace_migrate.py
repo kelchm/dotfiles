@@ -513,8 +513,18 @@ class MigrationTests(unittest.TestCase):
         other.rmdir()
         (workspace / '.gitignore').write_text('/repo/\n/other/\n')
         dest = workspace / 'other'
-        with self.assertRaisesRegex(m.Refused, 'tracks files'):
+        with self.assertRaisesRegex(m.Refused, 'tracks .* in some letter case'):
             m.prepare(self.source, dest, self.journal)
+
+    def test_ancestor_repo_tracking_a_file_at_the_path_is_refused(self):
+        workspace = self.dest.parent
+        self.run_git(workspace, 'init', '-b', 'main')
+        self.dest.write_text('a tracked file, not a directory\n')
+        self.run_git(workspace, 'add', 'repo')
+        self.dest.unlink()
+        (workspace / '.gitignore').write_text('/repo/\n')
+        with self.assertRaisesRegex(m.Refused, 'tracks'):
+            self.prepare()
 
     def test_rollback_refuses_a_return_into_a_workspace_that_no_longer_ignores_it(self):
         workspace = self.source.parent
