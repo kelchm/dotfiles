@@ -1,4 +1,8 @@
 # Global instructions
 
 {{ template "shared-agent-working-agreements.md" . }}
+## T3 Code delegation
+
+- Every `delegate_task` call sets a thinking level in `target.options`, chosen for the task, including when the child runs on your own model. Never leave it out: the child would inherit your level, which is often max and slow.
+
 {{ template "model-table.md" . }}
