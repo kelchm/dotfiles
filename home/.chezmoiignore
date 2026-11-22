@@ -48,3 +48,7 @@
 {{ if not (or $hasLocalBin $hasLocalShare) }}
 .local
 {{ end }}
+{{- /* mr-boxington publishes macOS binaries for Apple Silicon only. */ -}}
+{{ if and (eq .chezmoi.os "darwin") (ne .chezmoi.arch "arm64") }}
+.config/mise/conf.d/mbx.toml
+{{ end }}

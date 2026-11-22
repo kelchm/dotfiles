@@ -246,8 +246,9 @@ static bool write_state(const char *state_path, const DisplayState *state) {
 
 // Confirms `pid` is a live `hidden-display --daemon` process owned by this
 // user, so a recycled PID (even for another `hidden-display` CLI invocation) is
-// never reused or signalled.
-static bool is_daemon_process(pid_t pid) {
+// never reused or signalled. Daemons started with HIDDEN_DISPLAY_STATE_DIR pass
+// `--isolated` as argv[2] so default-namespace recovery ignores them.
+static bool is_daemon_process_filtered(pid_t pid, bool include_isolated) {
   if (pid <= 1 || pid == getpid()) return false;
   struct proc_bsdinfo info;
   if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, (int)sizeof(info)) != (int)sizeof(info)) {
@@ -267,7 +268,7 @@ static bool is_daemon_process(pid_t pid) {
   if (sysctl(mib, 3, buf, &size, NULL, 0) == 0 && size > sizeof(int)) {
     int argc = 0;
     memcpy(&argc, buf, sizeof(argc));
-    if (argc == 2) {
+    if (argc == 2 || (include_isolated && argc == 3)) {
       char *p = buf + sizeof(argc);
       char *end = buf + size;
       // Skip exec_path and trailing NUL padding to reach argv[0], then argv[1].
@@ -276,9 +277,18 @@ static bool is_daemon_process(pid_t pid) {
       while (p < end && *p != '\0') p++;
       if (p < end) p++;
       static const char kDaemonArg[] = "--daemon";
+      static const char kIsolatedArg[] = "--isolated";
       if ((size_t)(end - p) >= sizeof(kDaemonArg) &&
           memcmp(p, kDaemonArg, sizeof(kDaemonArg)) == 0) {
-        is_daemon = true;
+        if (argc == 2) {
+          is_daemon = true;
+        } else {
+          p += sizeof(kDaemonArg);
+          if ((size_t)(end - p) >= sizeof(kIsolatedArg) &&
+              memcmp(p, kIsolatedArg, sizeof(kIsolatedArg)) == 0) {
+            is_daemon = true;
+          }
+        }
       }
     }
   }
@@ -286,9 +296,14 @@ static bool is_daemon_process(pid_t pid) {
   return is_daemon;
 }
 
-// Finds any live `hidden-display --daemon` processes owned by this user. Used
-// only when the default state path is active (not isolated test overrides) to
-// recover if the state file was lost or cleaned up while a daemon still runs.
+static bool is_daemon_process(pid_t pid) {
+  return is_daemon_process_filtered(pid, true);
+}
+
+// Finds any live default-namespace `hidden-display --daemon` processes owned by
+// this user (excluding `--isolated` test daemons). Used only when the default
+// state path is active to recover if the state file was lost while a daemon
+// still runs.
 static size_t find_daemon_pids(pid_t *out, size_t max_out) {
   int bytes = proc_listpids(PROC_ALL_PIDS, 0, NULL, 0);
   if (bytes <= 0) return 0;
@@ -301,7 +316,7 @@ static size_t find_daemon_pids(pid_t *out, size_t max_out) {
   if (got_bytes > 0) {
     size_t count = (size_t)got_bytes / sizeof(pid_t);
     for (size_t i = 0; i < count && found < max_out; i++) {
-      if (pids[i] > 1 && is_daemon_process(pids[i])) {
+      if (pids[i] > 1 && is_daemon_process_filtered(pids[i], false)) {
         out[found++] = pids[i];
       }
     }
@@ -489,7 +504,7 @@ static bool spawn_daemon(DisplayState *out) {
   posix_spawnattr_init(&attr);
   posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT);
 
-  char *argv[] = {exe, "--daemon", NULL};
+  char *argv[] = {exe, "--daemon", using_override_dir() ? "--isolated" : NULL, NULL};
   pid_t child_pid = -1;
   int rc = posix_spawn(&child_pid, exe, &actions, &attr, argv, environ);
   posix_spawn_file_actions_destroy(&actions);
@@ -591,14 +606,21 @@ static int run_daemon(void) {
     }
     if (retina != NULL || has_other) {
       CGDisplayConfigRef config;
-      if (CGBeginDisplayConfiguration(&config) == kCGErrorSuccess) {
+      CGError cfg_err = CGBeginDisplayConfiguration(&config);
+      if (cfg_err == kCGErrorSuccess) {
         if (retina != NULL) {
           CGConfigureDisplayWithDisplayMode(config, number, retina, NULL);
         }
         if (has_other) {
           CGConfigureDisplayOrigin(config, number, x, y);
         }
-        CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
+        cfg_err = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
+      }
+      if (has_other && (cfg_err != kCGErrorSuccess || display_needs_reposition(number))) {
+        fprintf(stderr, "hidden-display: could not place display off-screen (CGError %d)\n",
+                (int)cfg_err);
+        display = nil;
+        return 1;
       }
     }
 
@@ -634,16 +656,22 @@ static int run_daemon(void) {
   }
 }
 
-static void reposition_and_sync_state(const char *state_path, DisplayState *state,
+static bool reposition_and_sync_state(const char *state_path, DisplayState *state,
                                       bool force_write) {
   int live_x = state->x, live_y = state->y;
   if (display_needs_reposition(state->display_id)) {
     int want_x = 0, want_y = 0;
     if (far_corner_origin(state->display_id, &want_x, &want_y)) {
       CGDisplayConfigRef config;
-      if (CGBeginDisplayConfiguration(&config) == kCGErrorSuccess) {
+      CGError cfg_err = CGBeginDisplayConfiguration(&config);
+      if (cfg_err == kCGErrorSuccess) {
         CGConfigureDisplayOrigin(config, state->display_id, want_x, want_y);
-        CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
+        cfg_err = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
+      }
+      if (cfg_err != kCGErrorSuccess || display_needs_reposition(state->display_id)) {
+        fprintf(stderr, "hidden-display: could not reposition display off-screen (CGError %d)\n",
+                (int)cfg_err);
+        return false;
       }
       CGRect at = CGDisplayBounds(state->display_id);
       live_x = (int)at.origin.x;
@@ -655,6 +683,7 @@ static void reposition_and_sync_state(const char *state_path, DisplayState *stat
     state->y = live_y;
     (void)write_state(state_path, state);
   }
+  return true;
 }
 
 static int cmd_ensure(const char *state_path, const char *lock_path) {
@@ -669,7 +698,10 @@ static int cmd_ensure(const char *state_path, const char *lock_path) {
         bool origin_changed = (live_x != state.x || live_y != state.y);
         state.x = live_x;
         state.y = live_y;
-        reposition_and_sync_state(state_path, &state, origin_changed);
+        if (!reposition_and_sync_state(state_path, &state, origin_changed)) {
+          close(lock_fd);
+          return 1;
+        }
         printf("%u %d %d\n", state.display_id, state.x, state.y);
         fflush(stdout);
         close(lock_fd);
@@ -706,7 +738,10 @@ static int cmd_ensure(const char *state_path, const char *lock_path) {
       }
     }
     if (adopted) {
-      reposition_and_sync_state(state_path, &adopted_state, true);
+      if (!reposition_and_sync_state(state_path, &adopted_state, true)) {
+        close(lock_fd);
+        return 1;
+      }
       printf("%u %d %d\n", adopted_state.display_id, adopted_state.x, adopted_state.y);
       fflush(stdout);
       close(lock_fd);
@@ -825,7 +860,8 @@ static void print_usage(FILE *stream) {
 }
 
 int main(int argc, char **argv) {
-  if (argc == 2 && strcmp(argv[1], "--daemon") == 0) {
+  if ((argc == 2 && strcmp(argv[1], "--daemon") == 0) ||
+      (argc == 3 && strcmp(argv[1], "--daemon") == 0 && strcmp(argv[2], "--isolated") == 0)) {
     return run_daemon();
   }
   if (argc == 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {

@@ -1,8 +1,9 @@
-{{- if eq .chezmoi.os "darwin" -}}
-# Route plain `cargo` calls through Mr. Boxington (`mbx`) on macOS so per-worktree
-# Rust builds share APFS copy-on-write blocks under a bounded cache budget.
-# Projects that set CARGO_TARGET_DIR, --target-dir, or build.target-dir keep their
-# own target directory; build.build-dir is also preserved (without the check lane).
+{{- if and (eq .chezmoi.os "darwin") (eq .chezmoi.arch "arm64") -}}
+# Route plain `cargo` calls through Mr. Boxington (`mbx`) on Apple Silicon macOS
+# so per-worktree Rust builds share APFS copy-on-write blocks under a bounded
+# cache budget. Projects that set CARGO_TARGET_DIR, --target-dir, or
+# build.target-dir keep their own target directory; build.build-dir is also
+# preserved (without the check lane).
 #
 # Bypass for one command:
 #   MBX_DISABLE=1 cargo build

@@ -31,6 +31,7 @@ class Profiles(unittest.TestCase):
         self.home.mkdir()
         self.config = self.base / "chezmoi.toml"
         self.platform = "linux"
+        self.arch = None
 
     def configure(self, profile="omarchy", *, bootstrap=False, **overrides):
         data = dict(profile=profile, name="Test User", email="test@example.com",
@@ -44,7 +45,10 @@ class Profiles(unittest.TestCase):
         self.config.write_text(text)
 
     def chezmoi(self, *args, check=True, env=None):
-        override = json.dumps({"chezmoi": {"os": self.platform}})
+        chezmoi_data = {"os": self.platform}
+        if self.arch is not None:
+            chezmoi_data["arch"] = self.arch
+        override = json.dumps({"chezmoi": chezmoi_data})
         result = subprocess.run(
             [CHEZMOI, "-S", str(ROOT), "-D", str(self.home), "-c", str(self.config),
              "--persistent-state", str(self.base / "state.boltdb"),
@@ -573,39 +577,47 @@ signingMethod = "none"
         self.apply()
         self.assertIn("gpgsign = false", p.read_text())
 
-    def test_gui_runs_skill_is_deployed_to_all_harnesses(self):
+    def test_gui_testing_skill_is_deployed_to_all_harnesses(self):
         self.configure("standalone")
         self.apply()
-        skill = self.home / ".agents/skills/gui-runs"
+        skill = self.home / ".agents/skills/gui-testing"
         self.assertTrue((skill / "SKILL.md").is_file())
         for harness in [".claude/skills", ".codex/skills", ".pi/agent/skills"]:
-            self.assertEqual((self.home / harness / "gui-runs").resolve(), skill.resolve())
+            self.assertEqual((self.home / harness / "gui-testing").resolve(), skill.resolve())
 
     def test_mbx_and_hidden_display_are_scoped_to_macos_tools(self):
         pin = tomllib.loads((ROOT / "home/.chezmoidata.toml").read_text())["dotfiles"]["pins"]["mrBoxington"]
         build_script = ROOT / "home/.chezmoiscripts/run_onchange_after_07-install-hidden-display-darwin.sh.tmpl"
         mise_script = ROOT / "home/.chezmoiscripts/run_onchange_after_02-install-mise-tools.sh.tmpl"
-        for platform in ["darwin", "linux", "windows"]:
+        targets = [
+            ("darwin", "arm64"),
+            ("darwin", "amd64"),
+            ("linux", "amd64"),
+            ("windows", "amd64"),
+        ]
+        for platform, arch in targets:
             for tools_enabled in [False, True]:
-                with self.subTest(platform=platform, tools=tools_enabled):
+                with self.subTest(platform=platform, arch=arch, tools=tools_enabled):
                     self.platform = platform
+                    self.arch = arch
                     self.configure(
                         "standalone",
                         bootstrap=True,
                         modules={"tools": tools_enabled, "runtimes": False, "tools-re": False},
                     )
                     managed = self.chezmoi("managed").stdout.splitlines()
-                    expect = platform == "darwin" and tools_enabled
-                    self.assertEqual(".config/mise/conf.d/mbx.toml" in managed, expect)
-                    self.assertEqual(".local/share/hidden-display/hidden-display.m" in managed, expect)
+                    expect_darwin = platform == "darwin" and tools_enabled
+                    expect_mbx = expect_darwin and arch == "arm64"
+                    self.assertEqual(".config/mise/conf.d/mbx.toml" in managed, expect_mbx)
+                    self.assertEqual(".local/share/hidden-display/hidden-display.m" in managed, expect_darwin)
                     self.assertNotIn(".local/bin", managed)
                     self.assertNotIn(".local/bin/python3.cmd", managed)
-                    if not expect:
+                    if not expect_darwin:
                         self.assertNotIn(".local", managed)
                         self.assertNotIn(".local/share", managed)
                     rendered_build = self.chezmoi("execute-template", "-f", str(build_script)).stdout
-                    self.assertEqual(bool(rendered_build.strip()), expect)
-                    if expect:
+                    self.assertEqual(bool(rendered_build.strip()), expect_darwin)
+                    if expect_mbx:
                         mbx_body = self.chezmoi("cat", str(self.home / ".config/mise/conf.d/mbx.toml")).stdout
                         mbx_cfg = tomllib.loads(mbx_body)
                         self.assertEqual(mbx_cfg["tools"]["mr-boxington"], pin)
@@ -619,9 +631,10 @@ signingMethod = "none"
                     if platform != "windows" and tools_enabled:
                         self.assertIn("mise install", rendered_mise)
                         self.assertIn("mise reshim", rendered_mise)
-                        self.assertEqual("# mbx:" in rendered_mise, platform == "darwin")
+                        self.assertEqual("# mbx:" in rendered_mise, expect_mbx)
         # Windows with runtimes and tools keeps .local/bin/python3.cmd without .local/share.
         self.platform = "windows"
+        self.arch = "amd64"
         self.configure("standalone", bootstrap=False, modules={"tools": True, "runtimes": True})
         win_managed = self.chezmoi("managed").stdout.splitlines()
         self.assertIn(".local/bin/python3.cmd", win_managed)

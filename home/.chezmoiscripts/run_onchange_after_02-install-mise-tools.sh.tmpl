@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # hash: {{ includeTemplate "mise/config.toml" . | sha256sum }}
-{{- if eq .chezmoi.os "darwin" }}
+{{- if and (eq .chezmoi.os "darwin") (eq .chezmoi.arch "arm64") }}
 # mbx: {{ .dotfiles.pins.mrBoxington }} {{ include "dot_config/mise/conf.d/mbx.toml.tmpl" | sha256sum }}
 {{- end }}
 
