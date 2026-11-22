@@ -1,5 +1,6 @@
 {{- if and .bootstrap .modules.tools (eq .chezmoi.os "windows") -}}
 # hash: {{ includeTemplate "mise/config.toml" . | sha256sum }}
+# mbx: {{ .dotfiles.pins.mrBoxington }} {{ include "dot_config/mise/conf.d/mbx.toml.tmpl" | sha256sum }}
 
 # Pick up PATH entries a fresh winget install added, keeping the session PATH
 $env:Path = $env:Path + ";" + [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
@@ -15,12 +16,38 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-# Add mise shims to persistent user PATH so non-shell programs (e.g. VS Code) can find tools.
-# This is the Windows equivalent of adding shims to PATH in .zprofile on macOS.
+mise reshim
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "mise reshim failed with exit code $LASTEXITCODE"
+    exit $LASTEXITCODE
+}
+
+# Add mise command wrappers and shims to persistent user PATH so non-shell programs
+# (e.g. VS Code, coding agents) resolve wrapped tools like `cargo` through mise.
 $shimDir = Join-Path $env:LOCALAPPDATA "mise\shims"
+$wrapperDir = Join-Path $env:LOCALAPPDATA "mise\command-wrappers\bin"
 $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -notlike "*$shimDir*") {
-    [System.Environment]::SetEnvironmentVariable("Path", "$shimDir;$userPath", "User")
-    Write-Host "Added mise shims to user PATH: $shimDir"
+$entries = @()
+if ($userPath) {
+    $entries = @($userPath -split ';' | Where-Object { $_ -ne '' })
+}
+$updated = $false
+if (-not ($entries -icontains $shimDir)) {
+    $entries = @($shimDir) + $entries
+    $updated = $true
+}
+$wrapperIdx = -1
+$shimIdx = -1
+for ($i = 0; $i -lt $entries.Count; $i++) {
+    if ($wrapperIdx -lt 0 -and $entries[$i] -ieq $wrapperDir) { $wrapperIdx = $i }
+    if ($shimIdx -lt 0 -and $entries[$i] -ieq $shimDir) { $shimIdx = $i }
+}
+if ($wrapperIdx -lt 0 -or $wrapperIdx -gt $shimIdx) {
+    $entries = @($wrapperDir) + @($entries | Where-Object { $_ -ine $wrapperDir })
+    $updated = $true
+}
+if ($updated) {
+    [System.Environment]::SetEnvironmentVariable("Path", ($entries -join ';'), "User")
+    Write-Host "Updated user PATH for mise command wrappers and shims."
 }
 {{- end }}

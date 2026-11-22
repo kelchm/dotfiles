@@ -1,11 +1,11 @@
-# Add ~/.local/bin to PATH
-$localBin = Join-Path $HOME ".local\bin"
-if (-not (($env:PATH -split ';') -icontains $localBin)) {
-    $env:PATH = "$localBin;$env:PATH"
-}
-
-# mise (shims only — mise activate does not support Windows PowerShell 5.1)
+﻿# mise (shims + command wrappers — mise activate does not support Windows PowerShell 5.1)
+# Prepend low-to-high so precedence is: ~/.local/bin > command-wrappers\bin > shims.
 $miseShims = Join-Path $HOME "AppData\Local\mise\shims"
-if (-not (($env:PATH -split ';') -icontains $miseShims)) {
-    $env:PATH = "$miseShims;$env:PATH"
+$miseWrappers = Join-Path $HOME "AppData\Local\mise\command-wrappers\bin"
+$localBin = Join-Path $HOME ".local\bin"
+foreach ($dir in @($miseShims, $miseWrappers, $localBin)) {
+    if (Test-Path $dir) {
+        $rest = ($env:PATH -split ';') | Where-Object { $_ -ne '' -and $_ -ine $dir }
+        $env:PATH = (@($dir) + $rest) -join ';'
+    }
 }

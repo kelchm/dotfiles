@@ -12,7 +12,7 @@ for brew_bin in /opt/homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew $HOME
 end
 
 # Add ~/.cargo/bin (rustup proxies + `cargo install` bins) BEFORE `mise activate` so
-# mise-managed toolchains and command wrappers (e.g. `mbx` for `cargo` on macOS) stay
+# mise-managed toolchains and command wrappers (e.g. `mbx` for `cargo`) stay
 # ahead of ~/.cargo/bin in both interactive and non-interactive fish shells. Use --move
 # so inherited PATH entries still land in deterministic order; add ~/.local/bin last
 # so it stays highest priority.
