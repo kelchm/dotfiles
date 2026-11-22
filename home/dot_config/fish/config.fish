@@ -13,11 +13,12 @@ end
 
 # Add ~/.cargo/bin (rustup proxies + `cargo install` bins) BEFORE `mise activate` so
 # mise-managed toolchains and command wrappers (e.g. `mbx` for `cargo` on macOS) stay
-# ahead of ~/.cargo/bin in both interactive and non-interactive fish shells. Add
-# ~/.local/bin last so it stays highest priority.
-test -d $HOME/.cargo/bin; and fish_add_path -gP $HOME/.cargo/bin
+# ahead of ~/.cargo/bin in both interactive and non-interactive fish shells. Use --move
+# so inherited PATH entries still land in deterministic order; add ~/.local/bin last
+# so it stays highest priority.
+test -d $HOME/.cargo/bin; and fish_add_path -gPm $HOME/.cargo/bin
 mise activate fish | source
-fish_add_path -gP $HOME/.local/bin
+fish_add_path -gPm $HOME/.local/bin
 
 # 1Password SSH agent — only when the macOS socket exists (absent on Linux/Windows).
 set -l op_sock "$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"

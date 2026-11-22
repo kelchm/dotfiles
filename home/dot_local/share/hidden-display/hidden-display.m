@@ -325,131 +325,149 @@ static size_t find_daemon_pids(pid_t *out, size_t max_out) {
   return found;
 }
 
+typedef enum {
+  DISPLAY_QUERY_ABSENT = 0,
+  DISPLAY_QUERY_FOUND = 1,
+  DISPLAY_QUERY_ERROR = -1,
+} DisplayQueryStatus;
+
+// Queries all online displays into a newly allocated array (caller frees).
+// Returns false if CoreGraphics cannot enumerate displays or allocation fails.
+static bool get_online_displays(CGDirectDisplayID **out_displays, uint32_t *out_count) {
+  *out_displays = NULL;
+  *out_count = 0;
+  uint32_t count = 0;
+  if (CGGetOnlineDisplayList(0, NULL, &count) != kCGErrorSuccess) {
+    return false;
+  }
+  if (count == 0) {
+    return true;
+  }
+  CGDirectDisplayID *list = calloc(count, sizeof(CGDirectDisplayID));
+  if (list == NULL) {
+    return false;
+  }
+  uint32_t got = 0;
+  if (CGGetOnlineDisplayList(count, list, &got) != kCGErrorSuccess) {
+    free(list);
+    return false;
+  }
+  *out_displays = list;
+  *out_count = got;
+  return true;
+}
+
 // Picks the bottom-right corner of the single online display (excluding `skip`)
 // extending furthest right (breaking ties by furthest down). Choosing one real
 // display's corner ensures the target point always touches an existing monitor
 // on multi-monitor setups instead of floating in empty space. Uses online
 // displays so sleeping monitors are still accounted for.
-static bool far_corner_origin(CGDirectDisplayID skip, int *out_x, int *out_y) {
+static DisplayQueryStatus far_corner_origin(CGDirectDisplayID skip, int *out_x, int *out_y) {
+  CGDirectDisplayID *others = NULL;
+  uint32_t got = 0;
+  if (!get_online_displays(&others, &got)) {
+    return DISPLAY_QUERY_ERROR;
+  }
   bool found = false;
   int best_x = 0, best_y = 0;
-  uint32_t count = 0;
-  if (CGGetOnlineDisplayList(0, NULL, &count) == kCGErrorSuccess && count > 0) {
-    CGDirectDisplayID *others = calloc(count, sizeof(CGDirectDisplayID));
-    uint32_t got = 0;
-    if (others != NULL && CGGetOnlineDisplayList(count, others, &got) == kCGErrorSuccess) {
-      for (uint32_t i = 0; i < got; i++) {
-        if (others[i] == skip) continue;
-        CGRect bounds = CGDisplayBounds(others[i]);
-        int right = (int)(bounds.origin.x + bounds.size.width);
-        int bottom = (int)(bounds.origin.y + bounds.size.height);
-        if (!found || right > best_x || (right == best_x && bottom > best_y)) {
-          best_x = right;
-          best_y = bottom;
-          found = true;
-        }
-      }
-    }
-    free(others);
-  }
-  *out_x = best_x;
-  *out_y = best_y;
-  return found;
-}
-
-// Returns true when `target` overlaps another online display or sits inside the
-// bounding extent of another display (e.g., after monitors were rearranged or a
-// new display was attached past it).
-static bool display_needs_reposition(CGDirectDisplayID target) {
-  CGRect self_bounds = CGDisplayBounds(target);
-  int live_x = (int)self_bounds.origin.x;
-  int live_y = (int)self_bounds.origin.y;
-  uint32_t count = 0;
-  if (CGGetOnlineDisplayList(0, NULL, &count) != kCGErrorSuccess || count == 0) {
-    return false;
-  }
-  CGDirectDisplayID *others = calloc(count, sizeof(CGDirectDisplayID));
-  if (others == NULL) return false;
-  bool needs_move = false;
-  uint32_t got = 0;
-  if (CGGetOnlineDisplayList(count, others, &got) == kCGErrorSuccess) {
-    for (uint32_t i = 0; i < got; i++) {
-      if (others[i] == target) continue;
-      CGRect ob = CGDisplayBounds(others[i]);
-      CGRect inter = CGRectIntersection(self_bounds, ob);
-      if (!CGRectIsNull(inter) && inter.size.width > 0.0 && inter.size.height > 0.0) {
-        needs_move = true;
-        break;
-      }
-      int other_right = (int)(ob.origin.x + ob.size.width);
-      int other_bottom = (int)(ob.origin.y + ob.size.height);
-      if (other_right > live_x && other_bottom > live_y) {
-        needs_move = true;
-        break;
-      }
+  for (uint32_t i = 0; i < got; i++) {
+    if (others[i] == skip) continue;
+    CGRect bounds = CGDisplayBounds(others[i]);
+    int right = (int)(bounds.origin.x + bounds.size.width);
+    int bottom = (int)(bounds.origin.y + bounds.size.height);
+    if (!found || right > best_x || (right == best_x && bottom > best_y)) {
+      best_x = right;
+      best_y = bottom;
+      found = true;
     }
   }
   free(others);
-  return needs_move;
+  *out_x = best_x;
+  *out_y = best_y;
+  return found ? DISPLAY_QUERY_FOUND : DISPLAY_QUERY_ABSENT;
 }
 
-static bool display_is_live(CGDirectDisplayID target, pid_t owner_pid, int *out_x, int *out_y) {
-  uint32_t count = 0;
-  if (CGGetOnlineDisplayList(0, NULL, &count) != kCGErrorSuccess || count == 0) {
-    return false;
-  }
-  CGDirectDisplayID *displays = calloc(count, sizeof(CGDirectDisplayID));
-  if (displays == NULL) return false;
-
-  bool found = false;
+// Returns DISPLAY_QUERY_FOUND when `target` overlaps another online display or
+// sits inside the bounding extent of another display, DISPLAY_QUERY_ABSENT when
+// placement is verified safe, or DISPLAY_QUERY_ERROR if displays cannot be
+// enumerated.
+static DisplayQueryStatus display_needs_reposition(CGDirectDisplayID target) {
+  CGDirectDisplayID *others = NULL;
   uint32_t got = 0;
-  if (CGGetOnlineDisplayList(count, displays, &got) == kCGErrorSuccess) {
-    for (uint32_t i = 0; i < got; i++) {
-      if (displays[i] == target) {
-        if (CGDisplayVendorNumber(target) == VENDOR_ID &&
-            CGDisplayModelNumber(target) == PRODUCT_ID &&
-            CGDisplaySerialNumber(target) == (uint32_t)owner_pid) {
-          CGRect bounds = CGDisplayBounds(target);
-          *out_x = (int)bounds.origin.x;
-          *out_y = (int)bounds.origin.y;
-          found = true;
-        }
-        break;
-      }
+  if (!get_online_displays(&others, &got)) {
+    return DISPLAY_QUERY_ERROR;
+  }
+  CGRect self_bounds = CGDisplayBounds(target);
+  int live_x = (int)self_bounds.origin.x;
+  int live_y = (int)self_bounds.origin.y;
+  bool needs_move = false;
+  for (uint32_t i = 0; i < got; i++) {
+    if (others[i] == target) continue;
+    CGRect ob = CGDisplayBounds(others[i]);
+    CGRect inter = CGRectIntersection(self_bounds, ob);
+    if (!CGRectIsNull(inter) && inter.size.width > 0.0 && inter.size.height > 0.0) {
+      needs_move = true;
+      break;
+    }
+    int other_right = (int)(ob.origin.x + ob.size.width);
+    int other_bottom = (int)(ob.origin.y + ob.size.height);
+    if (other_right > live_x && other_bottom > live_y) {
+      needs_move = true;
+      break;
     }
   }
-  free(displays);
-  return found;
+  free(others);
+  return needs_move ? DISPLAY_QUERY_FOUND : DISPLAY_QUERY_ABSENT;
 }
 
-static bool find_live_display_for_pid(pid_t owner_pid, DisplayState *out) {
-  uint32_t count = 0;
-  if (CGGetOnlineDisplayList(0, NULL, &count) != kCGErrorSuccess || count == 0) {
-    return false;
-  }
-  CGDirectDisplayID *displays = calloc(count, sizeof(CGDirectDisplayID));
-  if (displays == NULL) return false;
-
-  bool found = false;
+static DisplayQueryStatus display_is_live(CGDirectDisplayID target, pid_t owner_pid, int *out_x,
+                                          int *out_y) {
+  CGDirectDisplayID *displays = NULL;
   uint32_t got = 0;
-  if (CGGetOnlineDisplayList(count, displays, &got) == kCGErrorSuccess) {
-    for (uint32_t i = 0; i < got; i++) {
-      CGDirectDisplayID id = displays[i];
-      if (CGDisplayVendorNumber(id) == VENDOR_ID &&
-          CGDisplayModelNumber(id) == PRODUCT_ID &&
-          CGDisplaySerialNumber(id) == (uint32_t)owner_pid) {
-        CGRect bounds = CGDisplayBounds(id);
-        out->pid = owner_pid;
-        out->display_id = id;
-        out->x = (int)bounds.origin.x;
-        out->y = (int)bounds.origin.y;
+  if (!get_online_displays(&displays, &got)) {
+    return DISPLAY_QUERY_ERROR;
+  }
+  bool found = false;
+  for (uint32_t i = 0; i < got; i++) {
+    if (displays[i] == target) {
+      if (CGDisplayVendorNumber(target) == VENDOR_ID &&
+          CGDisplayModelNumber(target) == PRODUCT_ID &&
+          CGDisplaySerialNumber(target) == (uint32_t)owner_pid) {
+        CGRect bounds = CGDisplayBounds(target);
+        *out_x = (int)bounds.origin.x;
+        *out_y = (int)bounds.origin.y;
         found = true;
-        break;
       }
+      break;
     }
   }
   free(displays);
-  return found;
+  return found ? DISPLAY_QUERY_FOUND : DISPLAY_QUERY_ABSENT;
+}
+
+static DisplayQueryStatus find_live_display_for_pid(pid_t owner_pid, DisplayState *out) {
+  CGDirectDisplayID *displays = NULL;
+  uint32_t got = 0;
+  if (!get_online_displays(&displays, &got)) {
+    return DISPLAY_QUERY_ERROR;
+  }
+  bool found = false;
+  for (uint32_t i = 0; i < got; i++) {
+    CGDirectDisplayID id = displays[i];
+    if (CGDisplayVendorNumber(id) == VENDOR_ID &&
+        CGDisplayModelNumber(id) == PRODUCT_ID &&
+        CGDisplaySerialNumber(id) == (uint32_t)owner_pid) {
+      CGRect bounds = CGDisplayBounds(id);
+      out->pid = owner_pid;
+      out->display_id = id;
+      out->x = (int)bounds.origin.x;
+      out->y = (int)bounds.origin.y;
+      found = true;
+      break;
+    }
+  }
+  free(displays);
+  return found ? DISPLAY_QUERY_FOUND : DISPLAY_QUERY_ABSENT;
 }
 
 static bool stop_process(pid_t pid) {
@@ -592,7 +610,13 @@ static int run_daemon(void) {
     // the pointer does not wander onto it. Never move to (0,0) when no other
     // online display is reported, to avoid claiming the main display.
     int x = 0, y = 0;
-    bool has_other = far_corner_origin(number, &x, &y);
+    DisplayQueryStatus corner = far_corner_origin(number, &x, &y);
+    if (corner == DISPLAY_QUERY_ERROR) {
+      fprintf(stderr, "hidden-display: could not query online displays\n");
+      display = nil;
+      return 1;
+    }
+    bool has_other = (corner == DISPLAY_QUERY_FOUND);
 
     // Points at twice the pixels, as on a Retina screen.
     CGDisplayModeRef retina = NULL;
@@ -616,7 +640,9 @@ static int run_daemon(void) {
         }
         cfg_err = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
       }
-      if (has_other && (cfg_err != kCGErrorSuccess || display_needs_reposition(number))) {
+      if (has_other &&
+          (cfg_err != kCGErrorSuccess ||
+           display_needs_reposition(number) != DISPLAY_QUERY_ABSENT)) {
         fprintf(stderr, "hidden-display: could not place display off-screen (CGError %d)\n",
                 (int)cfg_err);
         display = nil;
@@ -659,16 +685,27 @@ static int run_daemon(void) {
 static bool reposition_and_sync_state(const char *state_path, DisplayState *state,
                                       bool force_write) {
   int live_x = state->x, live_y = state->y;
-  if (display_needs_reposition(state->display_id)) {
+  DisplayQueryStatus pos = display_needs_reposition(state->display_id);
+  if (pos == DISPLAY_QUERY_ERROR) {
+    fprintf(stderr, "hidden-display: could not query online displays\n");
+    return false;
+  }
+  if (pos == DISPLAY_QUERY_FOUND) {
     int want_x = 0, want_y = 0;
-    if (far_corner_origin(state->display_id, &want_x, &want_y)) {
+    DisplayQueryStatus corner = far_corner_origin(state->display_id, &want_x, &want_y);
+    if (corner == DISPLAY_QUERY_ERROR) {
+      fprintf(stderr, "hidden-display: could not query online displays\n");
+      return false;
+    }
+    if (corner == DISPLAY_QUERY_FOUND) {
       CGDisplayConfigRef config;
       CGError cfg_err = CGBeginDisplayConfiguration(&config);
       if (cfg_err == kCGErrorSuccess) {
         CGConfigureDisplayOrigin(config, state->display_id, want_x, want_y);
         cfg_err = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
       }
-      if (cfg_err != kCGErrorSuccess || display_needs_reposition(state->display_id)) {
+      if (cfg_err != kCGErrorSuccess ||
+          display_needs_reposition(state->display_id) != DISPLAY_QUERY_ABSENT) {
         fprintf(stderr, "hidden-display: could not reposition display off-screen (CGError %d)\n",
                 (int)cfg_err);
         return false;
@@ -694,7 +731,13 @@ static int cmd_ensure(const char *state_path, const char *lock_path) {
   if (read_state(state_path, &state)) {
     if (is_daemon_process(state.pid)) {
       int live_x = state.x, live_y = state.y;
-      if (display_is_live(state.display_id, state.pid, &live_x, &live_y)) {
+      DisplayQueryStatus live = display_is_live(state.display_id, state.pid, &live_x, &live_y);
+      if (live == DISPLAY_QUERY_ERROR) {
+        fprintf(stderr, "hidden-display: could not query online displays\n");
+        close(lock_fd);
+        return 1;
+      }
+      if (live == DISPLAY_QUERY_FOUND) {
         bool origin_changed = (live_x != state.x || live_y != state.y);
         state.x = live_x;
         state.y = live_y;
@@ -727,7 +770,13 @@ static int cmd_ensure(const char *state_path, const char *lock_path) {
     DisplayState adopted_state;
     for (size_t i = 0; i < n_orphans; i++) {
       DisplayState candidate;
-      if (!adopted && find_live_display_for_pid(orphans[i], &candidate)) {
+      DisplayQueryStatus found = find_live_display_for_pid(orphans[i], &candidate);
+      if (found == DISPLAY_QUERY_ERROR) {
+        fprintf(stderr, "hidden-display: could not query online displays\n");
+        close(lock_fd);
+        return 1;
+      }
+      if (!adopted && found == DISPLAY_QUERY_FOUND) {
         adopted_state = candidate;
         adopted = true;
       } else if (!stop_process(orphans[i])) {
@@ -772,7 +821,13 @@ static int cmd_status(const char *state_path, const char *lock_path) {
   DisplayState state;
   if (read_state(state_path, &state) && is_daemon_process(state.pid)) {
     int live_x = state.x, live_y = state.y;
-    if (display_is_live(state.display_id, state.pid, &live_x, &live_y)) {
+    DisplayQueryStatus live = display_is_live(state.display_id, state.pid, &live_x, &live_y);
+    if (live == DISPLAY_QUERY_ERROR) {
+      fprintf(stderr, "hidden-display: could not query online displays\n");
+      close(lock_fd);
+      return 1;
+    }
+    if (live == DISPLAY_QUERY_FOUND) {
       printf("%u %d %d (pid %lld)\n", state.display_id, live_x, live_y,
              (long long)state.pid);
       fflush(stdout);
@@ -785,7 +840,13 @@ static int cmd_status(const char *state_path, const char *lock_path) {
     pid_t orphans[16];
     size_t n_orphans = find_daemon_pids(orphans, 16);
     for (size_t i = 0; i < n_orphans; i++) {
-      if (find_live_display_for_pid(orphans[i], &state)) {
+      DisplayQueryStatus found = find_live_display_for_pid(orphans[i], &state);
+      if (found == DISPLAY_QUERY_ERROR) {
+        fprintf(stderr, "hidden-display: could not query online displays\n");
+        close(lock_fd);
+        return 1;
+      }
+      if (found == DISPLAY_QUERY_FOUND) {
         printf("%u %d %d (pid %lld)\n", state.display_id, state.x, state.y,
                (long long)state.pid);
         fflush(stdout);
@@ -828,7 +889,7 @@ static int cmd_stop(const char *state_path, const char *lock_path) {
     for (size_t i = 0; i < n_orphans; i++) {
       DisplayState orphan_state;
       CGDirectDisplayID oid = 0;
-      if (find_live_display_for_pid(orphans[i], &orphan_state)) {
+      if (find_live_display_for_pid(orphans[i], &orphan_state) == DISPLAY_QUERY_FOUND) {
         oid = orphan_state.display_id;
       }
       if (!stop_process(orphans[i])) {

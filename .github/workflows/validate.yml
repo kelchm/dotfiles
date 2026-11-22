@@ -128,6 +128,7 @@ jobs:
             mise exec -- mbx --version
             test -x "$HOME/.local/bin/hidden-display"
             test -x "$HOME/.local/share/mise/command-wrappers/bin/cargo"
+            test "$(zsh -c 'command -v cargo')" = "$HOME/.local/share/mise/command-wrappers/bin/cargo"
             if "$HOME/.local/bin/hidden-display" status; then
               echo "expected hidden-display status to fail before ensure" >&2
               exit 1
