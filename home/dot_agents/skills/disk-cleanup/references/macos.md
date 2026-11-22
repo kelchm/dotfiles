@@ -36,23 +36,54 @@ dua aggregate -x --deduplicate-apfs-clones ~/Library ~/Development ~/.cache
 
 ## 4. Estimate a specific deletion
 
-For the bytes that deleting a file would free, macOS reports a per-file *private size*: data shared with no clone or snapshot. gdu's `--exclusive-size` reports it on macOS in releases after 5.39.0:
+For regular uncompressed files, macOS reports a per-file *private size* (`ATTR_CMNEXT_PRIVATESIZE`): data-fork bytes not shared with any clone or snapshot. gdu's `--exclusive-size` queries it on macOS in releases after 5.39.0:
 
 ```sh
 mise x aqua:dundee/gdu@<version> -- gdu --exclusive-size --non-interactive <candidate>
 ```
 
-Summing private sizes undercounts when the candidate holds several clones of the same file, since none of them is private. Files compressed by APFS report their full allocation instead. Treat the result as a lower bound on what the deletion frees.
+Summed private sizes are a defensible lower bound **only** for verified unshared, uncompressed file data whose hard links all disappear in the deletion set:
 
-For reproducible data such as caches and build output, the free-space change after deletion is the most reliable measurement. For data that cannot be recreated, the decision is whether to keep it, and a byte estimate rarely changes that.
+- **Hard links:** a link outside the deletion set keeps the file's data alive even when its private size is nonzero; check link counts (`stat -f '%l %i %N'`) when external links are possible.
+- **Compressed files (`UF_COMPRESSED` / `decmpfs`):** APFS stores compressed data outside the data fork and reports private size `0`, so tools like `gdu --exclusive-size` fall back to reporting the file's full allocated size. That can overcount compressed files that are cloned or retained by a snapshot. The same fallback occurs when private size cannot be read.
+- **Internal clones:** if the deletion set holds every clone of a file (with no clone or snapshot outside it), summing private sizes undercounts those bytes because none of the clones is private on its own.
+
+Report those gaps (compressed files, external hard links, unreadable entries, or unverified clone groups) as uncertain rather than presenting a raw total as a guaranteed minimum. Keep advanced extent mapping optional and use it only when a high-stakes decision requires tighter bounds.
+
+For reproducible data such as caches and build output, the observed container free-space change after deletion is the most reliable measurement. For data that cannot be recreated, the decision is whether to keep it, and a byte estimate rarely changes that.
 
 ## Common large owners
 
-- **VMs and containers:** Docker Desktop, Colima, OrbStack, UTM and Parallels keep large disk images. Match each image to a registered machine (`colima list`, `docker context ls`) and, for a running engine, inspect `docker system df -v`. Guest cleanup frees host space only after the guest trims (for Colima, `colima ssh -- sudo fstrim -av`) or the image is compacted. Remeasure the image afterward.
-- **Package and toolchain caches:** Homebrew, mise, pnpm, npm, Cargo, Go, Xcode `DerivedData` and simulators. Use the owner's preview, such as `brew cleanup --dry-run` or `mise prune --dry-run`. For pnpm, `pnpm store path` (or a project's `node_modules/.modules.yaml`) locates the store.
+- **VMs and containers:** Docker Desktop, Colima, OrbStack, UTM and Parallels keep large disk images. Match each image to a registered machine (`colima list`, `docker context ls`) and record its current power state. For a running engine, inspect `docker system df -v` and follow the scoped image-removal rules in [Common causes](common-causes.md#vms-and-containers) rather than blanket image pruning. Guest cleanup frees host space only after trimming the verified guest data mount (for example, check mounts in `colima ssh` with `findmnt` / `df -h`, then run `colima ssh -- sudo fstrim -v <mount>`) or compacting the image. If a stopped VM was started solely for authorized cleanup and trim, restore its prior stopped state afterward, and remeasure both host disk image allocation and container free space.
+- **Package and toolchain caches:** Homebrew, mise, pnpm, npm, Cargo, Go, Xcode `DerivedData` and simulators. Use the owner's preview, such as `brew cleanup --dry-run`. Treat `mise prune --dry-run` / `mise ls --prunable` as a candidate list, cross-check retained-project pins and external tool defaults (such as `rustup`), refresh the preview before acting, and uninstall exact vetted versions (see [Common causes](common-causes.md#package-and-toolchain-caches)). For pnpm, `pnpm store path` (or a project's `node_modules/.modules.yaml`) locates the store.
 - **Build output:** `target/`, `node_modules/`, `.build/`, `dist/`. Confirm with `git check-ignore` and `git ls-files` on the exact path. Use scoped commands such as `cargo clean --target-dir <dir>`. Check `lsof -nP +D <dir>` on small trees.
-- **Snapshots and backups:** Check `tmutil latestbackup` before deleting a local snapshot, and `tmutil isexcluded <path>` when deciding whether data is backed up.
+
+## Snapshots, backups, and prevention
+
+Before deleting any local APFS snapshot, verify backup state and scope the exact volume and snapshot:
+
+```sh
+tmutil status                                  # confirm Running = 0 (no active backup)
+tmutil latestbackup                            # confirm latest completed backup (may require root/Full Disk Access)
+diskutil apfs list                             # identify the Data volume (e.g. disk3s5 / /System/Volumes/Data)
+diskutil apfs listSnapshots /System/Volumes/Data
+tmutil listlocalsnapshots /
+```
+
+If `tmutil latestbackup` cannot be read due to permissions, check Time Machine settings with the user and treat backup recency as unknown until confirmed.
+
+With explicit approval naming the volume and snapshot UUID, remove only the approved snapshot where supported:
+
+```sh
+sudo diskutil apfs deleteSnapshot <volume> -uuid <uuid> -wait
+```
+
+`-wait` waits for space reclamation to complete before returning. Contrast this with `tmutil deletelocalsnapshots <date>` (which deletes matching-date snapshots on every mounted disk) and `tmutil deletelocalsnapshots <mount_point>` (which deletes all local snapshots on that disk).
+
+- **Shared snapshot blocks:** multiple snapshots can reference the same deleted blocks, so removing one snapshot may free little until every snapshot pinning those blocks is gone.
+- **Thinning by amount:** `tmutil thinlocalsnapshots / <bytes> <urgency 1-4>` works without `sudo`, but stops once macOS considers the requested floor met—so it can satisfy the target while leaving the largest retaining snapshot in place.
+- **Exclusions vs. quotas:** `tmutil isexcluded <path>` checks backup exclusion. A path-level exclusion (`tmutil addexclusion <path>` sticky, or `-p <path>` fixed-path) omits the path from future Time Machine backups, **not** from local APFS snapshots on that volume—deleted blocks under an excluded path can still be pinned by local snapshots. A volume-wide exclusion (`tmutil addexclusion -v <volume>`) excludes an entire separate volume from Time Machine, but APFS volumes in the same container still share pool capacity unless bounded with a hard volume quota (`diskutil apfs addVolume ... -quota <size>`).
 
 ## After cleanup
 
-Rerun `diskutil info` on the same path and compare *Container Free Space*. If less space returned than expected, the usual causes are clones of the deleted data kept elsewhere, snapshots, files still held open (`lsof +L1`), and guest images that have not been trimmed or compacted.
+Rerun `diskutil info` on the same path and compare *Container Free Space*. Report unique live data removed, observed container free-space gain, and estimated snapshot-held data separately. If less space returned than expected, the usual causes are snapshots (including shared blocks across multiple snapshots), clones or hard links kept elsewhere, files still held open (`lsof +L1`), and guest images that have not been trimmed or compacted.
