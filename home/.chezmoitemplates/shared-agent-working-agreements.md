@@ -22,6 +22,7 @@
 
 ## Pull requests
 
+- Land changes through a topic branch and pull request, never by committing or pushing directly to the default branch (`main`/`master`)—even in a repo the user owns, even if an earlier commit skipped a PR, and even after a casual "ship it." In T3, when a thread starts on the root default-branch checkout and turns into an edit, hand off to a worktree first (`t3_worktree_handoff`) rather than editing in place. Push straight to the default branch only when the user explicitly asks to skip a PR.
 - Make dependent PRs a GitHub stack with `gh stack` (the `gh-stack` skill covers its use) rather than chaining PR bases by hand, merging the trunk into a layer, or merging layers one at a time.
 - PRs that build on the same layer and edit the same files go in one stack, in landing order. Agents sharing a stack agree before rewriting a layer another agent owns.
 - Reply to an inline review comment in its own thread. Don't post top-level comments answering a review bot's findings or summarizing a local or delegated review. A verification section in the description, if there is one, can note the review.
