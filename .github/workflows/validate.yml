@@ -121,11 +121,10 @@ jobs:
         run: |
           mise ls --global
           test -z "$(mise ls --global --missing)"
-          for tool in claude codex uv node python; do mise exec -- "$tool" --version; done
+          for tool in claude codex uv node python mbx; do mise exec -- "$tool" --version; done
           # Use mise's gh, not the runner's preinstalled one.
           "$(mise which gh)" extension list | grep -q github/gh-stack
           if [ "$(uname -s)" = "Darwin" ]; then
-            mise exec -- mbx --version
             test -x "$HOME/.local/bin/hidden-display"
             test -x "$HOME/.local/share/mise/command-wrappers/bin/cargo"
             test "$(zsh -c 'command -v cargo')" = "$HOME/.local/share/mise/command-wrappers/bin/cargo"
@@ -134,4 +133,6 @@ jobs:
               exit 1
             fi
             python3 -m unittest -v tests.test_hidden_display
+          else
+            test -f "$LOCALAPPDATA/mise/command-wrappers/bin/cargo.exe" || test -f "$LOCALAPPDATA/mise/command-wrappers/bin/cargo.cmd"
           fi

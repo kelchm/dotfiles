@@ -42,7 +42,7 @@ unset _brew
 # Precedence (highest first): ~/.local/bin > mise command-wrappers > mise shims > cargo > brew > system.
 # Listed low-to-high because path_prepend moves each to the front.
 #
-# Rust: cargo/rustc resolve via mise's command-wrappers (when configured, e.g. mbx on macOS)
+# Rust: cargo/rustc resolve via mise's command-wrappers (when configured, e.g. mbx)
 # and shims. mise's rust backend delegates to rustup, so ~/.cargo/bin holds rustup's proxies
 # (cargo -> rustup, ...) plus `cargo install` binaries — kept below mise so wrappers and
 # per-repo rust-toolchain.toml switching stay authoritative. (We deliberately don't source

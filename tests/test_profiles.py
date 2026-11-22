@@ -585,10 +585,11 @@ signingMethod = "none"
         for harness in [".claude/skills", ".codex/skills", ".pi/agent/skills"]:
             self.assertEqual((self.home / harness / "gui-testing").resolve(), skill.resolve())
 
-    def test_mbx_and_hidden_display_are_scoped_to_macos_tools(self):
+    def test_mbx_and_hidden_display_scoping(self):
         pin = tomllib.loads((ROOT / "home/.chezmoidata.toml").read_text())["dotfiles"]["pins"]["mrBoxington"]
         build_script = ROOT / "home/.chezmoiscripts/run_onchange_after_07-install-hidden-display-darwin.sh.tmpl"
-        mise_script = ROOT / "home/.chezmoiscripts/run_onchange_after_02-install-mise-tools.sh.tmpl"
+        mise_sh_script = ROOT / "home/.chezmoiscripts/run_onchange_after_02-install-mise-tools.sh.tmpl"
+        mise_ps1_script = ROOT / "home/.chezmoiscripts/run_onchange_after_02-install-mise-tools.ps1.tmpl"
         targets = [
             ("darwin", "arm64"),
             ("darwin", "amd64"),
@@ -607,7 +608,7 @@ signingMethod = "none"
                     )
                     managed = self.chezmoi("managed").stdout.splitlines()
                     expect_darwin = platform == "darwin" and tools_enabled
-                    expect_mbx = expect_darwin and arch == "arm64"
+                    expect_mbx = tools_enabled and not (platform == "darwin" and arch != "arm64")
                     self.assertEqual(".config/mise/conf.d/mbx.toml" in managed, expect_mbx)
                     self.assertEqual(".local/share/hidden-display/hidden-display.m" in managed, expect_darwin)
                     self.assertNotIn(".local/bin", managed)
@@ -621,26 +622,31 @@ signingMethod = "none"
                         mbx_body = self.chezmoi("cat", str(self.home / ".config/mise/conf.d/mbx.toml")).stdout
                         mbx_cfg = tomllib.loads(mbx_body)
                         self.assertEqual(mbx_cfg["tools"]["mr-boxington"], pin)
-                        self.assertEqual(mbx_cfg["env"]["MBX_CACHE_DIR"], "{{ env.HOME }}/Library/Caches/mbx")
+                        self.assertNotIn("MBX_CACHE_DIR", mbx_cfg["env"])
                         self.assertEqual(mbx_cfg["env"]["MBX_GC_MAX_TOTAL_SIZE"], "100GiB")
                         self.assertEqual(
                             mbx_cfg["wrappers"]["cargo"],
                             {"command": "mbx", "env": {"MBX_CARGO_SHIM_MODE": "1"}},
                         )
-                    rendered_mise = self.chezmoi("execute-template", "-f", str(mise_script)).stdout
                     if platform != "windows" and tools_enabled:
+                        rendered_mise = self.chezmoi("execute-template", "-f", str(mise_sh_script)).stdout
                         self.assertIn("mise install", rendered_mise)
                         self.assertIn("mise reshim", rendered_mise)
                         self.assertEqual("# mbx:" in rendered_mise, expect_mbx)
-        # Windows with runtimes and tools keeps .local/bin/python3.cmd without .local/share.
+                    if platform == "windows" and tools_enabled:
+                        rendered_ps1 = self.chezmoi("execute-template", "-f", str(mise_ps1_script)).stdout
+                        self.assertIn("# mbx:", rendered_ps1)
+                        self.assertIn("mise reshim", rendered_ps1)
+                        self.assertIn(r"mise\command-wrappers\bin", rendered_ps1)
+        # Windows with runtimes and tools keeps .local/bin/python3.cmd and mbx.toml without .local/share.
         self.platform = "windows"
         self.arch = "amd64"
         self.configure("standalone", bootstrap=False, modules={"tools": True, "runtimes": True})
         win_managed = self.chezmoi("managed").stdout.splitlines()
         self.assertIn(".local/bin/python3.cmd", win_managed)
+        self.assertIn(".config/mise/conf.d/mbx.toml", win_managed)
         self.assertNotIn(".local/share", win_managed)
         self.assertNotIn(".local/share/hidden-display/hidden-display.m", win_managed)
-        self.assertNotIn(".config/mise/conf.d/mbx.toml", win_managed)
 
     def test_hidden_display_build_script_installs_into_local_bin(self):
         self.platform = "darwin"
