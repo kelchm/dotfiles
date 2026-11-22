@@ -46,7 +46,7 @@ Until a `gdu` release with macOS `--exclusive-size` ships (or when private size 
 
 Summed private sizes are a defensible lower bound **only** for verified unshared, uncompressed file data whose hard links all disappear in the deletion set:
 
-- **Hard links:** a link outside the deletion set keeps the file's data alive even when its private size is nonzero; check link counts (`stat -f '%l %i %N'`) when external links are possible.
+- **Hard links:** a link outside the deletion set keeps the file's data alive even when its private size is nonzero, and multiple links to the same inode inside the deletion set must be counted once; check link counts and inodes (`stat -f '%l %i %N'`) when hard links are possible.
 - **Compressed files (`UF_COMPRESSED` / `decmpfs`):** APFS stores compressed data outside the data fork and reports private size `0`, so tools like `gdu --exclusive-size` fall back to reporting the file's full allocated size. That can overcount compressed files that are cloned or retained by a snapshot. The same fallback occurs when private size cannot be read.
 - **Internal clones:** if the deletion set holds every clone of a file (with no clone or snapshot outside it), summing private sizes undercounts those bytes because none of the clones is private on its own.
 
@@ -56,8 +56,8 @@ For reproducible data such as caches and build output, the observed container fr
 
 ## Common large owners
 
-- **VMs and containers:** Docker Desktop, Colima, OrbStack, UTM and Parallels keep large disk images. Match each image to a registered machine (`colima list`, `docker context ls`) and record its current power state. For a running engine, inspect `docker system df -v` and follow the scoped image-removal rules in [Common causes](common-causes.md#vms-and-containers) rather than blanket image pruning. Guest cleanup frees host space only after trimming the verified guest data mount (for example, check mounts in `colima ssh` with `findmnt` / `df -h`, then run `colima ssh -- sudo fstrim -v <mount>`) or compacting the image. If a stopped VM was started solely for authorized cleanup and trim, restore its prior stopped state afterward, and remeasure both host disk image allocation and container free space.
-- **Package and toolchain caches:** Homebrew, mise, pnpm, npm, Cargo, Go, Xcode `DerivedData` and simulators. Use the owner's preview, such as `brew cleanup --dry-run`. Treat `mise prune --dry-run` / `mise ls --prunable` as a candidate list, cross-check retained-project pins and external tool defaults (such as `rustup`), refresh the preview before acting, and uninstall exact vetted versions (see [Common causes](common-causes.md#package-and-toolchain-caches)). For pnpm, `pnpm store path` (or a project's `node_modules/.modules.yaml`) locates the store.
+- **VMs and containers:** Docker Desktop, Colima, OrbStack, UTM and Parallels keep large disk images. Match each image to a registered machine (`colima list`, `docker context ls`), follow the scoped Docker cleanup, guest trim, and VM power-state rules in [Common causes](common-causes.md#vms-and-containers), and remeasure both host disk image allocation (`du -k <image>` or `ls -ls <image>`) and container free space.
+- **Package and toolchain caches:** Homebrew, mise, pnpm, npm, Cargo, Go, Xcode `DerivedData` and simulators. Use the owner's preview (such as `brew cleanup --dry-run`), and vet `mise` candidates before uninstalling exact versions (see [Common causes](common-causes.md#package-and-toolchain-caches)). For pnpm, `pnpm store path` (or a project's `node_modules/.modules.yaml`) locates the store.
 - **Build output:** `target/`, `node_modules/`, `.build/`, `dist/`. Confirm with `git check-ignore` and `git ls-files` on the exact path. Use scoped commands such as `cargo clean --target-dir <dir>`. Check `lsof -nP +D <dir>` on small trees.
 
 ## Snapshots, backups, and prevention
@@ -66,26 +66,25 @@ Before deleting any local APFS snapshot, verify backup state and scope the exact
 
 ```sh
 tmutil status                                  # confirm Running = 0 (no active backup)
-tmutil latestbackup                            # confirm latest completed backup (may require root/Full Disk Access)
-diskutil apfs list                             # identify the Data volume (e.g. disk3s5 / /System/Volumes/Data)
+diskutil apfs list                             # identify the Data volume identifier (e.g. disk3s5)
 diskutil apfs listSnapshots /System/Volumes/Data
 tmutil listlocalsnapshots /
 ```
 
-If `tmutil latestbackup` cannot be read due to permissions, check Time Machine settings with the user and treat backup recency as unknown until confirmed.
+Also verify the latest completed backup. `tmutil latestbackup` requires root and Full Disk Access—do not elevate privileges just to measure; if it is unavailable, check Time Machine settings with the user and treat backup recency as unknown until confirmed.
 
-With explicit approval naming the volume and snapshot UUID, remove only the approved snapshot where supported:
+`listSnapshots` also lists OS-update and third-party snapshots. Target only `com.apple.TimeMachine.*.local` snapshots unless the user knowingly approves another owner's. With explicit approval naming the volume and snapshot UUID, remove only that snapshot where supported:
 
 ```sh
-sudo diskutil apfs deleteSnapshot <volume> -uuid <uuid> -wait
+sudo diskutil apfs deleteSnapshot <diskNsN> -uuid <uuid> -wait
 ```
 
 `-wait` waits for space reclamation to complete before returning. Contrast this with `tmutil deletelocalsnapshots <date>` (which deletes matching-date snapshots on every mounted disk) and `tmutil deletelocalsnapshots <mount_point>` (which deletes all local snapshots on that disk).
 
 - **Shared snapshot blocks:** multiple snapshots can reference the same deleted blocks, so removing one snapshot may free little until every snapshot pinning those blocks is gone.
-- **Thinning by amount:** `tmutil thinlocalsnapshots / <bytes> <urgency 1-4>` works without `sudo`, but stops once macOS considers the requested floor met—so it can satisfy the target while leaving the largest retaining snapshot in place.
-- **Exclusions vs. quotas:** `tmutil isexcluded <path>` checks backup exclusion. A path-level exclusion (`tmutil addexclusion <path>` sticky, or `-p <path>` fixed-path) omits the path from future Time Machine backups, **not** from local APFS snapshots on that volume—deleted blocks under an excluded path can still be pinned by local snapshots. A volume-wide exclusion (`tmutil addexclusion -v <volume>`) excludes an entire separate volume from Time Machine, but APFS volumes in the same container still share pool capacity unless bounded with a hard volume quota (`diskutil apfs addVolume ... -quota <size>`).
+- **Thinning by amount:** `tmutil thinlocalsnapshots / <bytes> <urgency 1-4>` works without `sudo`, but stops once macOS considers the requested amount reclaimed—so it can meet a target while leaving the largest retaining snapshot in place.
+- **Exclusions vs. quotas:** `tmutil isexcluded <path>` checks backup exclusion. A path-level exclusion (`tmutil addexclusion <path>` sticky, or `-p <path>` fixed-path; `-p` and `-v` require root and Full Disk Access) omits the path from future Time Machine backups, **not** from local APFS snapshots on that volume—deleted blocks under an excluded path can still stay pinned in local snapshots. A volume-wide exclusion (`tmutil addexclusion -v <volume>`) excludes an entire separate volume from Time Machine and avoids Time Machine local snapshots on it, preventing snapshot-pinned bloat; however, APFS volumes in one container still share pool capacity unless bounded with a hard volume quota (`diskutil apfs addVolume ... -quota <size>`). See [Prevention and caps](common-causes.md#prevention-and-caps) for verification steps.
 
 ## After cleanup
 
-Rerun `diskutil info` on the same path and compare *Container Free Space*. Report unique live data removed, observed container free-space gain, and estimated snapshot-held data separately. If less space returned than expected, the usual causes are snapshots (including shared blocks across multiple snapshots), clones or hard links kept elsewhere, files still held open (`lsof +L1`), and guest images that have not been trimmed or compacted.
+Rerun `diskutil info` on the same path and compare *Container Free Space*. Report unique live data removed (when measurable; otherwise unknown), observed container free-space gain, and estimated snapshot-held data separately. If less space returned than expected, the usual causes are snapshots (including shared blocks across multiple snapshots), clones or hard links kept elsewhere, files still held open (`lsof +L1`), and guest images that have not been trimmed or compacted.
