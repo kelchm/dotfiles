@@ -7,7 +7,7 @@ A profile supplies module defaults on initialization. Every resulting switch is 
 | `desktop` | Personal Hyprland input/appearance overrides (Omarchy only) | Off | Off |
 | `git` | Personal Git include, its include block, and a bounded 1Password block in SSH config (the `git` module owns both) | On | On |
 | `agents` | Shared instructions/skills and the OpenCode Go provider invariant | On | On |
-| `tools` | mise harnesses, gh, uv, updater environment, harness update task | On | On |
+| `tools` | mise harnesses, gh, uv, updater environment, harness update task; on macOS, `mbx` Cargo wrapper and `hidden-display` helper | On | On |
 | `runtimes` | Global Node LTS, Python 3.12, Python environment and Rust version-file settings | On | Off |
 | `tools-re` | REA CLI, Ghidra on macOS, and local skill when `agents` is enabled | Off | Off |
 | `shell` | Bash/Zsh/Fish/PowerShell startup files and shared shell environment | On | Off |
@@ -55,11 +55,12 @@ Changing `profile` alone does not reset persisted module choices. To adopt a new
 `bootstrap = true` enables the existing ordered scripts, gated by their modules and OS:
 
 1. Install Homebrew/WinGet packages (`packages`) and missing Ghidra packages on macOS (`tools-re`; no Linux package provisioning).
-2. Install missing mise tools (`tools`). This does not upgrade existing versions.
+2. Install missing mise tools and refresh shims/command wrappers (`tools`). This does not upgrade existing versions.
 3. Seed the macOS keychain token (`tools`; requires 1Password CLI access).
 4. Select Fish as the macOS login shell (`shell`; may require sudo).
 5. Remove legacy RTK hooks, global tool requests, and installations (`agents`; macOS/Windows only).
 6. Install `github/gh-stack` if missing (`tools`), pinned to v0.2.0.
+7. Build and install `~/.local/bin/hidden-display` from `~/.local/share/hidden-display/hidden-display.m` (`tools`; macOS only, requires Xcode Command Line Tools).
 
 Set `bootstrap = false` to apply only configuration. `chezmoi apply --exclude scripts` also skips scripts for one invocation. Bootstrap scripts use `run_onchange_`; they run when their rendered contents change, rather than on every apply.
 
@@ -106,6 +107,13 @@ This module does not register REA MCP globally, including in Pi. No registration
 Earlier versions documented global REA registration. On a machine that used it, remove only the `rea` server entry with that client's native MCP removal command or a scoped configuration edit; preserve other servers, credentials, and the chezmoi-managed skill.
 
 The REA version belongs in `dotfiles.pins.rea` in `.chezmoidata.toml`; `harness:update` leaves it pinned. Ghidra follows Homebrew's formula. REA 6.8.0 accepts only Ghidra 12.1.x, while Homebrew supplies 12.2. Direct Ghidra analysis remains available; the local skill uses that route when REA rejects the installed version. A newer REA release can be tested and pinned when published. See the [released provider requirements](https://github.com/morluto/rea/blob/rea-agents-6.8.0/docs/installation.md#ghidra).
+
+## macOS tools (`mbx` and `hidden-display`)
+
+On macOS, the `tools` module also deploys two platform-specific helpers (ignored on Linux and Windows):
+
+- **Mr. Boxington (`~/.config/mise/conf.d/mbx.toml`, Apple Silicon macOS):** pins `mr-boxington` in `.chezmoidata.toml`, sets `MBX_CACHE_DIR` to `~/Library/Caches/mbx` with a `100GiB` soft budget (`MBX_GC_MAX_TOTAL_SIZE`), and adds a `[wrappers.cargo]` command wrapper (`MBX_CARGO_SHIM_MODE=1`) so plain `cargo` runs share APFS copy-on-write build outputs across worktrees. Projects that set `CARGO_TARGET_DIR`, `--target-dir`, or `build.target-dir` keep their own target directory; `build.build-dir` is also left intact (with the check lane disabled). Bypass `mbx` for one command with `MBX_DISABLE=1 cargo ...`. After enabling or updating it without bootstrap, run `mise install && mise reshim`. Note that `[env]` settings apply to shells with mise active, mise shims/wrappers, and `mise exec`; direct non-mise `mbx` calls and `rust-analyzer` use `mbx`'s own settings (`mbx settings set gc.max_total_size 100GiB` / `mbx setup`) unless configured separately.
+- **Shared hidden display (`~/.local/bin/hidden-display`):** compiled from `~/.local/share/hidden-display/hidden-display.m` by bootstrap step 7 (or manually with `mkdir -p ~/.local/bin && clang -Wall -Wextra -fobjc-arc -framework Foundation -framework CoreGraphics ~/.local/share/hidden-display/hidden-display.m -o ~/.local/bin/hidden-display`). Keeps one per-user virtual display alive across GUI test runs (`hidden-display ensure|status|stop`); the `gui-testing` skill documents when and how agents use it.
 
 ## Extending the repo
 

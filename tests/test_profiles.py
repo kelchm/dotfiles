@@ -31,6 +31,7 @@ class Profiles(unittest.TestCase):
         self.home.mkdir()
         self.config = self.base / "chezmoi.toml"
         self.platform = "linux"
+        self.arch = None
 
     def configure(self, profile="omarchy", *, bootstrap=False, **overrides):
         data = dict(profile=profile, name="Test User", email="test@example.com",
@@ -44,7 +45,10 @@ class Profiles(unittest.TestCase):
         self.config.write_text(text)
 
     def chezmoi(self, *args, check=True, env=None):
-        override = json.dumps({"chezmoi": {"os": self.platform}})
+        chezmoi_data = {"os": self.platform}
+        if self.arch is not None:
+            chezmoi_data["arch"] = self.arch
+        override = json.dumps({"chezmoi": chezmoi_data})
         result = subprocess.run(
             [CHEZMOI, "-S", str(ROOT), "-D", str(self.home), "-c", str(self.config),
              "--persistent-state", str(self.base / "state.boltdb"),
@@ -572,6 +576,106 @@ signingMethod = "none"
         self.configure()
         self.apply()
         self.assertIn("gpgsign = false", p.read_text())
+
+    def test_gui_testing_skill_is_deployed_to_all_harnesses(self):
+        self.configure("standalone")
+        self.apply()
+        skill = self.home / ".agents/skills/gui-testing"
+        self.assertTrue((skill / "SKILL.md").is_file())
+        for harness in [".claude/skills", ".codex/skills", ".pi/agent/skills"]:
+            self.assertEqual((self.home / harness / "gui-testing").resolve(), skill.resolve())
+
+    def test_mbx_and_hidden_display_are_scoped_to_macos_tools(self):
+        pin = tomllib.loads((ROOT / "home/.chezmoidata.toml").read_text())["dotfiles"]["pins"]["mrBoxington"]
+        build_script = ROOT / "home/.chezmoiscripts/run_onchange_after_07-install-hidden-display-darwin.sh.tmpl"
+        mise_script = ROOT / "home/.chezmoiscripts/run_onchange_after_02-install-mise-tools.sh.tmpl"
+        targets = [
+            ("darwin", "arm64"),
+            ("darwin", "amd64"),
+            ("linux", "amd64"),
+            ("windows", "amd64"),
+        ]
+        for platform, arch in targets:
+            for tools_enabled in [False, True]:
+                with self.subTest(platform=platform, arch=arch, tools=tools_enabled):
+                    self.platform = platform
+                    self.arch = arch
+                    self.configure(
+                        "standalone",
+                        bootstrap=True,
+                        modules={"tools": tools_enabled, "runtimes": False, "tools-re": False},
+                    )
+                    managed = self.chezmoi("managed").stdout.splitlines()
+                    expect_darwin = platform == "darwin" and tools_enabled
+                    expect_mbx = expect_darwin and arch == "arm64"
+                    self.assertEqual(".config/mise/conf.d/mbx.toml" in managed, expect_mbx)
+                    self.assertEqual(".local/share/hidden-display/hidden-display.m" in managed, expect_darwin)
+                    self.assertNotIn(".local/bin", managed)
+                    self.assertNotIn(".local/bin/python3.cmd", managed)
+                    if not expect_darwin:
+                        self.assertNotIn(".local", managed)
+                        self.assertNotIn(".local/share", managed)
+                    rendered_build = self.chezmoi("execute-template", "-f", str(build_script)).stdout
+                    self.assertEqual(bool(rendered_build.strip()), expect_darwin)
+                    if expect_mbx:
+                        mbx_body = self.chezmoi("cat", str(self.home / ".config/mise/conf.d/mbx.toml")).stdout
+                        mbx_cfg = tomllib.loads(mbx_body)
+                        self.assertEqual(mbx_cfg["tools"]["mr-boxington"], pin)
+                        self.assertEqual(mbx_cfg["env"]["MBX_CACHE_DIR"], "{{ env.HOME }}/Library/Caches/mbx")
+                        self.assertEqual(mbx_cfg["env"]["MBX_GC_MAX_TOTAL_SIZE"], "100GiB")
+                        self.assertEqual(
+                            mbx_cfg["wrappers"]["cargo"],
+                            {"command": "mbx", "env": {"MBX_CARGO_SHIM_MODE": "1"}},
+                        )
+                    rendered_mise = self.chezmoi("execute-template", "-f", str(mise_script)).stdout
+                    if platform != "windows" and tools_enabled:
+                        self.assertIn("mise install", rendered_mise)
+                        self.assertIn("mise reshim", rendered_mise)
+                        self.assertEqual("# mbx:" in rendered_mise, expect_mbx)
+        # Windows with runtimes and tools keeps .local/bin/python3.cmd without .local/share.
+        self.platform = "windows"
+        self.arch = "amd64"
+        self.configure("standalone", bootstrap=False, modules={"tools": True, "runtimes": True})
+        win_managed = self.chezmoi("managed").stdout.splitlines()
+        self.assertIn(".local/bin/python3.cmd", win_managed)
+        self.assertNotIn(".local/share", win_managed)
+        self.assertNotIn(".local/share/hidden-display/hidden-display.m", win_managed)
+        self.assertNotIn(".config/mise/conf.d/mbx.toml", win_managed)
+
+    def test_hidden_display_build_script_installs_into_local_bin(self):
+        self.platform = "darwin"
+        self.configure("standalone", bootstrap=True, modules={"runtimes": False})
+        self.apply()
+        script = ROOT / "home/.chezmoiscripts/run_onchange_after_07-install-hidden-display-darwin.sh.tmpl"
+        rendered = self.chezmoi("execute-template", "-f", str(script)).stdout
+        bins = self.base / "bin"
+        bins.mkdir()
+        calls = self.base / "clang-calls.json"
+        (bins / "xcode-select").write_text("#!/bin/sh\necho /Library/Developer/CommandLineTools\n")
+        (bins / "xcode-select").chmod(0o755)
+        (bins / "clang").write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, pathlib, sys\n"
+            "args = sys.argv[1:]\n"
+            "with open(os.environ['CLANG_CALLS'], 'w') as f:\n"
+            "    json.dump(args, f)\n"
+            "out = pathlib.Path(args[args.index('-o') + 1])\n"
+            "out.write_text('#!/bin/sh\\necho stub\\n')\n"
+        )
+        (bins / "clang").chmod(0o755)
+        env = dict(
+            os.environ,
+            HOME=str(self.home),
+            CLANG_CALLS=str(calls),
+            PATH=f"{bins}:/usr/bin:/bin",
+        )
+        result = subprocess.run(["bash"], input=rendered, text=True, capture_output=True, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        dest = self.home / ".local/bin/hidden-display"
+        self.assertTrue(dest.is_file())
+        self.assertTrue(os.access(dest, os.X_OK))
+        args = json.loads(calls.read_text())
+        self.assertIn(str(self.home / ".local/share/hidden-display/hidden-display.m"), args)
 
 
 if __name__ == "__main__":
