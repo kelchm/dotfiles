@@ -43,13 +43,17 @@ hidden-display stop     # remove the virtual display and clean up its state file
 
 ### Handing the display to an app
 
-`hidden-display ensure` prints one line: `<display-id> <x> <y>` (the CoreGraphics display ID and the display's origin in global screen coordinates). Parse those three fields and pass them to the app or harness using whatever flags or environment variables that project expects:
+Check that `hidden-display` is installed before relying on it (it is skipped when dotfiles bootstrap is off). `hidden-display ensure` prints one line: `<display-id> <x> <y>` (the CoreGraphics display ID and the display's origin in global screen coordinates). Capture its exit status before parsing so a failure never silently falls back to opening windows on the user's screen:
 
 ```bash
-read -r display_id display_x display_y < <(hidden-display ensure)
+command -v hidden-display >/dev/null 2>&1 || { echo "hidden-display not installed" >&2; exit 1; }
+display_line=$(hidden-display ensure) || exit 1
+read -r display_id display_x display_y <<<"$display_line"
 ```
 
-For example, pass `$display_id` as the target display ID and `"$display_x,$display_y"` (or `$display_x` and `$display_y` separately) as the window origin. If the caller already specified a target display, preserve it rather than overriding it.
+If `hidden-display` is missing or fails, stop and ask the user instead of opening a window on an active display. Over SSH on macOS, `ioreg` works directly, while creating a virtual display or opening GUI windows requires the logged-in user's Aqua session (for example, prefixing with `launchctl asuser "$(id -u)"`).
+
+Pass `$display_id` as the target display ID and `"$display_x,$display_y"` (or `$display_x` and `$display_y` separately) using whatever flags or environment variables that project expects. If the caller already specified a target display, preserve it rather than overriding it.
 
 Keep the hidden display running across a batch of runs so macOS does not reconfigure displays between them.
 

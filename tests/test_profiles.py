@@ -598,7 +598,8 @@ signingMethod = "none"
                     expect = platform == "darwin" and tools_enabled
                     self.assertEqual(".config/mise/conf.d/mbx.toml" in managed, expect)
                     self.assertEqual(".local/share/hidden-display/hidden-display.m" in managed, expect)
-                    self.assertEqual(".local/bin/python3.cmd" in managed, False)
+                    self.assertNotIn(".local/bin", managed)
+                    self.assertNotIn(".local/bin/python3.cmd", managed)
                     if not expect:
                         self.assertNotIn(".local", managed)
                         self.assertNotIn(".local/share", managed)
@@ -619,6 +620,14 @@ signingMethod = "none"
                         self.assertIn("mise install", rendered_mise)
                         self.assertIn("mise reshim", rendered_mise)
                         self.assertEqual("# mbx:" in rendered_mise, platform == "darwin")
+        # Windows with runtimes and tools keeps .local/bin/python3.cmd without .local/share.
+        self.platform = "windows"
+        self.configure("standalone", bootstrap=False, modules={"tools": True, "runtimes": True})
+        win_managed = self.chezmoi("managed").stdout.splitlines()
+        self.assertIn(".local/bin/python3.cmd", win_managed)
+        self.assertNotIn(".local/share", win_managed)
+        self.assertNotIn(".local/share/hidden-display/hidden-display.m", win_managed)
+        self.assertNotIn(".config/mise/conf.d/mbx.toml", win_managed)
 
     def test_hidden_display_build_script_installs_into_local_bin(self):
         self.platform = "darwin"

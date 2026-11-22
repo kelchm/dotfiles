@@ -128,6 +128,9 @@ jobs:
             mise exec -- mbx --version
             test -x "$HOME/.local/bin/hidden-display"
             test -x "$HOME/.local/share/mise/command-wrappers/bin/cargo"
-            ! "$HOME/.local/bin/hidden-display" status
+            if "$HOME/.local/bin/hidden-display" status; then
+              echo "expected hidden-display status to fail before ensure" >&2
+              exit 1
+            fi
             python3 -m unittest -v tests.test_hidden_display
           fi

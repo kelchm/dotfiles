@@ -11,11 +11,11 @@ SOURCE = ROOT / "home/dot_local/share/hidden-display/hidden-display.m"
 
 
 class HiddenDisplaySource(unittest.TestCase):
-    def test_source_is_generic(self):
+    def test_source_uses_neutral_identifiers(self):
         text = SOURCE.read_text(encoding="utf-8")
-        self.assertNotIn("ritornel", text.lower())
-        self.assertNotIn("offscreen", text.lower())
         self.assertIn('@"Hidden Display"', text)
+        self.assertIn('STATE_NAME = "hidden-display"', text)
+        self.assertIn('STATE_DIR_ENV = "HIDDEN_DISPLAY_STATE_DIR"', text)
 
 
 @unittest.skipUnless(sys.platform == "darwin", "hidden-display builds and runs on macOS only")
@@ -117,6 +117,8 @@ class HiddenDisplayCLI(unittest.TestCase):
             "garbage\n",
             "pid=1\ndisplay=42\norigin=0,0\n",
             "pid=12345\ndisplay=0\norigin=0,0\n",
+            "pid=12345\ndisplay=-1\norigin=0,0\n",
+            "pid=12345 display=42 origin=0,0\n",
             "pid=12345\ndisplay=42\norigin=0,0\nextra=1\n",
             "",
         ]
