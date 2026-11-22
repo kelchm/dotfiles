@@ -36,11 +36,13 @@ dua aggregate -x --deduplicate-apfs-clones ~/Library ~/Development ~/.cache
 
 ## 4. Estimate a specific deletion
 
-For regular uncompressed files, macOS reports a per-file *private size* (`ATTR_CMNEXT_PRIVATESIZE`): data-fork bytes not shared with any clone or snapshot. gdu's `--exclusive-size` queries it on macOS in releases after 5.39.0:
+For regular uncompressed files, macOS reports a per-file *private size* (`ATTR_CMNEXT_PRIVATESIZE`): data-fork bytes not shared with any clone or snapshot. gdu's `--exclusive-size` queries it on macOS in releases after `5.39.0` (`5.39.0` does not include macOS support yet):
 
 ```sh
 mise x aqua:dundee/gdu@<version> -- gdu --exclusive-size --non-interactive <candidate>
 ```
+
+Until a `gdu` release with macOS `--exclusive-size` ships (or when private size is otherwise unavailable), leave the per-deletion reclaim estimate unknown and rely on `dua --deduplicate-apfs-clones` for combined footprint or the post-deletion free-space change for reproducible data.
 
 Summed private sizes are a defensible lower bound **only** for verified unshared, uncompressed file data whose hard links all disappear in the deletion set:
 
