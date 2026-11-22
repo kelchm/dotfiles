@@ -14,7 +14,7 @@ Check these first when a cleanup frees less than expected. They were the largest
 
 ## VMs and containers
 
-- **Docker build cache** is usually the largest reclaimable item inside a Docker VM (Colima, Lima, Docker Desktop, OrbStack). It showed up as tens of GiB per builder. Inspect it with `docker system df -v` for the daemon's own builder, and list other builders with `docker buildx ls` and `docker buildx du --builder <name>`. Use `docker builder prune --all` (or `docker buildx prune --builder <name> --all`) for reproducible build cache.
+- **Docker build cache** is usually the largest reclaimable item inside a Docker VM (Colima, Lima, Docker Desktop, OrbStack). It showed up as tens of GiB per builder. Inspect it with `docker system df -v` for the daemon's own builder, and list all builders with `docker buildx ls` and `docker buildx du --builder <name>`. Always prune by explicit builder name with `docker buildx prune --builder <name> --all` (naming the exact inspected builder from `docker buildx ls`, including the daemon's builder) rather than an unqualified `docker builder prune --all`, which can target whichever builder is currently selected.
 - **Scoped Docker image removal (no blanket `docker image prune --all`):** inspect images first (`docker image ls --digests`, `docker image inspect <id>`). Remove specific images with `docker image rm <image-id-or-ref>` only when backed by evidence of recovery:
   - a **pullable immutable digest** verified in its registry (for example `docker buildx imagetools inspect <repo@sha256:...>`);
   - a **checksum-verified archive** for that exact image (for example `docker image save -o <archive.tar> <ref>` verified against its digest/checksum and exact image ID); or
