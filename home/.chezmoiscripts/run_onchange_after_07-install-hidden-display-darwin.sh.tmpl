@@ -1,0 +1,30 @@
+{{- if and .bootstrap .modules.tools (eq .chezmoi.os "darwin") -}}
+#!/bin/bash
+set -euo pipefail
+
+# hash: {{ include "dot_local/share/hidden-display/hidden-display.m" | sha256sum }}
+
+src="$HOME/.local/share/hidden-display/hidden-display.m"
+bin_dir="$HOME/.local/bin"
+dest="$bin_dir/hidden-display"
+
+if [ ! -f "$src" ]; then
+  echo "hidden-display: source file not found at $src" >&2
+  exit 1
+fi
+
+# Check Xcode Command Line Tools before invoking /usr/bin/clang so a missing
+# toolchain fails cleanly instead of opening the macOS GUI installer prompt.
+if ! xcode-select -p >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1; then
+  echo "hidden-display: Xcode Command Line Tools (clang) are required. Run 'xcode-select --install'." >&2
+  exit 1
+fi
+
+mkdir -p "$bin_dir"
+tmp="$dest.tmp.$$"
+trap 'rm -f "$tmp"' EXIT
+clang -Wall -Wextra -fobjc-arc -framework Foundation -framework CoreGraphics \
+  "$src" -o "$tmp"
+chmod 0755 "$tmp"
+mv -f "$tmp" "$dest"
+{{- end }}

@@ -39,16 +39,18 @@ for _brew in /opt/homebrew /home/linuxbrew/.linuxbrew "$HOME/.linuxbrew"; do
 done
 unset _brew
 
-# Precedence (highest first): ~/.local/bin > mise shims > cargo > brew > system.
+# Precedence (highest first): ~/.local/bin > mise command-wrappers > mise shims > cargo > brew > system.
 # Listed low-to-high because path_prepend moves each to the front.
 #
-# Rust: cargo/rustc resolve via the mise shims. mise's rust backend delegates to rustup,
-# so ~/.cargo/bin holds rustup's proxies (cargo -> rustup, ...) plus `cargo install`
-# binaries — kept below the shims so mise stays authoritative for per-repo switching via
-# rust-toolchain.toml. (We deliberately don't source rustup's ~/.cargo/env.)
+# Rust: cargo/rustc resolve via mise's command-wrappers (when configured, e.g. mbx on macOS)
+# and shims. mise's rust backend delegates to rustup, so ~/.cargo/bin holds rustup's proxies
+# (cargo -> rustup, ...) plus `cargo install` binaries — kept below mise so wrappers and
+# per-repo rust-toolchain.toml switching stay authoritative. (We deliberately don't source
+# rustup's ~/.cargo/env.)
 [ -n "${HOMEBREW_PREFIX:-}" ] && { path_prepend "$HOMEBREW_PREFIX/sbin"; path_prepend "$HOMEBREW_PREFIX/bin"; }
 path_prepend "$HOME/.cargo/bin"
 path_prepend "$HOME/.local/share/mise/shims"
+path_prepend "$HOME/.local/share/mise/command-wrappers/bin"
 path_prepend "$HOME/.local/bin"
 
 export PATH

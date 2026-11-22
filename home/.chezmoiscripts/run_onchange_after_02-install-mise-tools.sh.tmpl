@@ -3,6 +3,9 @@
 set -euo pipefail
 
 # hash: {{ includeTemplate "mise/config.toml" . | sha256sum }}
+{{- if eq .chezmoi.os "darwin" }}
+# mbx: {{ .dotfiles.pins.mrBoxington }} {{ include "dot_config/mise/conf.d/mbx.toml.tmpl" | sha256sum }}
+{{- end }}
 
 if ! command -v mise >/dev/null 2>&1; then
   echo "mise not found on PATH. Install mise before applying tools." >&2
@@ -10,4 +13,5 @@ if ! command -v mise >/dev/null 2>&1; then
 fi
 
 mise install
+mise reshim
 {{- end }}

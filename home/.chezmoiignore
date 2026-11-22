@@ -37,3 +37,14 @@
 {{ if not $hasConfigTargets }}
 .config
 {{ end }}
+{{- $hasLocalBin := and .modules.runtimes (eq .chezmoi.os "windows") -}}
+{{- $hasLocalShare := and .modules.tools (eq .chezmoi.os "darwin") -}}
+{{ if not $hasLocalBin }}
+.local/bin
+{{ end -}}
+{{ if not $hasLocalShare }}
+.local/share
+{{ end -}}
+{{ if not (or $hasLocalBin $hasLocalShare) }}
+.local
+{{ end }}

@@ -11,12 +11,12 @@ for brew_bin in /opt/homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew $HOME
     end
 end
 
-# fish uses `mise activate` (hook mode), so mise-managed tools — including the pinned
-# Rust toolchain inside a rust-toolchain.toml repo — come from the activate hook, not a
-# shims dir on PATH. Add ~/.cargo/bin for cargo (rustup proxies + `cargo install` bins)
-# outside rust repos; add ~/.local/bin last so it stays highest priority.
-mise activate fish | source
+# Add ~/.cargo/bin (rustup proxies + `cargo install` bins) BEFORE `mise activate` so
+# mise-managed toolchains and command wrappers (e.g. `mbx` for `cargo` on macOS) stay
+# ahead of ~/.cargo/bin in both interactive and non-interactive fish shells. Add
+# ~/.local/bin last so it stays highest priority.
 test -d $HOME/.cargo/bin; and fish_add_path -gP $HOME/.cargo/bin
+mise activate fish | source
 fish_add_path -gP $HOME/.local/bin
 
 # 1Password SSH agent — only when the macOS socket exists (absent on Linux/Windows).
