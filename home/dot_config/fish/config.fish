@@ -1,10 +1,12 @@
 # Environment — runs for every fish shell (interactive or not) so scripts get PATH too.
+# Keep MISE_FISH_AUTO_ACTIVATE=0 for child shells; conf.d/mise-activate.fish
+# shadows Homebrew's vendor_conf.d snippet in clean GUI/launchd environments.
 set -gx MISE_FISH_AUTO_ACTIVATE 0
 
-# Homebrew — Apple Silicon mac or Linuxbrew. Use the fish dialect explicitly; a bare
-# `brew shellenv` can misdetect the shell in a non-interactive spawn and emit POSIX
-# syntax that fish can't parse (`${ is not a valid variable in fish`).
-for brew_bin in /opt/homebrew/bin/brew /home/linuxbrew/.linuxbrew/bin/brew $HOME/.linuxbrew/bin/brew
+# Homebrew — Apple Silicon mac, Intel mac, or Linuxbrew. Use the fish dialect
+# explicitly; a bare `brew shellenv` can misdetect the shell in a non-interactive
+# spawn and emit POSIX syntax that fish can't parse (`${ is not a valid variable in fish`).
+for brew_bin in /opt/homebrew/bin/brew /usr/local/bin/brew /home/linuxbrew/.linuxbrew/bin/brew $HOME/.linuxbrew/bin/brew
     if test -x $brew_bin
         $brew_bin shellenv fish | source
         break
@@ -17,7 +19,7 @@ end
 # so inherited PATH entries still land in deterministic order; add ~/.local/bin last
 # so it stays highest priority.
 test -d $HOME/.cargo/bin; and fish_add_path -gPm $HOME/.cargo/bin
-mise activate fish | source
+command -q mise; and mise activate fish | source
 fish_add_path -gPm $HOME/.local/bin
 
 # 1Password SSH agent — only when the macOS socket exists (absent on Linux/Windows).

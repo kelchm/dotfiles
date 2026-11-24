@@ -8,11 +8,20 @@ APFS volumes in one container share its free space, and APFS clones share blocks
 diskutil info "$target" | grep -E 'Container (Total|Free) Space|Volume Used Space|APFS Container'
 diskutil apfs list            # every volume in the container and its usage
 tmutil listlocalsnapshots /   # local snapshots
+tmutil status                 # check Running = 1 (active Time Machine backup) up front
 ```
 
 Pass a path on the volume you are cleaning (`/` for the startup disk). *Container Free Space* is the number cleanup changes. Finder's "available" figure includes purgeable data macOS can evict on its own, so it is not free space and not something cleanup frees. The space a snapshot retains is not reported by these commands. Use Disk Utility's snapshot list for it, and don't infer it from available minus free.
 
 ## 2. Rank directories
+
+Prefer multi-threaded `dua aggregate -x -f binary --stats` over single-threaded `du -xk -d 1` on large APFS volumes (`du` can stall >60s on millions of entries, while `dua` scans concurrently and reports per-directory I/O error counts). Set `MISE_AUTO_INSTALL=0` so a read-only audit does not download or install tools on the volume being measured:
+
+```sh
+(cd /System/Volumes/Data && MISE_AUTO_INSTALL=0 mise x aqua:Byron/dua-cli@3.0.3 -- dua aggregate -x -f binary --stats)
+```
+
+Avoid wrapping `dua` in a shell function (`dua() { ... }`), which breaks `xargs dua`; invoke `mise x ... -- dua` directly (or use a bash/zsh array `"${dua[@]}"`). `mise` shims (`dua`, `go`, `pnpm`) error when no global version is pinned, so invoke them through `mise x <tool> -- ...`. Fall back to `du` on small trees or if `dua` is not installed:
 
 ```sh
 out=$(mktemp -d "${TMPDIR:-/tmp}/disk-audit.XXXXXX")
@@ -23,11 +32,10 @@ Drill into the largest children, usually the home directory, workspaces, `/priva
 
 ## 3. Count clones once
 
-[dua-cli](https://github.com/Byron/dua-cli) 3.0.3+ counts fully shared clones once with `--deduplicate-apfs-clones`. Run it without installing anything globally:
+[dua-cli](https://github.com/Byron/dua-cli) 3.0.3+ counts fully shared clones once with `--deduplicate-apfs-clones`. Run it without installing anything globally (set `MISE_AUTO_INSTALL=0` to avoid installing during measurement, or omit it when installing `dua` is acceptable):
 
 ```sh
-dua() { mise x aqua:Byron/dua-cli@3.0.3 -- dua "$@"; }
-dua aggregate -x --deduplicate-apfs-clones ~/Library ~/Development ~/.cache
+MISE_AUTO_INSTALL=0 mise x aqua:Byron/dua-cli@3.0.3 -- dua aggregate -x --deduplicate-apfs-clones ~/Library ~/Development ~/.cache
 ```
 
 - Within one run, each clone family is charged to a single path, and the total is their real combined footprint. A large drop compared with `du` means the lead is mostly clones.
@@ -36,7 +44,7 @@ dua aggregate -x --deduplicate-apfs-clones ~/Library ~/Development ~/.cache
 
 ## 4. Estimate a specific deletion
 
-For regular uncompressed files, macOS reports a per-file *private size* (`ATTR_CMNEXT_PRIVATESIZE`): data-fork bytes not shared with any clone or snapshot. gdu's `--exclusive-size` queries it on macOS in releases after `5.39.0` (`5.39.0` does not include macOS support yet):
+For regular uncompressed files, macOS reports a per-file *private size* (`ATTR_CMNEXT_PRIVATESIZE`): data-fork bytes not shared with any clone or snapshot. `dundee/gdu`'s `--exclusive-size` queries it on macOS in releases after `5.39.0` (`5.39.0` does not include macOS support yet). Note that Homebrew GNU `coreutils` installs its own `gdu` (GNU `du`), which shadows `dundee/gdu` on `PATH` unless invoked explicitly through `mise x`:
 
 ```sh
 mise x aqua:dundee/gdu@<version> -- gdu --exclusive-size --non-interactive <candidate>
@@ -57,8 +65,8 @@ For reproducible data such as caches and build output, the observed container fr
 ## Common large owners
 
 - **VMs and containers:** Docker Desktop, Colima, OrbStack, UTM and Parallels keep large disk images. Match each image to a registered machine (`colima list`, `docker context ls`), follow the scoped Docker cleanup, guest trim, and VM power-state rules in [Common causes](common-causes.md#vms-and-containers), and remeasure both host disk image allocation (`du -k <image>` or `ls -ls <image>`) and container free space.
-- **Package and toolchain caches:** Homebrew, mise, pnpm, npm, Cargo, Go, Xcode `DerivedData` and simulators. Use the owner's preview (such as `brew cleanup --dry-run`), and vet `mise` candidates before uninstalling exact versions (see [Common causes](common-causes.md#package-and-toolchain-caches)). For pnpm, `pnpm store path` (or a project's `node_modules/.modules.yaml`) locates the store.
-- **Build output:** `target/`, `node_modules/`, `.build/`, `dist/`. Confirm with `git check-ignore` and `git ls-files` on the exact path. Use scoped commands such as `cargo clean --target-dir <dir>`. Check `lsof -nP +D <dir>` on small trees.
+- **Package and toolchain caches:** Homebrew, mise, mbx, pnpm, npm, Cargo, Go, Xcode `DerivedData` and simulators. Use the owner's preview (such as `brew cleanup --dry-run`), and vet `mise` candidates before uninstalling exact versions (see [Common causes](common-causes.md#package-and-toolchain-caches)). For pnpm, `pnpm store path` (or a project's `node_modules/.modules.yaml`) locates the store.
+- **Build output:** `target/`, `node_modules/`, `.build/`, `dist/`. Confirm with `git -C "$toplevel" check-ignore -q "$rel"` and `git ls-files` on the exact path from the repo toplevel. Use scoped commands such as `cargo clean --target-dir <dir>`. Check `lsof -nP +D <dir>` on small trees.
 
 ## Snapshots, backups, and prevention
 
