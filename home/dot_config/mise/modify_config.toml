@@ -8,10 +8,11 @@
 {{- /* These aliases are the same managed tools, not independent installs.
      Normalize only their declarations; never uninstall another backend here. */ -}}
 {{- $tools := get $config "tools" | default dict -}}
-{{- $aliases := dict "gh" "aqua:cli/cli" "opencode" "npm:@opencode/cli" "antigravity-cli" "agy" -}}
+{{- $aliases := dict "gh" "aqua:cli/cli" "opencode" "npm:@opencode/cli" -}}
 {{- if eq .profile "omarchy" -}}
-  {{- $aliases = dict "aqua:cli/cli" "gh" "npm:@opencode/cli" "opencode" "agy" "antigravity-cli" -}}
+  {{- $aliases = dict "aqua:cli/cli" "gh" "npm:@opencode/cli" "opencode" -}}
 {{- end -}}
+{{- $_ := set $aliases "agy" "antigravity-cli" -}}
 {{- range $oldName, $name := $aliases -}}
   {{- $old := get $tools $oldName -}}
   {{- if kindIs "map" $old -}}
