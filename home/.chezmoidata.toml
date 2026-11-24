@@ -46,6 +46,8 @@ agents = [
     ".claude/**",
     ".codex",
     ".codex/**",
+    ".gemini",
+    ".gemini/**",
     ".pi",
     ".pi/**",
     ".config/opencode",
@@ -64,6 +66,7 @@ tools-re = [
     ".agents/skills/reverse-engineer-anything/**",
     ".claude/skills/reverse-engineer-anything",
     ".codex/skills/reverse-engineer-anything",
+    ".gemini/config/skills/reverse-engineer-anything",
     ".pi/agent/skills/reverse-engineer-anything",
 ]
 runtimes = [

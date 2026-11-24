@@ -101,7 +101,7 @@ auto_prune = false
 [tasks.local]
 run = "echo keep"
 ''')
-        for tool_dir in [".agents/skills", ".codex/skills", ".claude/skills", ".pi/agent/skills"]:
+        for tool_dir in [".agents/skills", ".codex/skills", ".claude/skills", ".gemini/config/skills", ".pi/agent/skills"]:
             p = self.home / tool_dir / "omarchy"
             p.parent.mkdir(parents=True, exist_ok=True)
             p.symlink_to("/usr/share/omarchy/default/agents/skills/omarchy")
@@ -126,7 +126,7 @@ run = "echo keep"
         upgrades = config["tasks"]["harness:update"]["run"].split()[2:]
         self.assertIn("antigravity-cli", upgrades)
         self.assertNotIn("agy", upgrades)
-        for harness in [".claude/skills", ".codex/skills", ".pi/agent/skills"]:
+        for harness in [".claude/skills", ".codex/skills", ".gemini/config/skills", ".pi/agent/skills"]:
             self.assertTrue((self.home / harness / "omarchy").is_symlink())
             for skill in ["pr-monitor", "gh-stack"]:
                 self.assertEqual((self.home / harness / skill).resolve(),
@@ -210,7 +210,7 @@ extra_bins = ["opencode2"]
         source = ROOT / "home/dot_agents/skills/reverse-engineer-anything"
         self.assertEqual((skill / "SKILL.md").read_bytes(), (source / "SKILL.md").read_bytes())
         self.assertTrue((skill / "references/native-and-artifacts.md").is_file())
-        for harness in [".claude/skills", ".codex/skills", ".pi/agent/skills"]:
+        for harness in [".claude/skills", ".codex/skills", ".gemini/config/skills", ".pi/agent/skills"]:
             self.assertEqual((self.home / harness / skill.name).resolve(), skill.resolve())
         self.assertEqual(local.read_bytes(), original)
         first = mise.read_bytes()
@@ -280,6 +280,7 @@ extra_bins = ["opencode2"]
         self.assertIn("npm:rea-agents", config["tools"])
         self.assertFalse((self.home / ".agents").exists())
         self.assertFalse((self.home / ".codex").exists())
+        self.assertFalse((self.home / ".gemini").exists())
         external = self.chezmoi("execute-template", "-f", str(ROOT / "home/.chezmoiexternal.toml")).stdout
         self.assertNotIn("rea-agents", external)
 
@@ -308,6 +309,9 @@ minimum_release_age = "24h"
 ''')
                 managed = self.chezmoi("managed").stdout.splitlines()
                 self.assertIn(".config/starship.toml", managed)
+                self.assertIn(".gemini/AGENTS.md", managed)
+                self.assertIn(".gemini/config/skills/pr-monitor", managed)
+                self.assertIn(".gemini/config/skills/reverse-engineer-anything", managed)
                 self.assertFalse(any("/tests/" in target for target in managed))
                 self.assertFalse(any("build-onedark-theme" in target for target in managed))
                 self.assertEqual(".bashrc" in managed, platform != "windows")
@@ -336,7 +340,7 @@ minimum_release_age = "24h"
     def test_disabled_modules_and_bootstrap(self):
         self.configure(modules={m: False for m in MODULES})
         self.apply()
-        for target in [".gitconfig", ".codex/AGENTS.md", ".config/mise/config.toml"]:
+        for target in [".gitconfig", ".codex/AGENTS.md", ".gemini/AGENTS.md", ".config/mise/config.toml"]:
             self.assertFalse((self.home / target).exists())
         for script in sorted((ROOT / "home/.chezmoiscripts").glob("run*.tmpl")):
             self.assertFalse(self.chezmoi("execute-template", "-f", str(script)).stdout.strip())
@@ -610,8 +614,32 @@ signingMethod = "none"
         self.apply()
         skill = self.home / ".agents/skills/gui-testing"
         self.assertTrue((skill / "SKILL.md").is_file())
-        for harness in [".claude/skills", ".codex/skills", ".pi/agent/skills"]:
+        for harness in [".claude/skills", ".codex/skills", ".gemini/config/skills", ".pi/agent/skills"]:
             self.assertEqual((self.home / harness / "gui-testing").resolve(), skill.resolve())
+
+    def test_antigravity_instructions_and_skills_preserve_local_state(self):
+        self.configure("standalone")
+        config_json = self.seed(".gemini/config/config.json", '{"plugins":{"swarm":{"enabled":true}}}\n')
+        mcp_config = self.seed(".gemini/config/mcp_config.json", "{}\n")
+        cli_settings = self.seed(".gemini/antigravity-cli/settings.json", '{"trustedWorkspaces":[]}\n')
+        self.apply()
+        gemini_agents = self.home / ".gemini/AGENTS.md"
+        codex_agents = self.home / ".codex/AGENTS.md"
+        self.assertEqual(gemini_agents.read_bytes(), codex_agents.read_bytes())
+        expected_skills = sorted(
+            p.name for p in (ROOT / "home/dot_agents/skills").iterdir()
+            if p.is_dir() and p.name != "reverse-engineer-anything"
+        ) + ["gh-stack"]
+        for skill in expected_skills:
+            link = self.home / ".gemini/config/skills" / skill
+            self.assertTrue(link.is_symlink(), f"missing symlink for {skill}")
+            self.assertEqual(link.resolve(), (self.home / ".agents/skills" / skill).resolve())
+        self.assertFalse((self.home / ".gemini/config/skills/reverse-engineer-anything").exists())
+        self.assertEqual(config_json.read_text(), '{"plugins":{"swarm":{"enabled":true}}}\n')
+        self.assertEqual(mcp_config.read_text(), "{}\n")
+        self.assertEqual(cli_settings.read_text(), '{"trustedWorkspaces":[]}\n')
+        self.apply()
+        self.chezmoi("verify", "--exclude", "scripts")
 
     def test_mbx_and_hidden_display_scoping(self):
         pin = tomllib.loads((ROOT / "home/.chezmoidata.toml").read_text())["dotfiles"]["pins"]["mrBoxington"]
