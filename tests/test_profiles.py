@@ -112,11 +112,14 @@ run = "echo keep"
         self.assertEqual(config["tools"]["gh"], "latest")
         self.assertNotIn("aqua:cli/cli", config["tools"])
         self.assertNotIn("npm:@opencode/cli", config["tools"])
+        self.assertEqual(config["tools"]["agy"], "latest")
+        self.assertEqual(config["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"], "true")
         self.assertEqual(config["env"]["LOCAL"], "keep")
         self.assertEqual(config["settings"]["minimum_release_age"], "24h")
         self.assertFalse(config["settings"]["upgrade"]["auto_prune"])
         self.assertEqual(config["tasks"]["local"]["run"], "echo keep")
         self.assertEqual(config["tasks"]["harness:update"]["env"]["MISE_MINIMUM_RELEASE_AGE"], "0")
+        self.assertIn("agy", config["tasks"]["harness:update"]["run"].split()[2:])
         for harness in [".claude/skills", ".codex/skills", ".pi/agent/skills"]:
             self.assertTrue((self.home / harness / "omarchy").is_symlink())
             for skill in ["pr-monitor", "gh-stack"]:
@@ -295,6 +298,8 @@ extra_bins = ["opencode2"]
                 self.assertEqual(config["tools"]["node"], "lts")
                 self.assertEqual(config["tools"]["python"], "3.12")
                 self.assertEqual(config["tools"]["aqua:cli/cli"], "2.101.0")
+                self.assertEqual(config["tools"]["agy"], "latest")
+                self.assertIn("agy", config["tasks"]["harness:update"]["run"].split()[2:])
                 self.assertIn("npm:rea-agents", config["tools"])
                 self.assertNotIn("minimum_release_age", config.get("settings", {}))
                 for script in sorted((ROOT / "home/.chezmoiscripts").glob("run*.sh.tmpl")):
