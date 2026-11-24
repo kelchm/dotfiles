@@ -28,6 +28,29 @@ Then apply. When installed, 1Password's Linux signer at `/opt/1Password/op-ssh-s
 
 The SSH merge appends a fallback `Host *` block to `~/.ssh/config`, so existing per-host agent choices (including `IdentityAgent none`) keep precedence. `sshAgent = "system"` removes only that block. On Windows, enable 1Password's named-pipe agent in the app; this repo does not configure a POSIX socket there.
 
+## NetBird
+
+Install the prebuilt client from the AUR, register its default daemon unit, and allow mesh and direct WireGuard traffic through UFW:
+
+```bash
+omarchy pkg aur add netbird-bin
+sudo netbird service install
+sudo netbird service start
+sudo ufw allow in on wt0 comment 'NetBird mesh'
+sudo ufw allow 51820/udp comment 'NetBird WireGuard P2P'
+netbird up
+```
+
+Use `netbird service install` rather than enabling `netbird@main.service`: the template unit listens on `/var/run/netbird/main.sock`, whereas the CLI and bar widget expect `/var/run/netbird.sock`. Omarchy routes lookups through `systemd-resolved` (`nss-resolve` and the stub resolver), so NetBird configures split DNS automatically over D-Bus without `openresolv`; `omarchy update` upgrades `netbird-bin` alongside other AUR packages.
+
+On Quickshell-based Omarchy (`4.x`, with `KeyboardPanel.content`), add [`mikebenner/omarchy-netbird`](https://github.com/mikebenner/omarchy-netbird) for a native bar panel instead of the WebKitGTK tray client:
+
+```bash
+omarchy plugin add https://github.com/mikebenner/omarchy-netbird.git --enable
+```
+
+Shell plugins run unsandboxed inside `omarchy-shell`, so review upstream changes before running `omarchy plugin update mikebenner.netbird`, then run `omarchy restart shell` so its `keepLoaded` background service reloads too.
+
 ## Launching and updating tools
 
 The profile uses Omarchy's `claude`, `codex`, `opencode`, `pi`, and `gh` declarations. These `latest` settings agree with its first-run launchers, which can run `mise use -g`. Grok is installed through mise's `grok` registry backend; Omarchy's fallback wrapper uses a different npm backend. Use the activated shell or mise shims so the installed registry tool takes precedence. Current Omarchy registries resolve `opencode` to OpenCode 2's npm backend; on an older registry, update mise first.
