@@ -29,11 +29,11 @@ Customize this machine with `chezmoi edit-config`. The [profile guide](docs/prof
 chezmoi diff                 # review rendered changes
 chezmoi apply                # apply settings; bootstrap missing tools when config changes
 mise install                 # restore missing tools
-mise run harness:update      # update only Claude, Codex, Grok, OpenCode, and Pi
+mise run harness:update      # update the agent CLIs
 chezmoi edit ~/.config/git/dotfiles.gitconfig  # edit personal Git settings
 ```
 
-`harness:update` bypasses release delays for those five tools. Runtime versions belong in project `mise.toml` files, or the optional global `runtimes` module. On Omarchy, `omarchy update` also updates mise tools.
+`harness:update` bypasses release delays for Antigravity (`agy`), Claude, Codex, Grok, OpenCode, and Pi. Runtime versions belong in project `mise.toml` files, or the optional global `runtimes` module. On Omarchy, `omarchy update` also updates mise tools.
 
 ## Repository layout
 

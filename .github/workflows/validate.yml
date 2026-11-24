@@ -121,7 +121,7 @@ jobs:
         run: |
           mise ls --global
           test -z "$(mise ls --global --missing)"
-          for tool in claude codex uv node python mbx; do mise exec -- "$tool" --version; done
+          for tool in agy claude codex uv node python mbx; do mise exec -- "$tool" --version; done
           # Use mise's gh, not the runner's preinstalled one.
           "$(mise which gh)" extension list | grep -q github/gh-stack
           if [ "$(uname -s)" = "Darwin" ]; then
