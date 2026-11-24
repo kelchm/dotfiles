@@ -41,9 +41,9 @@ sudo ufw allow 51820/udp comment 'NetBird WireGuard P2P'
 netbird up
 ```
 
-Use `netbird service install` rather than enabling `netbird@main.service`: the template unit listens on `/var/run/netbird/main.sock`, whereas the CLI and bar widget expect `/var/run/netbird.sock`. NetBird configures split DNS automatically over D-Bus when `systemd-resolved` is active, so `openresolv` is not needed; `omarchy update` upgrades `netbird-bin` alongside other AUR packages.
+Use `netbird service install` rather than enabling `netbird@main.service`: the template unit listens on `/var/run/netbird/main.sock`, whereas the CLI and bar widget expect `/var/run/netbird.sock`. Omarchy routes lookups through `systemd-resolved` (`nss-resolve` and the stub resolver), so NetBird configures split DNS automatically over D-Bus without `openresolv`; `omarchy update` upgrades `netbird-bin` alongside other AUR packages.
 
-For a native bar panel instead of the WebKitGTK tray client, add [`mikebenner/omarchy-netbird`](https://github.com/mikebenner/omarchy-netbird):
+On Quickshell-based Omarchy (`4.x`, with `KeyboardPanel.content`), add [`mikebenner/omarchy-netbird`](https://github.com/mikebenner/omarchy-netbird) for a native bar panel instead of the WebKitGTK tray client:
 
 ```bash
 omarchy plugin add https://github.com/mikebenner/omarchy-netbird.git --enable
