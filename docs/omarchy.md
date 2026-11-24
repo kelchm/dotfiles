@@ -36,7 +36,7 @@ Use the activated Bash shell or mise shims. GUI launchers outside an activated s
 
 ```bash
 mise install
-mise run harness:update       # agent CLIs only; release delay bypassed
+mise run harness:update       # agent CLIs only
 omarchy update                # normal system update, including mise tools
 ```
 
