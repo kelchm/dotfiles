@@ -711,6 +711,32 @@ signingMethod = "none"
         args = json.loads(calls.read_text())
         self.assertIn(str(self.home / ".local/share/hidden-display/hidden-display.m"), args)
 
+    def test_package_manifests_include_netbird_and_scope_by_platform(self):
+        darwin_script = ROOT / "home/.chezmoiscripts/run_onchange_after_01-install-packages-darwin.sh.tmpl"
+        windows_script = ROOT / "home/.chezmoiscripts/run_onchange_after_01-install-packages-windows.ps1.tmpl"
+        for platform in ["darwin", "windows", "linux"]:
+            with self.subTest(platform=platform):
+                self.platform = platform
+                self.configure("standalone", bootstrap=True)
+                managed = self.chezmoi("managed").stdout.splitlines()
+                self.assertEqual(".config/packages/Brewfile" in managed, platform == "darwin")
+                self.assertEqual(".config/packages/winget.json" in managed, platform == "windows")
+                rendered_darwin = self.chezmoi("execute-template", "-f", str(darwin_script)).stdout
+                rendered_windows = self.chezmoi("execute-template", "-f", str(windows_script)).stdout
+                self.assertEqual("brew bundle" in rendered_darwin, platform == "darwin")
+                self.assertEqual("winget import" in rendered_windows, platform == "windows")
+                if platform == "darwin":
+                    self.apply()
+                    brewfile = (self.home / ".config/packages/Brewfile").read_text()
+                    self.assertIn('tap "netbirdio/tap"', brewfile)
+                    self.assertIn('brew "netbird"', brewfile)
+                    self.assertIn('cask "netbirdio/tap/netbird-ui"', brewfile)
+                elif platform == "windows":
+                    self.apply()
+                    winget = json.loads((self.home / ".config/packages/winget.json").read_text())
+                    ids = [pkg["PackageIdentifier"] for pkg in winget["Sources"][0]["Packages"]]
+                    self.assertIn("Netbird.Netbird", ids)
+
 
 if __name__ == "__main__":
     unittest.main()
