@@ -739,6 +739,108 @@ signingMethod = "none"
         args = json.loads(calls.read_text())
         self.assertIn(str(self.home / ".local/share/hidden-display/hidden-display.m"), args)
 
+    def test_fish_mise_activate_shadow_scoping_and_precedence(self):
+        target = ".config/fish/conf.d/mise-activate.fish"
+        for platform, profile, expected in [
+            ("darwin", "standalone", True),
+            ("linux", "standalone", True),
+            ("windows", "standalone", False),
+            ("linux", "omarchy", False),
+        ]:
+            with self.subTest(platform=platform, profile=profile):
+                self.platform = platform
+                self.configure(profile)
+                managed = self.chezmoi("managed").stdout.splitlines()
+                self.assertEqual(target in managed, expected)
+
+        if os.name == "nt":
+            return
+        fish = shutil.which("fish")
+        if not fish:
+            return
+        self.platform = "darwin"
+        self.arch = "arm64"
+        self.configure("standalone")
+        self.apply()
+        shadow = self.home / target
+        self.assertTrue(shadow.is_file())
+
+        # Seed stub cargo executables in both ~/.cargo/bin and mise's command-wrappers/bin.
+        cargo_bin = self.home / ".cargo/bin/cargo"
+        wrapper_bin = self.home / ".local/share/mise/command-wrappers/bin/cargo"
+        for stub in (cargo_bin, wrapper_bin):
+            stub.parent.mkdir(parents=True, exist_ok=True)
+            stub.write_text("#!/bin/sh\nexit 0\n")
+            stub.chmod(0o755)
+
+        # Provide a fallback stub mise for hosts without mise (e.g. Linux CI); on hosts
+        # with Homebrew mise, config.fish activates the real mise against self.home.
+        stub_dir = self.base / "bin"
+        stub_dir.mkdir(exist_ok=True)
+        mise_stub = stub_dir / "mise"
+        mise_stub.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = activate ] && [ \"$2\" = fish ]; then\n"
+            "  printf 'if not contains -- \"$HOME/.local/share/mise/command-wrappers/bin\" $PATH\\n'\n"
+            "  printf '  set -gx PATH \"$HOME/.local/share/mise/command-wrappers/bin\" $PATH\\n'\n"
+            "  printf 'end\\n'\n"
+            "fi\n"
+        )
+        mise_stub.chmod(0o755)
+
+        # Simulate Homebrew's vendor_conf.d/mise-activate.fish activating mise before config.fish.
+        vendor = self.base / "vendor-data/fish/vendor_conf.d/mise-activate.fish"
+        vendor.parent.mkdir(parents=True)
+        vendor.write_text(
+            'if [ "$MISE_FISH_AUTO_ACTIVATE" != "0" ]\n'
+            '  echo VENDOR_RAN\n'
+            '  if command -q mise\n'
+            '    mise activate fish | source\n'
+            '  else if test -x /opt/homebrew/opt/mise/bin/mise\n'
+            '    /opt/homebrew/opt/mise/bin/mise activate fish | source\n'
+            '  end\n'
+            'end\n'
+        )
+        env = {
+            "HOME": str(self.home),
+            "USER": os.environ.get("USER", "test"),
+            "XDG_DATA_DIRS": str(self.base / "vendor-data"),
+            "MISE_CEILING_PATHS": str(self.home.resolve()),
+            "MISE_TRUSTED_CONFIG_PATHS": str(self.home.resolve() / ".config/mise"),
+            "PATH": f"{stub_dir}:/usr/bin:/bin:/usr/sbin:/sbin",
+        }
+        with_shadow = subprocess.run(
+            [fish, "-lc", "which -a cargo"],
+            cwd=str(self.home),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(with_shadow.stderr, "")
+        self.assertNotIn("VENDOR_RAN", with_shadow.stdout)
+        resolved = with_shadow.stdout.splitlines()
+        self.assertIn(str(wrapper_bin), resolved)
+        self.assertIn(str(cargo_bin), resolved)
+        self.assertLess(resolved.index(str(wrapper_bin)), resolved.index(str(cargo_bin)))
+
+        # Removing the shadow reproduces the vendor_conf.d race: vendor activates mise
+        # first, then config.fish moves ~/.cargo/bin ahead of command-wrappers/bin.
+        shadow.unlink()
+        without_shadow = subprocess.run(
+            [fish, "-lc", "which -a cargo"],
+            cwd=str(self.home),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertIn("VENDOR_RAN", without_shadow.stdout)
+        unshadowed = [line for line in without_shadow.stdout.splitlines() if line != "VENDOR_RAN"]
+        self.assertIn(str(wrapper_bin), unshadowed)
+        self.assertIn(str(cargo_bin), unshadowed)
+        self.assertLess(unshadowed.index(str(cargo_bin)), unshadowed.index(str(wrapper_bin)))
+
 
 if __name__ == "__main__":
     unittest.main()
