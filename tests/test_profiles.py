@@ -172,11 +172,6 @@ extra_bins = ["opencode2"]
         first = p.read_bytes()
         self.apply()
         self.assertEqual(p.read_bytes(), first)
-        self.configure("standalone")
-        self.chezmoi("apply", "--exclude", "scripts", "--force", str(p))
-        tools = tomllib.loads(p.read_text())["tools"]
-        self.assertEqual(tools["agy"], antigravity)
-        self.assertNotIn("antigravity-cli", tools)
 
     def test_mise_keeps_comments_when_already_compliant(self):
         self.configure()
@@ -306,6 +301,11 @@ extra_bins = ["opencode2"]
             with self.subTest(platform=platform):
                 self.platform = platform
                 self.configure("standalone", bootstrap=True, modules={"tools-re": True})
+                mise = self.seed(".config/mise/config.toml", '''[tools]
+agy = "latest"
+[settings]
+minimum_release_age = "24h"
+''')
                 managed = self.chezmoi("managed").stdout.splitlines()
                 self.assertIn(".config/starship.toml", managed)
                 self.assertFalse(any("/tests/" in target for target in managed))
@@ -313,13 +313,16 @@ extra_bins = ["opencode2"]
                 self.assertEqual(".bashrc" in managed, platform != "windows")
                 self.assertEqual(".config/iterm2/com.googlecode.iterm2.plist" in managed, platform == "darwin")
                 self.assertEqual("Documents/PowerShell/profile.ps1" in managed, platform == "windows")
-                body = self.chezmoi("cat", str(self.home / ".config/mise/config.toml")).stdout
+                body = self.chezmoi("cat", str(mise)).stdout
                 config = tomllib.loads(body)
                 self.assertEqual(config["tools"]["node"], "lts")
                 self.assertEqual(config["tools"]["python"], "3.12")
                 self.assertEqual(config["tools"]["aqua:cli/cli"], "2.101.0")
-                self.assertEqual(config["tools"]["agy"], "latest")
-                self.assertIn("agy", config["tasks"]["harness:update"]["run"].split()[2:])
+                self.assertEqual(config["tools"]["antigravity-cli"], "latest")
+                self.assertNotIn("agy", config["tools"])
+                upgrades = config["tasks"]["harness:update"]["run"].split()[2:]
+                self.assertIn("antigravity-cli", upgrades)
+                self.assertNotIn("agy", upgrades)
                 self.assertIn("npm:rea-agents", config["tools"])
                 self.assertEqual(config["settings"]["minimum_release_age"], "0s")
                 for script in sorted((ROOT / "home/.chezmoiscripts").glob("run*.sh.tmpl")):
