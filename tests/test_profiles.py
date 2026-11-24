@@ -88,12 +88,14 @@ class Profiles(unittest.TestCase):
 [tools]
 node = "26.8.2"
 ruby = "3.4"
+agy = "latest"
 "aqua:cli/cli" = "2.101.0"
 "npm:@opencode/cli" = "latest"
 [env]
 LOCAL = "keep"
 [settings]
 minimum_release_age = "24h"
+jobs = 3
 [settings.upgrade]
 auto_prune = false
 [tasks.local]
@@ -112,14 +114,18 @@ run = "echo keep"
         self.assertEqual(config["tools"]["gh"], "latest")
         self.assertNotIn("aqua:cli/cli", config["tools"])
         self.assertNotIn("npm:@opencode/cli", config["tools"])
-        self.assertEqual(config["tools"]["agy"], "latest")
+        self.assertEqual(config["tools"]["antigravity-cli"], "latest")
+        self.assertNotIn("agy", config["tools"])
         self.assertEqual(config["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"], "true")
         self.assertEqual(config["env"]["LOCAL"], "keep")
-        self.assertEqual(config["settings"]["minimum_release_age"], "24h")
+        self.assertEqual(config["settings"]["minimum_release_age"], "0s")
+        self.assertEqual(config["settings"]["jobs"], 3)
         self.assertFalse(config["settings"]["upgrade"]["auto_prune"])
         self.assertEqual(config["tasks"]["local"]["run"], "echo keep")
         self.assertEqual(config["tasks"]["harness:update"]["env"]["MISE_MINIMUM_RELEASE_AGE"], "0")
-        self.assertIn("agy", config["tasks"]["harness:update"]["run"].split()[2:])
+        upgrades = config["tasks"]["harness:update"]["run"].split()[2:]
+        self.assertIn("antigravity-cli", upgrades)
+        self.assertNotIn("agy", upgrades)
         for harness in [".claude/skills", ".codex/skills", ".pi/agent/skills"]:
             self.assertTrue((self.home / harness / "omarchy").is_symlink())
             for skill in ["pr-monitor", "gh-stack"]:
@@ -140,6 +146,12 @@ os = ["linux"]
 [tools."aqua:cli/cli"]
 version = "2.101.0"
 install_env = { CUSTOM = "keep" }
+[tools.agy]
+version = "1.5.14"
+install_env = { CUSTOM = "keep" }
+[tools.antigravity-cli]
+version = "1.5.15"
+os = ["linux"]
 [tools.python]
 version = "3.11.9"
 virtualenv = "/custom/venv"
@@ -152,11 +164,19 @@ extra_bins = ["opencode2"]
         self.assertEqual(tools["gh"]["version"], "latest")
         self.assertEqual(tools["gh"]["os"], ["linux"])
         self.assertEqual(tools["gh"]["install_env"], {"CUSTOM": "keep"})
+        antigravity = {"version": "latest", "os": ["linux"], "install_env": {"CUSTOM": "keep"}}
+        self.assertEqual(tools["antigravity-cli"], antigravity)
+        self.assertNotIn("agy", tools)
         self.assertEqual(tools["python"], {"version": "3.12", "virtualenv": "/custom/venv"})
         self.assertEqual(tools["opencode"]["extra_bins"], ["opencode2"])
         first = p.read_bytes()
         self.apply()
         self.assertEqual(p.read_bytes(), first)
+        self.configure("standalone")
+        self.chezmoi("apply", "--exclude", "scripts", "--force", str(p))
+        tools = tomllib.loads(p.read_text())["tools"]
+        self.assertEqual(tools["agy"], antigravity)
+        self.assertNotIn("antigravity-cli", tools)
 
     def test_mise_keeps_comments_when_already_compliant(self):
         self.configure()
@@ -301,7 +321,7 @@ extra_bins = ["opencode2"]
                 self.assertEqual(config["tools"]["agy"], "latest")
                 self.assertIn("agy", config["tasks"]["harness:update"]["run"].split()[2:])
                 self.assertIn("npm:rea-agents", config["tools"])
-                self.assertNotIn("minimum_release_age", config.get("settings", {}))
+                self.assertEqual(config["settings"]["minimum_release_age"], "0s")
                 for script in sorted((ROOT / "home/.chezmoiscripts").glob("run*.sh.tmpl")):
                     result = self.chezmoi("execute-template", "-f", str(script)).stdout
                     syntax = subprocess.run(["bash", "-n"], input=result, text=True, capture_output=True)

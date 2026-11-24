@@ -1,3 +1,4 @@
+{{- $antigravity := ternary "antigravity-cli" "agy" (eq .profile "omarchy") -}}
 [tools]
 {{ if eq .profile "omarchy" -}}
 # Use the stock gh/OpenCode declarations on Omarchy.
@@ -8,12 +9,15 @@ opencode = { version = "latest", allow_builds = ["@opencode/cli"] }
 # Explicit backend also works with older mise registries on other machines.
 "npm:@opencode/cli" = { version = "latest", allow_builds = ["@opencode/cli"] }
 {{ end -}}
-agy = "latest"
+{{ $antigravity }} = "latest"
 claude = "latest"
 codex = "latest"
 grok = "latest"
 pi = "latest"
 uv = "latest"
+
+[settings]
+minimum_release_age = "0s"
 
 [settings.upgrade]
 auto_prune = false
@@ -27,6 +31,6 @@ PI_SKIP_VERSION_CHECK = "1"
 
 [tasks."harness:update"]
 description = "Upgrade harness CLIs immediately, leaving runtimes alone"
-# Bypass any machine-specific release delay for harnesses only.
+# Keep explicit harness upgrades immediate when a local setting overrides the shared delay.
 env = { MISE_MINIMUM_RELEASE_AGE = "0" }
-run = "mise upgrade agy claude codex grok {{ if eq .profile "omarchy" }}opencode{{ else }}npm:@opencode/cli{{ end }} pi"
+run = "mise upgrade {{ $antigravity }} claude codex grok {{ if eq .profile "omarchy" }}opencode{{ else }}npm:@opencode/cli{{ end }} pi"

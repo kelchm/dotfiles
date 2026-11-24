@@ -33,7 +33,7 @@ mise run harness:update      # update the agent CLIs
 chezmoi edit ~/.config/git/dotfiles.gitconfig  # edit personal Git settings
 ```
 
-`harness:update` bypasses release delays for Antigravity (`agy`), Claude, Codex, Grok, OpenCode, and Pi. Runtime versions belong in project `mise.toml` files, or the optional global `runtimes` module. On Omarchy, `omarchy update` also updates mise tools.
+The shared mise config sets the release delay to zero. `harness:update` upgrades Antigravity (`agy`), Claude, Codex, Grok, OpenCode, and Pi. Runtime versions belong in project `mise.toml` files, or the optional global `runtimes` module. On Omarchy, `omarchy update` also updates mise tools.
 
 ## Repository layout
 
