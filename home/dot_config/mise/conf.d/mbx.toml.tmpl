@@ -14,9 +14,6 @@
 [tools]
 mr-boxington = "{{ .dotfiles.pins.mrBoxington }}"
 
-[env]
-MBX_GC_MAX_TOTAL_SIZE = "100GiB"
-
 [wrappers.cargo]
 command = "mbx"
 env = { MBX_CARGO_SHIM_MODE = "1" }
