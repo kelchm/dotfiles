@@ -15,13 +15,13 @@ Pass a path on the volume you are cleaning (`/` for the startup disk). *Containe
 
 ## 2. Rank directories
 
-Prefer multi-threaded `dua aggregate -x -f binary --stats` over single-threaded `du -xk -d 1` on large APFS volumes (`du` can stall >60s on millions of entries, while `dua` scans concurrently and reports per-directory I/O error counts). Set `MISE_AUTO_INSTALL=0` so a read-only audit does not download or install tools on the volume being measured:
+Prefer multi-threaded `dua aggregate -x -f binary --stats` over single-threaded `du -xk -d 1` on large APFS volumes (`du` can stall >60s on millions of entries, while `dua` scans concurrently and reports per-directory I/O error counts):
 
 ```sh
-(cd /System/Volumes/Data && MISE_AUTO_INSTALL=0 mise x aqua:Byron/dua-cli@3.0.3 -- dua aggregate -x -f binary --stats)
+(cd /System/Volumes/Data && mise x aqua:Byron/dua-cli@3.0.3 -- dua aggregate -x -f binary --stats)
 ```
 
-Avoid wrapping `dua` in a shell function (`dua() { ... }`), which breaks `xargs dua`; invoke `mise x ... -- dua` directly (or use a bash/zsh array `"${dua[@]}"`). `mise` shims (`dua`, `go`, `pnpm`) error when no global version is pinned, so invoke them through `mise x <tool> -- ...`. Fall back to `du` on small trees or if `dua` is not installed:
+Avoid wrapping `dua` in a shell function (`dua() { ... }`), which breaks `xargs dua`; invoke `mise x ... -- dua` directly (or use a bash/zsh array `"${dua[@]}"`). `mise` shims (`dua`, `go`, `pnpm`) error when no global version is pinned, so invoke them through `mise x <tool> -- ...`. Fall back to `du` on small trees, when `mise` is unavailable, or if the volume has no headroom to fetch `dua`:
 
 ```sh
 out=$(mktemp -d "${TMPDIR:-/tmp}/disk-audit.XXXXXX")
@@ -32,10 +32,10 @@ Drill into the largest children, usually the home directory, workspaces, `/priva
 
 ## 3. Count clones once
 
-[dua-cli](https://github.com/Byron/dua-cli) 3.0.3+ counts fully shared clones once with `--deduplicate-apfs-clones`. Run it without installing anything globally (set `MISE_AUTO_INSTALL=0` to avoid installing during measurement, or omit it when installing `dua` is acceptable):
+[dua-cli](https://github.com/Byron/dua-cli) 3.0.3+ counts fully shared clones once with `--deduplicate-apfs-clones`. Run it without installing anything globally:
 
 ```sh
-MISE_AUTO_INSTALL=0 mise x aqua:Byron/dua-cli@3.0.3 -- dua aggregate -x --deduplicate-apfs-clones ~/Library ~/Development ~/.cache
+mise x aqua:Byron/dua-cli@3.0.3 -- dua aggregate -x --deduplicate-apfs-clones ~/Library ~/Development ~/.cache
 ```
 
 - Within one run, each clone family is charged to a single path, and the total is their real combined footprint. A large drop compared with `du` means the lead is mostly clones.
