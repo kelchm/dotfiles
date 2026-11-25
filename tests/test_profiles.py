@@ -678,8 +678,7 @@ signingMethod = "none"
                         mbx_body = self.chezmoi("cat", str(self.home / ".config/mise/conf.d/mbx.toml")).stdout
                         mbx_cfg = tomllib.loads(mbx_body)
                         self.assertEqual(mbx_cfg["tools"]["mr-boxington"], pin)
-                        self.assertNotIn("MBX_CACHE_DIR", mbx_cfg["env"])
-                        self.assertEqual(mbx_cfg["env"]["MBX_GC_MAX_TOTAL_SIZE"], "100GiB")
+                        self.assertNotIn("env", mbx_cfg)
                         self.assertEqual(
                             mbx_cfg["wrappers"]["cargo"],
                             {"command": "mbx", "env": {"MBX_CARGO_SHIM_MODE": "1"}},
