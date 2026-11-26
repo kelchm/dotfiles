@@ -6,17 +6,17 @@ Read this when setting up or normalizing a Contribute checkout, starting a contr
 
 Check existing settings before changing anything. Existing feature-branch tracking, stack metadata, local commits, remote refs, and user protections must be kept. Changing baseline settings must not reset or advance any branch.
 
-| Setting | Value |
-|---|---|
-| `remote.origin.url` | the user's publishing fork, once forking is authorized |
-| `remote.upstream.url` | the verified contribution target |
-| upstream push URL | disabled, for example `git remote set-url --push upstream no_push` |
-| `remote.pushDefault` | `origin` |
-| `push.default` | `simple` |
-| `pull.ff` | `only` |
-| `branch.<baseline>.remote` | `upstream` |
-| `branch.<baseline>.merge` | `refs/heads/<actual target branch>` |
-| `gh repo set-default` | the upstream `owner/repo` |
+With `origin` set to the user's publishing fork (once forking is authorized) and `upstream` set to the verified contribution target, apply these settings:
+
+```sh
+git remote set-url --push upstream no_push
+git config remote.pushDefault origin
+git config push.default simple
+git config pull.ff only
+git fetch upstream   # not --prune: it deletes hand-fetched refs like upstream/pr-123
+git branch --set-upstream-to=upstream/<target> <baseline>
+gh repo set-default <upstream owner/repo>   # pins what gh already picks for a remote named upstream
+```
 
 Find the target's actual default or release branch rather than assuming `main`, and keep the existing local branch names. Without an authorized fork, clone with `--origin upstream` and leave `origin` absent until forking is authorized.
 
@@ -51,4 +51,4 @@ Publish only when it is authorized, and only within the task's restrictions.
 
 ## Runtime limits
 
-T3's fresh-base and native PR behavior above is derived from reading T3 source. It has not been reproduced on the deployed build. A focused local source test could not initialize because of a dependency mismatch in the local T3 checkout. Until it is reproduced, the HEAD check before the first edit and the explicit `--repo`/`--base`/`--head` arguments are the safeguards.
+On the deployed build, worktrees started from `origin/<baseline>` while the baseline tracked `origin` (t3code, November 2026). Starting from upstream once the baseline tracks it is not yet observed, so the HEAD check before the first edit and explicit `--repo`/`--base`/`--head` stay the safeguards.

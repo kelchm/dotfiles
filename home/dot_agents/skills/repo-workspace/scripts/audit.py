@@ -119,7 +119,8 @@ def inspect(path):
         match = re.match(r'remote\.(.+)\.(url|pushurl)$', key)
         if match:
             target = push_urls if match.group(2) == 'pushurl' else remotes
-            target.setdefault(match.group(1), []).append(identity(value))
+            target.setdefault(match.group(1), []).append(
+                identity(value) if match.group(2) == 'url' else identity(value) or value)
     branch_code, branch = git(root, 'symbolic-ref', '--short', '-q', 'HEAD')
     head_code, head = git(root, 'rev-parse', '--verify', 'HEAD')
     upstream_code, upstream = git(root, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}')

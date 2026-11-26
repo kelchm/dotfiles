@@ -28,7 +28,7 @@ Layout:
 
 ## Remotes and publication
 
-- **Contribute**: `origin` is the user's publishing fork. `upstream` is the verified contribution target, with pushes disabled. The baseline branch tracks the target's actual branch on `upstream`. Topics start from freshly fetched `upstream/<target>` without tracking it. For settings, worktree creation, and the first publication, read [references/contribution.md](references/contribution.md).
+- **Contribute**: `origin` is the user's publishing fork. `upstream` is the verified contribution target, with pushes disabled. The baseline branch tracks the target's actual branch on `upstream`. Topics start from freshly fetched `upstream/<target>` without tracking it. The user's own long-lived branches, such as deploy branches, can live on the fork and track `origin`; the baseline only mirrors upstream. For settings, worktree creation, and the first publication, read [references/contribution.md](references/contribution.md).
 - **Personal**: `origin` is the maintained repository, and the baseline tracks its maintained line. An `upstream` remote for the ancestral project is optional. Never point a downstream's maintained branch at `upstream` just because GitHub calls it a fork.
 - Verify a contribution target against GitHub's fork-parent metadata and the task. A configured `upstream` remote is evidence, not proof.
 - Forking is normal once contribution publication is authorized. Local-only, no-fork, and no-push instructions mean no fork, push, or PR. Setup, a project title, or a directory never grants publication authority.
